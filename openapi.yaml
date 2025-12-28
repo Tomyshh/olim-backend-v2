@@ -1,0 +1,3170 @@
+openapi: 3.0.3
+info:
+  title: OLIM Backend API
+  version: 0.1.0
+  description: >
+    Spécification OpenAPI (Swagger) générée à partir des routes/contrôleurs présents dans `src/`.
+    Certaines routes sont volontairement **stubées** et répondent `501 Not implemented`.
+servers:
+  - url: http://localhost:3000
+    description: Local (par défaut)
+tags:
+  - name: System
+  - name: Auth
+  - name: Profile
+  - name: Requests
+  - name: Appointments
+  - name: Documents
+  - name: Chat
+  - name: Notifications
+  - name: Subscription
+  - name: Support
+  - name: Health
+  - name: Partners
+  - name: Cinema
+  - name: Admin
+  - name: QA
+
+paths:
+  /health:
+    get:
+      tags: [System]
+      summary: Health check
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, timestamp]
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /api/auth/send-phone-otp:
+    post:
+      tags: [Auth]
+      summary: (STUB) Envoi OTP pour lier/remplacer un téléphone (utilisateur connecté)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/auth/verify-phone-otp-and-link:
+    post:
+      tags: [Auth]
+      summary: (STUB) Vérification OTP + liaison téléphone au compte
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber, otpCode]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+                otpCode:
+                  type: string
+                  example: "123456"
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/auth/send-login-phone-otp:
+    post:
+      tags: [Auth]
+      summary: (STUB) Envoi OTP pour login/inscription (sans auth)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/auth/verify-login-phone-otp:
+    post:
+      tags: [Auth]
+      summary: (STUB) Vérification OTP login (retour attendu: customToken)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber, otpCode]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+                otpCode:
+                  type: string
+                  example: "123456"
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/auth/create-visitor-account:
+    post:
+      tags: [Auth]
+      summary: (STUB) Création d’un compte Visitor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                phoneNumber:
+                  type: string
+                firstName:
+                  type: string
+                lastName:
+                  type: string
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/auth/login-email:
+    post:
+      tags: [Auth]
+      summary: (STUB) Login email/password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  format: password
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/profile:
+    get:
+      tags: [Profile]
+      summary: Récupérer le profil client (Clients/{uid})
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Profil
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Client'
+                  - type: object
+                    required: [uid]
+                    properties:
+                      uid:
+                        type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Profile]
+      summary: Mettre à jour le profil (update Firestore)
+      description: >
+        Le backend propage `req.body` tel quel dans Firestore (pas de validation).
+        Attention aux clés legacy avec espaces.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Profil mis à jour
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Client'
+                  - type: object
+                    required: [uid]
+                    properties:
+                      uid:
+                        type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/profile/complete:
+    get:
+      tags: [Profile]
+      summary: Vérifier si le profil est complet
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Statut + profil
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [isComplete, profile]
+                properties:
+                  isComplete:
+                    type: boolean
+                  profile:
+                    type: object
+                    additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/profile/language:
+    patch:
+      tags: [Profile]
+      summary: Mettre à jour la langue du profil
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [language]
+              properties:
+                language:
+                  type: string
+                  example: fr
+      responses:
+        '200':
+          description: Langue mise à jour
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, language]
+                properties:
+                  message:
+                    type: string
+                    example: Language updated
+                  language:
+                    type: string
+                    example: fr
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/profile/family-members:
+    get:
+      tags: [Profile]
+      summary: Lister les membres de famille
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [members]
+                properties:
+                  members:
+                    type: array
+                    items:
+                      type: object
+                      required: [memberId]
+                      properties:
+                        memberId:
+                          type: string
+                      additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Profile]
+      summary: Ajouter un membre de famille
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '201':
+          description: Créé
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [memberId]
+                properties:
+                  memberId:
+                    type: string
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/profile/family-members/{memberId}:
+    patch:
+      tags: [Profile]
+      summary: Mettre à jour un membre de famille
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/MemberId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithMemberId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Profile]
+      summary: Supprimer un membre de famille
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/MemberId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithMemberId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/profile/addresses:
+    get:
+      tags: [Profile]
+      summary: Lister les adresses
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [addresses]
+                properties:
+                  addresses:
+                    type: array
+                    items:
+                      type: object
+                      required: [addressId]
+                      properties:
+                        addressId:
+                          type: string
+                      additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Profile]
+      summary: Ajouter une adresse
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '201':
+          description: Créée
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [addressId]
+                properties:
+                  addressId:
+                    type: string
+                additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/profile/addresses/{addressId}:
+    patch:
+      tags: [Profile]
+      summary: Mettre à jour une adresse
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AddressId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithAddressId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Profile]
+      summary: Supprimer une adresse
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AddressId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithAddressId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/requests:
+    get:
+      tags: [Requests]
+      summary: Lister les demandes du client
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+          description: Filtre sur le champ legacy `Status`
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ClientRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Requests]
+      summary: Créer une demande
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRequestInput'
+      responses:
+        '201':
+          description: Créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/requests/{requestId}:
+    get:
+      tags: [Requests]
+      summary: Détails d’une demande
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Détails
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Requests]
+      summary: Mise à jour d’une demande
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Demande mise à jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Requests]
+      summary: Supprimer une demande
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/requests/{requestId}/files:
+    post:
+      tags: [Requests]
+      summary: (STUB) Upload de fichiers pour une demande
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        description: À implémenter (Firebase Storage)
+        required: false
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/requests/{requestId}/assign:
+    patch:
+      tags: [Requests]
+      summary: Assigner un conseiller à une demande
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [advisorId]
+              properties:
+                advisorId:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, requestId, advisorId]
+                properties:
+                  message:
+                    type: string
+                    example: Advisor assigned
+                  requestId:
+                    type: string
+                  advisorId:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/requests/{requestId}/rating:
+    post:
+      tags: [Requests]
+      summary: Noter une demande
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [rating]
+              properties:
+                rating:
+                  type: number
+                  minimum: 0
+                  maximum: 5
+                  example: 5
+                comment:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, requestId, rating]
+                properties:
+                  message:
+                    type: string
+                    example: Rating saved
+                  requestId:
+                    type: string
+                  rating:
+                    type: number
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/requests/favorites/list:
+    get:
+      tags: [Requests]
+      summary: Liste des demandes favorites
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [favorites]
+                properties:
+                  favorites:
+                    type: array
+                    items:
+                      type: object
+                      required: [favoriteId]
+                      properties:
+                        favoriteId:
+                          type: string
+                      additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/requests/favorites/{requestId}:
+    post:
+      tags: [Requests]
+      summary: Ajouter une demande aux favoris
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [categoryId, subCategoryId]
+              properties:
+                categoryId:
+                  type: string
+                subCategoryId:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Requests]
+      summary: Retirer une demande des favoris
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/appointments:
+    get:
+      tags: [Appointments]
+      summary: Lister les rendez-vous du client
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [appointments]
+                properties:
+                  appointments:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Appointment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Appointments]
+      summary: Créer un rendez-vous à partir d’un créneau disponible
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slotId]
+              properties:
+                slotId:
+                  type: string
+                requestId:
+                  type: string
+                  nullable: true
+                notes:
+                  type: string
+      responses:
+        '201':
+          description: Créé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Appointment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/appointments/slots/available:
+    get:
+      tags: [Appointments]
+      summary: Lister les créneaux disponibles
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: date
+          in: query
+          schema:
+            type: string
+          description: Filtre exact sur le champ Firestore `date` (format dépend des données stockées)
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [slots]
+                properties:
+                  slots:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AvailableSlot'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/appointments/{appointmentId}:
+    get:
+      tags: [Appointments]
+      summary: Détails d’un rendez-vous
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AppointmentId'
+      responses:
+        '200':
+          description: Détails
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Appointment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Appointments]
+      summary: Mettre à jour un rendez-vous
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AppointmentId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Mis à jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Appointment'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Appointments]
+      summary: Annuler un rendez-vous
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/AppointmentId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, appointmentId]
+                properties:
+                  message:
+                    type: string
+                    example: Appointment cancelled
+                  appointmentId:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/documents:
+    get:
+      tags: [Documents]
+      summary: Lister documents (personnels + legacy)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Documents
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [personalDocs, legacyDocs]
+                properties:
+                  personalDocs:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  legacyDocs:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Document'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/documents/personal:
+    get:
+      tags: [Documents]
+      summary: Récupérer les documents personnels (nouvelle structure)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Documents personnels
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documents]
+                properties:
+                  documents:
+                    oneOf:
+                      - type: array
+                        items: {}
+                      - type: object
+                        additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/documents/family-member/{memberId}:
+    get:
+      tags: [Documents]
+      summary: Récupérer documents d’un membre (structure membres)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/MemberId'
+      responses:
+        '200':
+          description: Documents membre
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [documents]
+                properties:
+                  documents:
+                    oneOf:
+                      - type: array
+                        items: {}
+                      - type: object
+                        additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/documents/personal/upload:
+    post:
+      tags: [Documents]
+      summary: (STUB) Upload d’un document personnel
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, typeKey, fileName]
+              properties:
+                type:
+                  type: string
+                typeKey:
+                  type: string
+                fileName:
+                  type: string
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/documents/family-member/{memberId}/upload:
+    post:
+      tags: [Documents]
+      summary: (STUB) Upload d’un document pour un membre
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/MemberId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, typeKey, fileName]
+              properties:
+                type:
+                  type: string
+                typeKey:
+                  type: string
+                fileName:
+                  type: string
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/documents/{documentId}/download:
+    get:
+      tags: [Documents]
+      summary: (STUB) Télécharger un document
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/documents/{documentId}:
+    delete:
+      tags: [Documents]
+      summary: (STUB) Supprimer un document
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/DocumentId'
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/chat/conversations:
+    get:
+      tags: [Chat]
+      summary: Lister les conversations
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversations]
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Conversation'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Chat]
+      summary: Créer une conversation
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                requestId:
+                  type: string
+                title:
+                  type: string
+      responses:
+        '201':
+          description: Créée
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversationId]
+                properties:
+                  conversationId:
+                    type: string
+                  requestId:
+                    type: string
+                  title:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/chat/conversations/{conversationId}/messages:
+    get:
+      tags: [Chat]
+      summary: Lister les messages d’une conversation
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Messages
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messages]
+                properties:
+                  messages:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ChatMessage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Chat]
+      summary: Envoyer un message
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content:
+                  type: string
+                type:
+                  type: string
+                  enum: [text, image, file]
+                  default: text
+                attachments:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '201':
+          description: Message créé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChatMessage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/chat/conversations/{conversationId}/read:
+    patch:
+      tags: [Chat]
+      summary: Marquer les messages comme lus
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, count]
+                properties:
+                  message:
+                    type: string
+                    example: Messages marked as read
+                  count:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/chat/conversations/{conversationId}/files:
+    post:
+      tags: [Chat]
+      summary: (STUB) Upload fichier dans le chat
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ConversationId'
+      requestBody:
+        required: false
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/notifications/token:
+    post:
+      tags: [Notifications]
+      summary: Enregistrer un token FCM (auth optionnelle mais requise en pratique)
+      description: >
+        La route passe par `optionalAuth`, mais le contrôleur renvoie `401` si `uid` est absent.
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, token]
+                properties:
+                  message:
+                    type: string
+                    example: FCM token registered
+                  token:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/notifications:
+    get:
+      tags: [Notifications]
+      summary: Lister les notifications
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: unreadOnly
+          in: query
+          schema:
+            type: string
+            enum: ['true', 'false']
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [notifications]
+                properties:
+                  notifications:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Notification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/notifications/read-all:
+    patch:
+      tags: [Notifications]
+      summary: Marquer toutes les notifications comme lues
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, count]
+                properties:
+                  message:
+                    type: string
+                    example: All notifications marked as read
+                  count:
+                    type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/notifications/settings:
+    get:
+      tags: [Notifications]
+      summary: Récupérer les réglages de notifications
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Settings
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [settings]
+                properties:
+                  settings:
+                    type: object
+                    additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Notifications]
+      summary: Mettre à jour les réglages de notifications
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, settings]
+                properties:
+                  message:
+                    type: string
+                    example: Notification settings updated
+                  settings:
+                    type: object
+                    additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/notifications/{notificationId}:
+    get:
+      tags: [Notifications]
+      summary: Détails d’une notification
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: Détails
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Notification'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Notifications]
+      summary: Supprimer une notification
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, notificationId]
+                properties:
+                  message:
+                    type: string
+                    example: Notification deleted
+                  notificationId:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/notifications/{notificationId}/read:
+    patch:
+      tags: [Notifications]
+      summary: Marquer une notification comme lue
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/NotificationId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, notificationId]
+                properties:
+                  message:
+                    type: string
+                    example: Notification marked as read
+                  notificationId:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/status:
+    get:
+      tags: [Subscription]
+      summary: Récupérer l’état d’abonnement
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Subscription
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [subscription]
+                properties:
+                  subscription:
+                    nullable: true
+                    oneOf:
+                      - $ref: '#/components/schemas/SubscriptionStatus'
+                      - type: 'null'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/cards:
+    get:
+      tags: [Subscription]
+      summary: Lister les cartes
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cards]
+                properties:
+                  cards:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Card'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Subscription]
+      summary: Ajouter une carte (stockée en Firestore)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '201':
+          description: Créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Card'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/cards/{cardId}:
+    patch:
+      tags: [Subscription]
+      summary: Mettre à jour une carte
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CardId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithCardId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    delete:
+      tags: [Subscription]
+      summary: Supprimer une carte
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithCardId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/cards/{cardId}/set-default:
+    patch:
+      tags: [Subscription]
+      summary: Définir une carte par défaut
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/CardId'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithCardId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/invoices:
+    get:
+      tags: [Subscription]
+      summary: Lister les factures
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [invoices]
+                properties:
+                  invoices:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Invoice'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/invoices/{invoiceId}:
+    get:
+      tags: [Subscription]
+      summary: Détails d’une facture
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/InvoiceId'
+      responses:
+        '200':
+          description: Détails
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Invoice'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/refunds:
+    get:
+      tags: [Subscription]
+      summary: Lister les demandes de remboursement (côté client)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [refunds]
+                properties:
+                  refunds:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RefundRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Subscription]
+      summary: Créer une demande de remboursement
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount]
+              properties:
+                requestId:
+                  type: string
+                amount:
+                  type: number
+                  example: 199
+                reason:
+                  type: string
+      responses:
+        '201':
+          description: Créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/refunds/{refundId}:
+    get:
+      tags: [Subscription]
+      summary: Détails d’une demande de remboursement
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RefundId'
+      responses:
+        '200':
+          description: Détails
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/support/faqs:
+    get:
+      tags: [Support]
+      summary: Liste des FAQs (public)
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [faqs]
+                properties:
+                  faqs:
+                    type: array
+                    items:
+                      type: object
+                      required: [faqId]
+                      properties:
+                        faqId:
+                          type: string
+                      additionalProperties: true
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/support/contacts:
+    get:
+      tags: [Support]
+      summary: Contacts support (public)
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [contacts]
+                properties:
+                  contacts:
+                    type: array
+                    items:
+                      type: object
+                      required: [contactId]
+                      properties:
+                        contactId:
+                          type: string
+                      additionalProperties: true
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/support/contact-messages:
+    post:
+      tags: [Support]
+      summary: Envoyer un message au support (auth optionnelle)
+      security:
+        - bearerAuth: []
+        - {}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, subject, message]
+              properties:
+                name:
+                  type: string
+                email:
+                  type: string
+                  format: email
+                phone:
+                  type: string
+                subject:
+                  type: string
+                message:
+                  type: string
+      responses:
+        '201':
+          description: Envoyé
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [messageId, message]
+                properties:
+                  messageId:
+                    type: string
+                  message:
+                    type: string
+                    example: Contact message sent
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/support/tickets:
+    get:
+      tags: [Support]
+      summary: Lister les tickets support (client)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [tickets]
+                properties:
+                  tickets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SupportTicket'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Support]
+      summary: Créer un ticket support
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [subject, description]
+              properties:
+                subject:
+                  type: string
+                description:
+                  type: string
+                priority:
+                  type: string
+                  example: normal
+      responses:
+        '201':
+          description: Créé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportTicket'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/support/tickets/{ticketId}:
+    get:
+      tags: [Support]
+      summary: Détails d’un ticket
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TicketId'
+      responses:
+        '200':
+          description: Détails
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupportTicket'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Support]
+      summary: Mettre à jour un ticket
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/TicketId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, ticketId]
+                properties:
+                  message:
+                    type: string
+                    example: Support ticket updated
+                  ticketId:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/health/requests:
+    get:
+      tags: [Health]
+      summary: Lister les demandes santé
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requests]
+                properties:
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HealthRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Health]
+      summary: Créer une demande santé
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  example: general
+                description:
+                  type: string
+                data:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '201':
+          description: Créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/health/requests/{requestId}:
+    get:
+      tags: [Health]
+      summary: Détails d’une demande santé
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: Détails
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Health]
+      summary: Mettre à jour une demande santé
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageWithRequestId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/health/config:
+    get:
+      tags: [Health]
+      summary: Récupérer la configuration santé (settings/health_config)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Config
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [config]
+                properties:
+                  config:
+                    type: object
+                    additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    patch:
+      tags: [Health]
+      summary: Mettre à jour la configuration santé
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, config]
+                properties:
+                  message:
+                    type: string
+                    example: Health config updated
+                  config:
+                    type: object
+                    additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/partners:
+    get:
+      tags: [Partners]
+      summary: Lister les partenaires (auth optionnelle)
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [partners]
+                properties:
+                  partners:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Partner'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/partners/vip/list:
+    get:
+      tags: [Partners]
+      summary: Lister les partenaires VIP (auth optionnelle)
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [partners]
+                properties:
+                  partners:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Partner'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/partners/{partnerId}:
+    get:
+      tags: [Partners]
+      summary: Détails d’un partenaire (auth optionnelle)
+      security:
+        - bearerAuth: []
+        - {}
+      parameters:
+        - $ref: '#/components/parameters/PartnerId'
+      responses:
+        '200':
+          description: Détails
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Partner'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/cinema:
+    get:
+      tags: [Cinema]
+      summary: Infos cinéma (auth optionnelle)
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Cinema
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cinema]
+                properties:
+                  cinema:
+                    nullable: true
+                    oneOf:
+                      - $ref: '#/components/schemas/Cinema'
+                      - type: 'null'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/cinema/movies:
+    get:
+      tags: [Cinema]
+      summary: Liste des films (auth optionnelle)
+      security:
+        - bearerAuth: []
+        - {}
+      responses:
+        '200':
+          description: Films
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [movies]
+                properties:
+                  movies:
+                    type: array
+                    items: {}
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/admin/refund-requests:
+    get:
+      tags: [Admin]
+      summary: Lister les demandes de remboursement globales (admin)
+      description: >
+        ⚠️ Route protégée uniquement par `authenticateToken` (pas de contrôle de rôle admin actuellement).
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [refunds]
+                properties:
+                  refunds:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RefundRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/admin/refund-requests/{refundId}:
+    patch:
+      tags: [Admin]
+      summary: Mettre à jour une demande de remboursement (admin)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/RefundId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  type: string
+                processedAt:
+                  type: string
+                  format: date-time
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, refundId, status]
+                properties:
+                  message:
+                    type: string
+                    example: Refund request updated
+                  refundId:
+                    type: string
+                  status:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/admin/system-alerts:
+    get:
+      tags: [Admin]
+      summary: Lister les alertes système
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: active
+          in: query
+          schema:
+            type: string
+            enum: ['true', 'false']
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 500
+      responses:
+        '200':
+          description: Liste
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alerts]
+                properties:
+                  alerts:
+                    type: array
+                    items:
+                      type: object
+                      required: [alertId]
+                      properties:
+                        alertId:
+                          type: string
+                      additionalProperties: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+    post:
+      tags: [Admin]
+      summary: Créer une alerte système
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, message]
+              properties:
+                title:
+                  type: string
+                message:
+                  type: string
+                type:
+                  type: string
+                  default: info
+                active:
+                  type: boolean
+                  default: true
+      responses:
+        '201':
+          description: Créée
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alertId, title, message]
+                properties:
+                  alertId:
+                    type: string
+                  title:
+                    type: string
+                  message:
+                    type: string
+                  type:
+                    type: string
+                  active:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/admin/sync-supabase:
+    post:
+      tags: [Admin]
+      summary: (STUB) Sync Firestore -> Supabase (manuel)
+      security:
+        - bearerAuth: []
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/admin/fcm/generate-token:
+    post:
+      tags: [Admin]
+      summary: (STUB) Générer un token OAuth FCM
+      security:
+        - bearerAuth: []
+      responses:
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/qa/stats:
+    get:
+      tags: [QA]
+      summary: Statistiques QA (cache Redis si dispo)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [all, week, month]
+            default: all
+        - name: start
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: ISO date-time (optionnel)
+        - name: end
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: ISO date-time (optionnel)
+      responses:
+        '200':
+          description: Payload QA
+          headers:
+            X-Cache:
+              schema:
+                type: string
+              description: Indicateur cache (HIT/MISS/etc.)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QaStats'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          description: Paramètre invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    RequestId:
+      name: requestId
+      in: path
+      required: true
+      schema:
+        type: string
+    AppointmentId:
+      name: appointmentId
+      in: path
+      required: true
+      schema:
+        type: string
+    DocumentId:
+      name: documentId
+      in: path
+      required: true
+      schema:
+        type: string
+    MemberId:
+      name: memberId
+      in: path
+      required: true
+      schema:
+        type: string
+    AddressId:
+      name: addressId
+      in: path
+      required: true
+      schema:
+        type: string
+    ConversationId:
+      name: conversationId
+      in: path
+      required: true
+      schema:
+        type: string
+    NotificationId:
+      name: notificationId
+      in: path
+      required: true
+      schema:
+        type: string
+    CardId:
+      name: cardId
+      in: path
+      required: true
+      schema:
+        type: string
+    InvoiceId:
+      name: invoiceId
+      in: path
+      required: true
+      schema:
+        type: string
+    RefundId:
+      name: refundId
+      in: path
+      required: true
+      schema:
+        type: string
+    TicketId:
+      name: ticketId
+      in: path
+      required: true
+      schema:
+        type: string
+    PartnerId:
+      name: partnerId
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    Unauthorized:
+      description: Non authentifié / token invalide
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          examples:
+            missing:
+              value: { error: "Missing or invalid authorization header" }
+            invalid:
+              value: { error: "Invalid or expired token" }
+    NotFound:
+      description: Ressource non trouvée
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error: Not found
+    Error:
+      description: Erreur serveur
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotImplemented:
+      description: Route stubée / non implémentée
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/NotImplementedResponse'
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+        stack:
+          type: string
+          description: Présent uniquement en environnement development
+    NotImplementedResponse:
+      type: object
+      required: [message, note]
+      properties:
+        message:
+          type: string
+          example: Not implemented - uploadChatFile
+        note:
+          type: string
+
+    Client:
+      type: object
+      description: >
+        Document Firestore `Clients/{uid}`. Plusieurs champs legacy ont des clés avec espaces.
+      properties:
+        uid:
+          type: string
+        "First Name":
+          type: string
+        "Last Name":
+          type: string
+        Email:
+          type: string
+        "Phone Number":
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        language:
+          type: string
+        registrationComplete:
+          type: boolean
+        createdVia:
+          type: string
+        membership:
+          type: object
+          additionalProperties: true
+        fcmTokens:
+          type: array
+          items:
+            type: string
+      additionalProperties: true
+
+    ClientRequest:
+      type: object
+      description: Demande stockée sous `Clients/{uid}/Requests/{requestId}` (structure legacy).
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+        "User ID":
+          type: string
+        "Request Type":
+          type: string
+        "Request Category":
+          type: string
+        "SubCategory ID":
+          type: string
+        "Request Sub-Category":
+          type: string
+        Description:
+          type: string
+        "Request Date":
+          description: Date Firestore (Timestamp) sérialisée
+          nullable: true
+        Priority:
+          type: string
+        "Uploaded Files":
+          type: array
+          items:
+            type: string
+        "Available Days":
+          type: array
+          items:
+            type: string
+        "Available Hours":
+          type: array
+          items:
+            type: string
+        Tags:
+          type: array
+          items:
+            type: string
+        Status:
+          type: string
+        "Assigned to":
+          type: string
+        rating:
+          type: number
+      additionalProperties: true
+
+    CreateRequestInput:
+      type: object
+      required: [requestType, category, description]
+      properties:
+        requestType:
+          type: string
+        category:
+          type: string
+        subCategoryId:
+          type: string
+        subCategory:
+          type: string
+        description:
+          type: string
+        priority:
+          type: string
+          default: normal
+        files:
+          type: array
+          items:
+            type: string
+        availableDays:
+          type: array
+          items:
+            type: string
+        availableHours:
+          type: array
+          items:
+            type: string
+        tags:
+          type: array
+          items:
+            type: string
+        formData:
+          type: object
+          additionalProperties: true
+
+    Appointment:
+      type: object
+      required: [appointmentId]
+      properties:
+        appointmentId:
+          type: string
+        requestId:
+          type: string
+          nullable: true
+        slotId:
+          type: string
+        date:
+          nullable: true
+        time:
+          type: string
+        status:
+          type: string
+        notes:
+          type: string
+        createdAt:
+          nullable: true
+        updatedAt:
+          nullable: true
+      additionalProperties: true
+
+    AvailableSlot:
+      type: object
+      required: [slotId]
+      properties:
+        slotId:
+          type: string
+      additionalProperties: true
+
+    Document:
+      type: object
+      required: [documentId]
+      properties:
+        documentId:
+          type: string
+        type:
+          type: string
+        typeKey:
+          type: string
+        fileName:
+          type: string
+        fileUrl:
+          type: string
+        storagePath:
+          type: string
+        uploadedAt:
+          nullable: true
+        memberId:
+          type: string
+      additionalProperties: true
+
+    Conversation:
+      type: object
+      required: [conversationId]
+      properties:
+        conversationId:
+          type: string
+        requestId:
+          type: string
+          nullable: true
+        title:
+          type: string
+        createdAt:
+          nullable: true
+        updatedAt:
+          nullable: true
+        lastMessage:
+          nullable: true
+          oneOf:
+            - $ref: '#/components/schemas/ChatMessage'
+            - type: 'null'
+        unreadCount:
+          type: integer
+      additionalProperties: true
+
+    ChatMessage:
+      type: object
+      required: [messageId]
+      properties:
+        messageId:
+          type: string
+        senderId:
+          type: string
+        senderName:
+          type: string
+        content:
+          type: string
+        type:
+          type: string
+          enum: [text, image, file]
+        attachments:
+          type: array
+          items:
+            type: string
+        read:
+          type: boolean
+        createdAt:
+          nullable: true
+        readAt:
+          nullable: true
+      additionalProperties: true
+
+    Notification:
+      type: object
+      required: [notificationId]
+      properties:
+        notificationId:
+          type: string
+        title:
+          type: string
+        body:
+          type: string
+        type:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        read:
+          type: boolean
+        createdAt:
+          nullable: true
+        readAt:
+          nullable: true
+      additionalProperties: true
+
+    SubscriptionStatus:
+      type: object
+      additionalProperties: true
+
+    Card:
+      type: object
+      required: [cardId]
+      properties:
+        cardId:
+          type: string
+        last4:
+          type: string
+        brand:
+          type: string
+        expiryMonth:
+          type: integer
+        expiryYear:
+          type: integer
+        isDefault:
+          type: boolean
+        createdAt:
+          nullable: true
+        updatedAt:
+          nullable: true
+      additionalProperties: true
+
+    Invoice:
+      type: object
+      required: [invoiceId]
+      properties:
+        invoiceId:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        status:
+          type: string
+        dueDate:
+          nullable: true
+        paidAt:
+          nullable: true
+        createdAt:
+          nullable: true
+      additionalProperties: true
+
+    RefundRequest:
+      type: object
+      required: [refundId]
+      properties:
+        refundId:
+          type: string
+        requestId:
+          type: string
+          nullable: true
+        amount:
+          type: number
+        reason:
+          type: string
+        status:
+          type: string
+        createdAt:
+          nullable: true
+        processedAt:
+          nullable: true
+        updatedAt:
+          nullable: true
+      additionalProperties: true
+
+    SupportTicket:
+      type: object
+      required: [ticketId]
+      properties:
+        ticketId:
+          type: string
+        subject:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        priority:
+          type: string
+        createdAt:
+          nullable: true
+        updatedAt:
+          nullable: true
+      additionalProperties: true
+
+    HealthRequest:
+      type: object
+      required: [requestId]
+      properties:
+        requestId:
+          type: string
+        type:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        data:
+          type: object
+          additionalProperties: true
+        createdAt:
+          nullable: true
+      additionalProperties: true
+
+    Partner:
+      type: object
+      required: [partnerId]
+      properties:
+        partnerId:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        isVIP:
+          type: boolean
+        logoUrl:
+          type: string
+        website:
+          type: string
+      additionalProperties: true
+
+    Cinema:
+      type: object
+      properties:
+        cinemaId:
+          type: string
+        name:
+          type: string
+        location:
+          type: string
+        movies:
+          type: array
+          items: {}
+      additionalProperties: true
+
+    QaStats:
+      type: object
+      required: [period, range, meta, global, counselors]
+      properties:
+        period:
+          type: string
+          enum: [all, week, month]
+        range:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              nullable: true
+            end:
+              type: string
+              nullable: true
+        meta:
+          type: object
+          additionalProperties: true
+        global:
+          type: object
+          additionalProperties: true
+        counselors:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+
+    MessageWithRequestId:
+      type: object
+      required: [message, requestId]
+      properties:
+        message:
+          type: string
+        requestId:
+          type: string
+    MessageWithMemberId:
+      type: object
+      required: [message, memberId]
+      properties:
+        message:
+          type: string
+        memberId:
+          type: string
+    MessageWithAddressId:
+      type: object
+      required: [message, addressId]
+      properties:
+        message:
+          type: string
+        addressId:
+          type: string
+    MessageWithCardId:
+      type: object
+      required: [message, cardId]
+      properties:
+        message:
+          type: string
+        cardId:
+          type: string
+

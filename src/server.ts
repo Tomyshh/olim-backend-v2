@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'path';
 import { initializeFirebase } from './config/firebase.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFoundHandler } from './middleware/notFoundHandler.js';
@@ -42,6 +43,12 @@ app.use(morgan('combined'));
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// OpenAPI (Swagger)
+app.get('/openapi.yaml', (req, res) => {
+  res.setHeader('Content-Type', 'application/yaml; charset=utf-8');
+  res.sendFile(path.join(process.cwd(), 'openapi.yaml'));
 });
 
 // Routes API
