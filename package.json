@@ -11,7 +11,9 @@
     "build": "tsc -p tsconfig.json",
     "start": "node --env-file=.env dist/server.js",
     "lint": "eslint .",
-    "script:link-phone-to-email": "tsx scripts/link-phone-to-email.ts"
+    "script:link-phone-to-email": "tsx scripts/link-phone-to-email.ts",
+    "script:list-system-registration": "tsx scripts/list-system-registration-clients.ts",
+    "script:upsert-membership-details": "tsx scripts/upsert-membership-details.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",
