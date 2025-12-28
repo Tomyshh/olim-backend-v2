@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": "20.x"
   },
   "scripts": {
     "dev": "node --watch --env-file=.env dist/server.js",
     "build": "tsc -p tsconfig.json",
-    "start": "node --env-file=.env dist/server.js",
+    "start": "node dist/server.js",
     "lint": "eslint .",
     "script:link-phone-to-email": "tsx scripts/link-phone-to-email.ts",
     "script:list-system-registration": "tsx scripts/list-system-registration-clients.ts",
@@ -21,7 +21,8 @@
     "express": "^4.19.2",
     "firebase-admin": "^12.5.0",
     "helmet": "^7.1.0",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "redis": "^4.7.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
@@ -33,5 +34,3 @@
     "typescript": "^5.7.2"
   }
 }
-
-

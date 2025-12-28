@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -20,6 +21,7 @@ import healthRoutes from './routes/health.routes.js';
 import partnersRoutes from './routes/partners.routes.js';
 import cinemaRoutes from './routes/cinema.routes.js';
 import adminRoutes from './routes/admin.routes.js';
+import qaRoutes from './routes/qa.routes.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,6 +58,7 @@ app.use('/api/health', healthRoutes);
 app.use('/api/partners', partnersRoutes);
 app.use('/api/cinema', cinemaRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/qa', qaRoutes);
 
 // Error handling
 app.use(notFoundHandler);
