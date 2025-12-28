@@ -18,22 +18,35 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-function readProjectIdFromServiceAccount(): { serviceAccountPath: string; projectId: string } {
+function readProjectIdFromServiceAccount(): { source: string; projectId: string } {
+  const jsonEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (jsonEnv?.trim()) {
+    const json = JSON.parse(jsonEnv);
+    return { source: 'env:FIREBASE_SERVICE_ACCOUNT_JSON', projectId: json?.project_id ?? 'UNKNOWN_PROJECT_ID' };
+  }
+
+  const b64 = process.env.FIREBASE_SERVICE_ACCOUNT_JSON_BASE64;
+  if (b64?.trim()) {
+    const decoded = Buffer.from(b64, 'base64').toString('utf8');
+    const json = JSON.parse(decoded);
+    return { source: 'env:FIREBASE_SERVICE_ACCOUNT_JSON_BASE64', projectId: json?.project_id ?? 'UNKNOWN_PROJECT_ID' };
+  }
+
   const serviceAccountPath =
     process.env.FIREBASE_SERVICE_ACCOUNT_PATH || 'olimservice-7dbee-firebase-adminsdk-r13so-8e1912f7d8.json';
   const raw = readFileSync(join(process.cwd(), serviceAccountPath), 'utf8');
   const json = JSON.parse(raw);
-  return { serviceAccountPath, projectId: json?.project_id ?? 'UNKNOWN_PROJECT_ID' };
+  return { source: `file:${serviceAccountPath}`, projectId: json?.project_id ?? 'UNKNOWN_PROJECT_ID' };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const { serviceAccountPath, projectId } = readProjectIdFromServiceAccount();
+  const { source, projectId } = readProjectIdFromServiceAccount();
 
   console.log('🔧 Script: upsert du document Utils/membership_details (Firestore)');
   console.log(`- projet (service account): ${projectId}`);
-  console.log(`- chemin clé: ${serviceAccountPath}`);
+  console.log(`- source clé: ${source}`);
   console.log(`- mode: ${args.apply ? 'APPLY (écrit en prod)' : 'DRY-RUN (aucun changement)'}`);
   console.log('');
   console.log('⚠️ Sécurité: ce script ne touche QU’À la collection "Utils", document "membership_details".');
