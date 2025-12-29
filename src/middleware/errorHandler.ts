@@ -12,6 +12,8 @@ export function errorHandler(
   const message = err.message || 'Internal server error';
 
   res.status(status).json({
+    message,
+    // compat legacy (certaines routes existantes renvoient encore {error})
     error: message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });

@@ -141,8 +141,8 @@ export async function verifyLoginOtp(params: {
     throw err;
   }
   if (attempts >= OTP_MAX_ATTEMPTS) {
-    const err: any = new Error('Code invalide.');
-    err.status = 400;
+    const err: any = new Error('Trop de tentatives.');
+    err.status = 429;
     throw err;
   }
 
@@ -152,7 +152,7 @@ export async function verifyLoginOtp(params: {
 
   if (!ok) {
     await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
-    const err: any = new Error('Code invalide.');
+    const err: any = new Error('Code incorrect.');
     err.status = 400;
     throw err;
   }
@@ -314,15 +314,15 @@ export async function verifyLinkPhoneOtp(params: {
     throw err;
   }
   if (attempts >= OTP_MAX_ATTEMPTS) {
-    const err: any = new Error('Code invalide.');
-    err.status = 400;
+    const err: any = new Error('Trop de tentatives.');
+    err.status = 429;
     throw err;
   }
 
   // On exige que le téléphone corresponde à celui du request (évite de vérifier un OTP pour un autre numéro)
   if (storedPhone && storedPhone !== norm.e164) {
     await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
-    const err: any = new Error('Code invalide.');
+    const err: any = new Error('Code incorrect.');
     err.status = 400;
     throw err;
   }
@@ -332,7 +332,7 @@ export async function verifyLinkPhoneOtp(params: {
   const ok = timingSafeEqualHex(storedHash, computed);
   if (!ok) {
     await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
-    const err: any = new Error('Code invalide.');
+    const err: any = new Error('Code incorrect.');
     err.status = 400;
     throw err;
   }

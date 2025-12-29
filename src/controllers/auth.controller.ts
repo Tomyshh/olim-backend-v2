@@ -1,92 +1,59 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
-import { getFirestore, getAuth } from '../config/firebase.js';
+import { sendLoginOtp, verifyLoginOtp, sendLinkPhoneOtp, verifyLinkPhoneOtp, verifyVisitorOtp } from '../services/phoneOtp.service.js';
+import { getClientIp } from '../utils/errors.js';
 
-// ⚠️ STUB - À implémenter avec Vonage OTP
 export async function sendPhoneOtp(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try {
-    const { phoneNumber } = req.body;
-    const uid = req.uid!;
-
-    // TODO: Implémenter appel Vonage OTP
-    // TODO: Stocker dans PhoneOtpRequests/{requestId}
-    
-    res.status(501).json({
-      message: 'Not implemented - sendPhoneOtp',
-      note: 'À implémenter avec Vonage OTP service'
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  const uid = req.uid!;
+  await sendLinkPhoneOtp({
+    uid,
+    phoneNumber: req.body?.phoneNumber,
+    languageCode: req.body?.languageCode,
+    channels: req.body?.channels,
+    ipKey: getClientIp(req)
+  });
+  res.json({ ok: true });
 }
 
 export async function verifyPhoneOtpAndLink(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try {
-    const { phoneNumber, otpCode } = req.body;
-    const uid = req.uid!;
-
-    // TODO: Vérifier OTP avec Vonage
-    // TODO: Lier téléphone au compte Firebase Auth
-    // TODO: Mettre à jour Clients/{uid}
-    
-    res.status(501).json({
-      message: 'Not implemented - verifyPhoneOtpAndLink',
-      note: 'À implémenter avec Vonage OTP verification'
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  const uid = req.uid!;
+  const result = await verifyLinkPhoneOtp({
+    uid,
+    phoneNumber: req.body?.phoneNumber,
+    code: req.body?.code ?? req.body?.otpCode, // compat legacy
+    ipKey: getClientIp(req)
+  });
+  res.json(result);
 }
 
 export async function sendLoginPhoneOtp(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try {
-    const { phoneNumber } = req.body;
-
-    // TODO: Implémenter appel Vonage OTP (sans auth)
-    // TODO: Stocker dans PhoneOtpLogin/{requestId}
-    
-    res.status(501).json({
-      message: 'Not implemented - sendLoginPhoneOtp',
-      note: 'À implémenter avec Vonage OTP service'
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  await sendLoginOtp({
+    phoneNumber: req.body?.phoneNumber,
+    languageCode: req.body?.languageCode,
+    channels: req.body?.channels,
+    ipKey: getClientIp(req)
+  });
+  res.json({ ok: true });
 }
 
 export async function verifyLoginPhoneOtp(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try {
-    const { phoneNumber, otpCode } = req.body;
-
-    // TODO: Vérifier OTP avec Vonage
-    // TODO: Créer ou récupérer utilisateur
-    // TODO: Générer customToken avec Firebase Admin
-    // TODO: Retourner customToken
-    
-    res.status(501).json({
-      message: 'Not implemented - verifyLoginPhoneOtp',
-      note: 'À implémenter avec Vonage OTP + customToken generation'
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  const result = await verifyLoginOtp({
+    phoneNumber: req.body?.phoneNumber,
+    code: req.body?.code ?? req.body?.otpCode, // compat legacy
+    ipKey: getClientIp(req)
+  });
+  res.json({ customToken: result.customToken, isNewUser: result.isNewUser });
 }
 
 export async function createVisitorAccount(req: AuthenticatedRequest, res: Response): Promise<void> {
-  try {
-    const { email, phoneNumber, firstName, lastName } = req.body;
-
-    // TODO: Créer compte Firebase Auth (visitor)
-    // TODO: Créer document Clients/{uid} avec structure complète
-    // TODO: Initialiser sous-collections de base
-    
-    res.status(501).json({
-      message: 'Not implemented - createVisitorAccount',
-      note: 'À implémenter avec Firebase Auth + Firestore structure'
-    });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  // Endpoint legacy conservé: on mappe vers /v1/auth/visitor/phone/otp/verify
+  const result = await verifyVisitorOtp({
+    phoneNumber: req.body?.phoneNumber,
+    code: req.body?.code ?? req.body?.otpCode,
+    language: req.body?.language ?? req.body?.languageCode,
+    ipKey: getClientIp(req)
+  });
+  res.json({ customToken: result.customToken, isNewUser: result.isNewUser });
 }
 
 export async function loginEmail(req: AuthenticatedRequest, res: Response): Promise<void> {

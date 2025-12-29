@@ -15,7 +15,7 @@ export async function authenticateToken(
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      res.status(401).json({ error: 'Missing or invalid authorization header' });
+      res.status(401).json({ message: 'Vous devez être connecté.', error: 'Vous devez être connecté.' });
       return;
     }
 
@@ -29,7 +29,7 @@ export async function authenticateToken(
     next();
   } catch (error: any) {
     console.error('Auth error:', error);
-    res.status(401).json({ error: 'Invalid or expired token' });
+    res.status(401).json({ message: 'Vous devez être connecté.', error: 'Vous devez être connecté.' });
   }
 }
 

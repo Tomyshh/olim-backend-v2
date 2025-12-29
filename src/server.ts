@@ -24,6 +24,11 @@ import cinemaRoutes from './routes/cinema.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import qaRoutes from './routes/qa.routes.js';
 
+// v1 routes (frontend)
+import v1AuthPhoneOtpRoutes from './routes/v1/auth.phoneOtp.routes.js';
+import v1MePhoneOtpRoutes from './routes/v1/me.phoneOtp.routes.js';
+import v1NotificationsRoutes from './routes/v1/notifications.routes.js';
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -93,6 +98,11 @@ app.get('/openapi.yaml', (req, res) => {
 });
 
 // Routes API
+// IMPORTANT: Routes attendues par le frontend Flutter
+app.use('/v1', v1AuthPhoneOtpRoutes);
+app.use('/v1', v1MePhoneOtpRoutes);
+app.use('/v1', v1NotificationsRoutes);
+
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/requests', requestsRoutes);
