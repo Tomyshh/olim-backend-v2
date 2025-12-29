@@ -2,8 +2,8 @@ import { getAuth, getFirestore, admin } from '../config/firebase.js';
 import { normalizeE164PhoneNumber } from '../utils/phone.js';
 import { consumeRateLimit } from './rateLimit.service.js';
 import { generateOtpCode6, otpCodeHash, requireOtpSecret, timingSafeEqualHex } from './otpCrypto.service.js';
-import { sendOtpViaTwilio } from './twilio.service.js';
 import { checkTwilioVerifyCode, hasTwilioVerifyEnabled, sendTwilioVerifySms } from './twilioVerify.service.js';
+import { sendOtp } from './otpSender.service.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 3;
@@ -95,7 +95,7 @@ export async function sendLoginOtp(params: {
     { merge: true }
   );
 
-  await sendOtpViaTwilio({ phoneNumberE164: norm.e164, languageCode, channels, code });
+  await sendOtp({ phoneNumberE164: norm.e164, languageCode, channels, code });
 }
 
 export async function verifyLoginOtp(params: {
@@ -303,7 +303,7 @@ export async function sendLinkPhoneOtp(params: {
     createdAt: admin.firestore.FieldValue.serverTimestamp()
   });
 
-  await sendOtpViaTwilio({ phoneNumberE164: norm.e164, languageCode, channels, code });
+  await sendOtp({ phoneNumberE164: norm.e164, languageCode, channels, code });
 }
 
 export async function verifyLinkPhoneOtp(params: {

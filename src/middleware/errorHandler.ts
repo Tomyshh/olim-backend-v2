@@ -13,6 +13,12 @@ export function errorHandler(
       message: err.message,
       twilio: err.twilio
     });
+  } else if (err?.sms) {
+    console.error('Error (SMS):', {
+      status: err.status || err.statusCode || 500,
+      message: err.message,
+      sms: err.sms
+    });
   } else {
     console.error('Error:', err);
   }
@@ -25,6 +31,7 @@ export function errorHandler(
     // compat legacy (certaines routes existantes renvoient encore {error})
     error: message,
     ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.twilio && { details: { provider: 'twilio', ...err.twilio } }),
+    ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.sms && { details: { provider: 'sms', ...err.sms } }),
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 }
