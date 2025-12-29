@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
-import cors from 'cors';
+import cors, { type CorsOptions } from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'path';
@@ -32,10 +32,51 @@ initializeFirebase();
 
 // Middleware globaux
 app.use(helmet());
-app.use(cors({
-  origin: process.env.ALLOWED_ORIGINS?.split(',') || '*',
-  credentials: true
-}));
+
+const DEFAULT_ALLOWED_ORIGINS = [
+  'https://olimservice-7dbee.web.app',
+  'https://olimservice-7dbee.firebaseapp.com',
+  'http://localhost:3000'
+];
+
+function normalizeOrigin(value: string): string {
+  // L'en-tête Origin ne contient jamais de chemin, mais on normalise quand même les "/" finaux
+  return value.trim().replace(/\/+$/, '');
+}
+
+function getAllowedOrigins(): Set<string> {
+  const envRaw = process.env.ALLOWED_ORIGINS || '';
+  const envList = envRaw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(normalizeOrigin);
+
+  return new Set([...DEFAULT_ALLOWED_ORIGINS.map(normalizeOrigin), ...envList]);
+}
+
+const allowedOrigins = getAllowedOrigins();
+
+const corsOptions: CorsOptions = {
+  origin(
+    origin: string | undefined,
+    callback: (err: Error | null, allow?: boolean | string | string[]) => void
+  ) {
+    // Pas d'Origin => appels server-to-server / curl / health checks => OK
+    if (!origin) return callback(null, true);
+
+    const normalized = normalizeOrigin(origin);
+    if (allowedOrigins.has(normalized)) return callback(null, true);
+
+    return callback(new Error(`CORS: origin non autorisée: ${origin}`));
+  },
+  credentials: true,
+  optionsSuccessStatus: 204
+};
+
+// CORS (inclut explicitement les pré-flights OPTIONS)
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('combined'));
