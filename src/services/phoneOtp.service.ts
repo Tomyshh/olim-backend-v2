@@ -3,6 +3,7 @@ import { normalizeE164PhoneNumber } from '../utils/phone.js';
 import { consumeRateLimit } from './rateLimit.service.js';
 import { generateOtpCode6, otpCodeHash, requireOtpSecret, timingSafeEqualHex } from './otpCrypto.service.js';
 import { sendOtpViaTwilio } from './twilio.service.js';
+import { checkTwilioVerifyCode, hasTwilioVerifyEnabled, sendTwilioVerifySms } from './twilioVerify.service.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 3;
@@ -40,7 +41,6 @@ export async function sendLoginOtp(params: {
 
   const languageCode = typeof params.languageCode === 'string' ? params.languageCode : 'fr';
   const channels = sanitizeChannels(params.channels);
-  const secret = requireOtpSecret();
 
   // Rate-limit (phone): 3 / 10min
   const rlPhone = await consumeRateLimit({
@@ -68,6 +68,14 @@ export async function sendLoginOtp(params: {
     }
   }
 
+  // Si Twilio Verify est activé, on délègue la génération/expiration/tentatives à Verify (SMS only).
+  if (hasTwilioVerifyEnabled()) {
+    const locale = languageCode?.toLowerCase().startsWith('he') ? 'he' : languageCode?.toLowerCase().startsWith('en') ? 'en' : 'fr';
+    await sendTwilioVerifySms({ toE164: norm.e164, locale });
+    return;
+  }
+
+  const secret = requireOtpSecret();
   const code = generateOtpCode6();
   const codeHash = otpCodeHash(secret, norm.e164, code);
   const expiresAt = nowMs() + OTP_TTL_MS;
@@ -75,7 +83,6 @@ export async function sendLoginOtp(params: {
   const db = getFirestore();
   const docRef = db.collection('PhoneOtpLogin').doc(norm.digitsOnly);
 
-  // Stocker avant l’envoi pour durcir contre l’abus (même si l’envoi Twilio échoue, on a consommé le quota)
   await docRef.set(
     {
       phoneNumber: norm.e164,
@@ -123,42 +130,61 @@ export async function verifyLoginOtp(params: {
   }
 
   const db = getFirestore();
-  const docRef = db.collection('PhoneOtpLogin').doc(norm.digitsOnly);
-  const snap = await docRef.get();
-  if (!snap.exists) {
-    const err: any = new Error('Code invalide.');
-    err.status = 400;
-    throw err;
-  }
 
-  const data = snap.data() as any;
-  const expiresAt = Number(data.expiresAt || 0);
-  const attempts = Number(data.attempts || 0);
-  const storedHash = String(data.codeHash || '');
-  if (!expiresAt || nowMs() > expiresAt) {
-    const err: any = new Error('Code expiré.');
-    err.status = 410;
-    throw err;
-  }
-  if (attempts >= OTP_MAX_ATTEMPTS) {
-    const err: any = new Error('Trop de tentatives.');
-    err.status = 429;
-    throw err;
-  }
+  if (hasTwilioVerifyEnabled()) {
+    const check = await checkTwilioVerifyCode({ toE164: norm.e164, code });
+    if (!check.approved) {
+      if (check.reason === 'too_many_attempts') {
+        const err: any = new Error('Trop de tentatives.');
+        err.status = 429;
+        throw err;
+      }
+      if (check.reason === 'expired') {
+        const err: any = new Error('Code expiré.');
+        err.status = 410;
+        throw err;
+      }
+      const err: any = new Error('Code incorrect.');
+      err.status = 400;
+      throw err;
+    }
+  } else {
+    const docRef = db.collection('PhoneOtpLogin').doc(norm.digitsOnly);
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      const err: any = new Error('Code invalide.');
+      err.status = 400;
+      throw err;
+    }
 
-  const secret = requireOtpSecret();
-  const computed = otpCodeHash(secret, norm.e164, code);
-  const ok = timingSafeEqualHex(storedHash, computed);
+    const data = snap.data() as any;
+    const expiresAt = Number(data.expiresAt || 0);
+    const attempts = Number(data.attempts || 0);
+    const storedHash = String(data.codeHash || '');
+    if (!expiresAt || nowMs() > expiresAt) {
+      const err: any = new Error('Code expiré.');
+      err.status = 410;
+      throw err;
+    }
+    if (attempts >= OTP_MAX_ATTEMPTS) {
+      const err: any = new Error('Trop de tentatives.');
+      err.status = 429;
+      throw err;
+    }
 
-  if (!ok) {
-    await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
-    const err: any = new Error('Code incorrect.');
-    err.status = 400;
-    throw err;
+    const secret = requireOtpSecret();
+    const computed = otpCodeHash(secret, norm.e164, code);
+    const ok = timingSafeEqualHex(storedHash, computed);
+
+    if (!ok) {
+      await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
+      const err: any = new Error('Code incorrect.');
+      err.status = 400;
+      throw err;
+    }
+
+    await docRef.delete().catch(() => {});
   }
-
-  // OTP consommé: on supprime pour éviter réutilisation
-  await docRef.delete().catch(() => {});
 
   const auth = getAuth();
 
@@ -224,7 +250,6 @@ export async function sendLinkPhoneOtp(params: {
 
   const languageCode = typeof params.languageCode === 'string' ? params.languageCode : 'fr';
   const channels = sanitizeChannels(params.channels);
-  const secret = requireOtpSecret();
 
   // Rate-limit (uid + phone)
   const rl = await consumeRateLimit({
@@ -247,11 +272,27 @@ export async function sendLinkPhoneOtp(params: {
     }
   }
 
+  const db = getFirestore();
+
+  if (hasTwilioVerifyEnabled()) {
+    // On garde une trace minimale de la demande (utile pour audit), sans stocker de code.
+    await db.collection('PhoneOtpRequests').doc(params.uid).set({
+      uid: params.uid,
+      phoneNumber: norm.e164,
+      expiresAt: nowMs() + OTP_TTL_MS,
+      attempts: 0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    const locale = languageCode?.toLowerCase().startsWith('he') ? 'he' : languageCode?.toLowerCase().startsWith('en') ? 'en' : 'fr';
+    await sendTwilioVerifySms({ toE164: norm.e164, locale });
+    return;
+  }
+
+  const secret = requireOtpSecret();
   const code = generateOtpCode6();
   const codeHash = otpCodeHash(secret, norm.e164, code);
   const expiresAt = nowMs() + OTP_TTL_MS;
 
-  const db = getFirestore();
   const docRef = db.collection('PhoneOtpRequests').doc(params.uid);
   await docRef.set({
     uid: params.uid,
@@ -295,49 +336,69 @@ export async function verifyLinkPhoneOtp(params: {
 
   const db = getFirestore();
   const docRef = db.collection('PhoneOtpRequests').doc(params.uid);
-  const snap = await docRef.get();
-  if (!snap.exists) {
-    const err: any = new Error('Code invalide.');
-    err.status = 400;
-    throw err;
-  }
-  const data = snap.data() as any;
 
-  const expiresAt = Number(data.expiresAt || 0);
-  const attempts = Number(data.attempts || 0);
-  const storedHash = String(data.codeHash || '');
-  const storedPhone = String(data.phoneNumber || '');
+  if (hasTwilioVerifyEnabled()) {
+    const check = await checkTwilioVerifyCode({ toE164: norm.e164, code });
+    if (!check.approved) {
+      if (check.reason === 'too_many_attempts') {
+        const err: any = new Error('Trop de tentatives.');
+        err.status = 429;
+        throw err;
+      }
+      if (check.reason === 'expired') {
+        const err: any = new Error('Code expiré.');
+        err.status = 410;
+        throw err;
+      }
+      const err: any = new Error('Code incorrect.');
+      err.status = 400;
+      throw err;
+    }
+    await docRef.delete().catch(() => {});
+  } else {
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      const err: any = new Error('Code invalide.');
+      err.status = 400;
+      throw err;
+    }
+    const data = snap.data() as any;
 
-  if (!expiresAt || nowMs() > expiresAt) {
-    const err: any = new Error('Code expiré.');
-    err.status = 410;
-    throw err;
-  }
-  if (attempts >= OTP_MAX_ATTEMPTS) {
-    const err: any = new Error('Trop de tentatives.');
-    err.status = 429;
-    throw err;
-  }
+    const expiresAt = Number(data.expiresAt || 0);
+    const attempts = Number(data.attempts || 0);
+    const storedHash = String(data.codeHash || '');
+    const storedPhone = String(data.phoneNumber || '');
 
-  // On exige que le téléphone corresponde à celui du request (évite de vérifier un OTP pour un autre numéro)
-  if (storedPhone && storedPhone !== norm.e164) {
-    await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
-    const err: any = new Error('Code incorrect.');
-    err.status = 400;
-    throw err;
-  }
+    if (!expiresAt || nowMs() > expiresAt) {
+      const err: any = new Error('Code expiré.');
+      err.status = 410;
+      throw err;
+    }
+    if (attempts >= OTP_MAX_ATTEMPTS) {
+      const err: any = new Error('Trop de tentatives.');
+      err.status = 429;
+      throw err;
+    }
 
-  const secret = requireOtpSecret();
-  const computed = otpCodeHash(secret, norm.e164, code);
-  const ok = timingSafeEqualHex(storedHash, computed);
-  if (!ok) {
-    await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
-    const err: any = new Error('Code incorrect.');
-    err.status = 400;
-    throw err;
-  }
+    if (storedPhone && storedPhone !== norm.e164) {
+      await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
+      const err: any = new Error('Code incorrect.');
+      err.status = 400;
+      throw err;
+    }
 
-  await docRef.delete().catch(() => {});
+    const secret = requireOtpSecret();
+    const computed = otpCodeHash(secret, norm.e164, code);
+    const ok = timingSafeEqualHex(storedHash, computed);
+    if (!ok) {
+      await docRef.set({ attempts: admin.firestore.FieldValue.increment(1) }, { merge: true });
+      const err: any = new Error('Code incorrect.');
+      err.status = 400;
+      throw err;
+    }
+
+    await docRef.delete().catch(() => {});
+  }
 
   const auth = getAuth();
   await auth.updateUser(params.uid, { phoneNumber: norm.e164 });

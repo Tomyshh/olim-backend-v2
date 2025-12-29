@@ -6,7 +6,16 @@ export function errorHandler(
   res: Response,
   next: NextFunction
 ): void {
-  console.error('Error:', err);
+  // Logs structurés (utile sur Render) sans exposer de secrets.
+  if (err?.twilio) {
+    console.error('Error (Twilio):', {
+      status: err.status || err.statusCode || 500,
+      message: err.message,
+      twilio: err.twilio
+    });
+  } else {
+    console.error('Error:', err);
+  }
 
   const status = err.status || err.statusCode || 500;
   const message = err.message || 'Internal server error';
@@ -15,6 +24,7 @@ export function errorHandler(
     message,
     // compat legacy (certaines routes existantes renvoient encore {error})
     error: message,
+    ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.twilio && { details: { provider: 'twilio', ...err.twilio } }),
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 }

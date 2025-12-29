@@ -60,13 +60,33 @@ export async function sendTwilioMessage(params: TwilioSendParams): Promise<void>
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    const err: any = new Error("Erreur lors de l'envoi du message.");
+    // Essayer d'extraire le code Twilio pour messages plus explicites (sans secrets).
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      parsed = null;
+    }
+
+    // Messages orientés “action” pour Render (souvent configuration From/ServiceSid)
+    let publicMessage = "Impossible d'envoyer le code. Veuillez réessayer.";
+    const twilioCode = parsed?.code;
+    if (twilioCode === 21660) {
+      publicMessage =
+        "Configuration Twilio invalide (numéro d’envoi). Vérifiez TWILIO_SMS_FROM ou TWILIO_MESSAGING_SERVICE_SID sur Render.";
+    } else if (twilioCode === 63007) {
+      publicMessage =
+        "Configuration Twilio WhatsApp invalide. Désactivez WhatsApp (channels:['sms']) ou corrigez TWILIO_WHATSAPP_FROM.";
+    }
+
+    const err: any = new Error(publicMessage);
     err.status = 502;
     err.twilio = {
       status: res.status,
+      code: twilioCode,
       to: maskPhoneForLogs(params.to),
       bodyLen: params.body.length,
-      resp: text.slice(0, 500)
+      resp: (parsed ? JSON.stringify(parsed) : text).slice(0, 500)
     };
     throw err;
   }
