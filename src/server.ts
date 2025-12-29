@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
-import cors, { type CorsOptions } from 'cors';
+import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'path';
@@ -57,7 +57,7 @@ function getAllowedOrigins(): Set<string> {
 
 const allowedOrigins = getAllowedOrigins();
 
-const corsOptions: CorsOptions = {
+const corsOptions: NonNullable<Parameters<typeof cors>[0]> = {
   origin(
     origin: string | undefined,
     callback: (err: Error | null, allow?: boolean | string | string[]) => void
