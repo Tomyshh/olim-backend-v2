@@ -58,7 +58,14 @@ async function paymePostJson(path: string, body: unknown, timeoutMs: number): Pr
       signal: ctrl.signal
     });
     const status = res.status;
-    const json = await res.json().catch(() => ({}));
+    const text = await res.text();
+    let json: any;
+    try {
+      json = text ? JSON.parse(text) : {};
+    } catch {
+      console.error(`PayMe ${path}: réponse non-JSON. Status: ${status}, Text:`, text.substring(0, 200));
+      json = {};
+    }
     return { ok: res.ok, status, json };
   } catch (e: any) {
     if (e?.name === 'AbortError') throw new HttpError(400, 'Timeout PayMe.');
@@ -90,6 +97,8 @@ export async function paymeCaptureBuyerToken(params: {
   if (!credit_card_exp) throw new HttpError(400, "Date d'expiration manquante (PayMe).");
   if (!credit_card_cvv) throw new HttpError(400, 'CVV manquant (PayMe).');
 
+  console.log('[PayMe] Tentative capture-buyer-token pour:', { email: buyer_email, name: buyer_name, seller: seller_payme_id.substring(0, 10) + '...' });
+
   const { ok, status, json } = await paymePostJson(
     'capture-buyer-token',
     {
@@ -104,6 +113,8 @@ export async function paymeCaptureBuyerToken(params: {
     12000
   );
 
+  console.log('[PayMe] Réponse capture-buyer-token:', { ok, status, errorCode: json?.status_error_code, hasKey: Boolean(json?.buyer_key), hasCard: Boolean(json?.buyer_card) });
+
   if (!ok || json?.status_error_code) {
     const err = new HttpError(400, `PayMe capture-buyer-token: ${safePaymeErrorMessage(json)}`);
     (err as any).statusCode = status;
@@ -114,7 +125,17 @@ export async function paymeCaptureBuyerToken(params: {
   const buyerKey = typeof json?.buyer_key === 'string' ? json.buyer_key : '';
   const buyerCard = typeof json?.buyer_card === 'string' ? json.buyer_card : '';
   const buyerName = typeof json?.buyer_name === 'string' ? json.buyer_name : undefined;
-  if (!buyerKey || !buyerCard) throw new HttpError(400, 'PayMe capture-buyer-token: réponse invalide.');
+  
+  if (!buyerKey || !buyerCard) {
+    // Log la réponse PayMe (sans données carte) pour debug
+    console.error('PayMe capture-buyer-token: réponse invalide. Réponse:', {
+      status,
+      hasKey: Boolean(buyerKey),
+      hasCard: Boolean(buyerCard),
+      keys: Object.keys(json || {})
+    });
+    throw new HttpError(400, 'PayMe capture-buyer-token: réponse invalide.');
+  }
 
   return { buyerKey, buyerCard, buyerName };
 }
