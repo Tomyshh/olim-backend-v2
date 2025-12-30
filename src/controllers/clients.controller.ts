@@ -1,6 +1,6 @@
 import type { Response } from 'express';
 import crypto from 'crypto';
-import { getAuth, getFirestore } from '../config/firebase.js';
+import { admin, getAuth, getFirestore } from '../config/firebase.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { HttpError } from '../utils/errors.js';
 import { tryCreateSecurdenFolderAndCard } from '../services/securden.service.js';
@@ -52,6 +52,11 @@ function coerceObject(value: unknown): Record<string, any> | undefined {
   return value;
 }
 
+function digitsOnly(value: unknown): string {
+  const raw = typeof value === 'string' ? value : '';
+  return raw.replace(/\D+/g, '');
+}
+
 /**
  * Construit le document subscription/current avec la structure complète attendue.
  */
@@ -82,56 +87,56 @@ function buildSubscriptionCurrentDoc(params: {
   return {
     // 1. plan
     plan: {
+      ...(params.subscriptionDataFromPayload?.plan || {}),
       type: planType,
       membership: params.membershipType || 'Pack Start',
       price: params.priceInCents,
-      currency: 'ILS',
-      ...(params.subscriptionDataFromPayload?.plan || {})
+      currency: 'ILS'
     },
 
     // 2. payment
     payment: {
+      ...(params.subscriptionDataFromPayload?.payment || {}),
       method: 'credit-card',
       installments: params.installments && params.installments > 1 ? params.installments : 1,
       nextPaymentDate: nextPaymentDate,
-      lastPaymentDate: now,
-      ...(params.subscriptionDataFromPayload?.payment || {})
+      lastPaymentDate: now
     },
 
     // 3. payme
     payme: {
+      ...(params.subscriptionDataFromPayload?.payme || {}),
       subCode: params.payme?.subCode ?? null,
       subID: params.payme?.subID ?? null,
       buyerKey: params.payme?.buyerKey ?? null,
       status: params.payme ? 1 : null, // 1 = actif
-      ...(params.subscriptionDataFromPayload?.payme || {})
     },
 
     // 4. dates
     dates: {
+      ...(params.subscriptionDataFromPayload?.dates || {}),
       startDate: now,
       endDate: endDate,
       pausedDate: null,
       cancelledDate: null,
-      resumedDate: null,
-      ...(params.subscriptionDataFromPayload?.dates || {})
+      resumedDate: null
     },
 
     // 5. states
     states: {
+      ...(params.subscriptionDataFromPayload?.states || {}),
       isActive: true,
       isPaused: false,
       willExpire: false,
-      isAnnual: isAnnual,
-      ...(params.subscriptionDataFromPayload?.states || {})
+      isAnnual: isAnnual
     },
 
     // 6. history
     history: {
+      ...(params.subscriptionDataFromPayload?.history || {}),
       previousMembership: null,
       lastModified: now,
-      modifiedBy: params.createdByUid || 'system',
-      ...(params.subscriptionDataFromPayload?.history || {})
+      modifiedBy: params.createdByUid || 'system'
     },
 
     // 7. promoCode (optionnel, depuis payload si fourni)
@@ -336,6 +341,8 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       membershipTypeFinal = pickString(clientData.membershipType) || 'Pack Start';
       const fullName = `${firstName} ${lastName}`.trim();
       const cardHolder = pickString((clientData as any).cardHolder) || fullName;
+      const cardDigits = digitsOnly(cardNumberRaw);
+      const cardSuffix = cardDigits.length >= 4 ? cardDigits.slice(-4) : '';
 
       // 1) capture buyer token (buyer_key)
       const buyerToken = await paymeCaptureBuyerToken({
@@ -387,6 +394,8 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       // Injecter dans clientData pour stockage Firestore (sans stocker la carte)
       clientData.buyerKey = buyerToken.buyerKey;
       clientData.buyerCard = buyerToken.buyerCard;
+      if (cardSuffix) clientData.cardSuffix = cardSuffix;
+      clientData.cardHolder = cardHolder;
       if (subCode != null) clientData.subCode = subCode;
       if (subID != null) clientData.paymeSubID = subID;
     } catch (err: any) {
@@ -412,16 +421,36 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     const clientDoc = mapClientDoc({ uid, email, clientData });
     batch.set(clientRef, clientDoc, { merge: false });
 
-    // Addresses (si présent)
-    const addressFields = {
-      address: pickString(clientData.address),
-      additionalAddress: pickString(clientData.additionalAddress),
-      appartment: pickString(clientData.appartment),
-      etage: pickString(clientData.etage)
-    };
-    const hasAddress = Object.values(addressFields).some(Boolean);
+    // Addresses (nouveau format)
+    const addressRaw = pickString(clientData.address);
+    const apartmentRaw = pickString(clientData.appartment);
+    const floorRaw = pickString(clientData.etage);
+    const additionalInfoRaw = pickString(clientData.additionalAddress);
+
+    const hasAddress = Boolean(addressRaw);
     if (hasAddress) {
-      batch.set(clientRef.collection('Addresses').doc('primary'), { ...addressFields, createdAt: new Date() }, { merge: true });
+      batch.set(
+        clientRef.collection('Addresses').doc('primary'),
+        {
+          name: pickString((clientData as any).addressName) || 'Adresse principale',
+          address: addressRaw,
+          apartment: apartmentRaw || null,
+          floor: floorRaw || null,
+          additionalInfo: additionalInfoRaw || null,
+          details: pickString((clientData as any).addressDetails) || null,
+          attachments: Array.isArray((clientData as any).addressAttachments)
+            ? (clientData as any).addressAttachments.map((x: any) => String(x)).filter(Boolean)
+            : [],
+          isActive: true,
+          deactivatedAt: null,
+          orderIndex: 0,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          paymentInfo: (clientData as any).addressPaymentInfo && typeof (clientData as any).addressPaymentInfo === 'object'
+            ? (clientData as any).addressPaymentInfo
+            : null
+        },
+        { merge: true }
+      );
     }
 
     // Family Members - Account Owner (le titulaire du compte)
@@ -441,42 +470,36 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     };
     batch.set(clientRef.collection('Family Members').doc('account_owner'), accountOwnerDoc, { merge: true });
 
-    // Family Members - Conjoint/Autre (si présent dans le payload)
-    const familyFirstName = pickString(clientData.familyFirstName);
-    const familyLastName = pickString(clientData.familyLastName);
-    const hasAdditionalFamily = Boolean(familyFirstName || familyLastName);
-    if (hasAdditionalFamily) {
-      const familyMemberDoc: Record<string, any> = {
-        'Last Name': familyLastName,
-        'First Name': familyFirstName,
-        'Father Name': pickString(clientData.familyFatherName),
-        'Teoudat Zeout': pickString(clientData.familyTeoudatZeout),
-        Birthday: pickString(clientData.familyBirthday),
-        'Family Member Status': pickString(clientData.familyMemberStatus) || 'Conjoint',
-        'Koupat Holim': pickString(clientData.familyKoupatHolim),
-        'Phone Number': coercePhoneField(clientData.familyPhoneNumber) || [],
-        Email: pickString(clientData.familyEmail),
-        isConnected: false,
-        hasGOVacces: false,
-        createdAt: new Date()
-      };
-      batch.set(clientRef.collection('Family Members').doc('family_member_1'), familyMemberDoc, { merge: true });
-    }
+    // NOTE: on ne crée qu'un seul document Family Members : account_owner
 
     // Payment credentials (si payant) - sans carte
     const paymentRef = clientRef.collection('Payment credentials').doc('first_registration');
     if (isPayingClient) {
+      const cardSuffix = pickString((clientData as any).cardSuffix);
+      const cardHolder = pickString((clientData as any).cardHolder) || `${firstName} ${lastName}`.trim();
+      const cardName = pickString((clientData as any).cardName) || cardHolder;
       batch.set(
         paymentRef,
         {
-          provider: 'securden',
-          status: 'pending',
-          hasCard: Boolean(pickString((body.clientData as any)?.cardNumber)),
-          // PayMe (jamais la carte, jamais le cvv/exp)
+          // Champs attendus (doc)
+          'Card Name': cardName,
+          // IMPORTANT: on ne stocke pas le numéro complet (PCI). On stocke le suffixe 4 derniers chiffres.
+          'Card Suffix': cardSuffix || null,
+          'Card Holder': cardHolder || null,
+          'Isracard Key': payme?.buyerKey ?? null,
+          isSubscriptionCard: planNumber === 3,
+          'Securden ID': null,
+          'Created At': admin.firestore.FieldValue.serverTimestamp(),
+          'Created From': 'CRM',
+          // Bonus: infos PayMe utiles
           payme: payme
-            ? { buyerCard: payme.buyerCard, subCode: payme.subCode ?? null, subID: payme.subID ?? null, updatedAt: new Date() }
-            : { updatedAt: new Date() },
-          createdAt: new Date()
+            ? {
+                buyerKey: payme.buyerKey ?? null,
+                buyerCard: payme.buyerCard ?? null,
+                subCode: payme.subCode ?? null,
+                subID: payme.subID ?? null
+              }
+            : null
         },
         { merge: true }
       );
@@ -521,10 +544,12 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       await paymentRef
         .set(
           {
-            provider: 'securden',
+            'Securden ID': securden.accountId || null,
             folderId: securden.folderId || null,
             accountId: securden.accountId || null,
             warnings: securden.warnings,
+            'Updated At': admin.firestore.FieldValue.serverTimestamp(),
+            'Updated From': 'CRM',
             updatedAt: new Date()
           },
           { merge: true }
