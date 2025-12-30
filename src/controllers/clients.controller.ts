@@ -3,7 +3,11 @@ import crypto from 'crypto';
 import { admin, getAuth, getFirestore } from '../config/firebase.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { HttpError } from '../utils/errors.js';
-import { tryCreateSecurdenFolderAndCard } from '../services/securden.service.js';
+import {
+  createSecurdenCreditCardAccountInFolder,
+  normalizeCardNumberDigitsOnly,
+  tryCreateSecurdenFolderAndCard
+} from '../services/securden.service.js';
 import {
   calculateSubscriptionStartDate,
   paymeCaptureBuyerToken,
@@ -592,6 +596,145 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     if (err?.status) throw err;
     throw err;
   }
+}
+
+type AddClientCreditCardBody = {
+  cardNumber?: unknown;
+  expirationDate?: unknown;
+  cvv?: unknown;
+  cardHolder?: unknown;
+  cardName?: unknown;
+  isSubscriptionCard?: unknown;
+  createdFrom?: unknown;
+};
+
+/**
+ * POST /api/clients/:clientId/payment-credentials/credit-card
+ * 1) Crée un compte "Credit Card 2" dans Securden (dans le folder du client si connu)
+ * 2) Ajoute un doc dans Clients/{clientId}/Payment credentials (sans carte en clair)
+ */
+export async function addClientCreditCardPaymentCredential(
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> {
+  if (req.method !== 'POST') throw new HttpError(405, 'Method Not Allowed');
+
+  const clientId = pickString((req.params as any)?.clientId);
+  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+
+  const body = (req.body || {}) as AddClientCreditCardBody;
+
+  // Validation minimale
+  const norm = normalizeCardNumberDigitsOnly(body.cardNumber);
+  const expirationDate = typeof body.expirationDate === 'string' ? body.expirationDate.trim() : '';
+  const cvv = typeof body.cvv === 'string' ? body.cvv.trim() : '';
+  if (!norm.ok) throw new HttpError(400, 'cardNumber invalide.');
+  if (!expirationDate) throw new HttpError(400, 'expirationDate requis.');
+  if (!cvv) throw new HttpError(400, 'cvv requis.');
+
+  const db = getFirestore();
+  const clientRef = db.collection('Clients').doc(clientId);
+  const clientSnap = await clientRef.get();
+  if (!clientSnap.exists) throw new HttpError(404, 'Client introuvable.');
+
+  const clientData = (clientSnap.data() || {}) as Record<string, any>;
+  const firstName = pickString(clientData['First Name'] ?? clientData.firstName);
+  const lastName = pickString(clientData['Last Name'] ?? clientData.lastName);
+  const clientName = `${firstName} ${lastName}`.trim() || pickString(clientData.Email) || clientId;
+  const email = pickString(clientData.Email);
+  if (!email) throw new HttpError(400, 'Client: Email requis pour générer le buyer token (PayMe).');
+
+  let folderId = pickString(clientData.securden_Folder);
+
+  // 0) PayMe: capture buyer token (Isracard Key)
+  // On le fait AVANT Securden pour éviter de créer une carte Securden si PayMe échoue.
+  // NOTE: PayMe attend expirationDate au format "MM/YY".
+  const cardHolder = pickString(body.cardHolder) || clientName;
+  const buyerToken = await paymeCaptureBuyerToken({
+    email,
+    buyerName: clientName,
+    cardHolder,
+    cardNumber: norm.digitsOnly,
+    expirationDate,
+    cvv
+  });
+
+  // 1) Securden: créer account carte (réutiliser folder si présent)
+  let accountId: string | undefined;
+  const securdenWarnings: string[] = [];
+
+  if (folderId) {
+    const result = await createSecurdenCreditCardAccountInFolder({
+      folderId,
+      clientName,
+      cardNumber: norm.digitsOnly,
+      expirationDate,
+      cvv,
+      isRegistration: false
+    });
+    accountId = result.accountId;
+    securdenWarnings.push(...(result.warnings || []));
+  } else {
+    if (!firstName || !lastName) throw new HttpError(400, 'Client: First Name / Last Name requis pour créer le folder Securden.');
+
+    const securden = await tryCreateSecurdenFolderAndCard({
+      firstName,
+      lastName,
+      isPayingClient: true,
+      cardNumber: norm.digitsOnly,
+      expirationDate,
+      cvv
+    });
+    folderId = securden.folderId || '';
+    accountId = securden.accountId;
+    securdenWarnings.push(...(securden.warnings || []));
+
+    if (folderId) {
+      await clientRef.set({ securden_Folder: folderId }, { merge: true }).catch(() => {});
+    }
+  }
+
+  if (!accountId) {
+    // Securden n'a pas créé l'account => on n'écrit pas dans Firestore
+    throw new HttpError(502, `Securden: échec création de la carte. ${securdenWarnings[0] || ''}`.trim());
+  }
+
+  // 2) Firestore: Payment credentials (sans carte en clair)
+  const cardSuffix = norm.digitsOnly.length >= 4 ? norm.digitsOnly.slice(-4) : null;
+  const maskedCardNumber =
+    cardSuffix ? `${'*'.repeat(Math.max(0, norm.digitsOnly.length - 4))}${cardSuffix}` : null;
+
+  const cardName = pickString(body.cardName) || cardHolder;
+  const isSubscriptionCard = body.isSubscriptionCard === true;
+  const createdFrom = pickString(body.createdFrom) || 'CRM';
+
+  const paymentDoc = {
+    'Card Name': cardName,
+    'Card Number': maskedCardNumber,
+    'Card Holder': cardHolder || null,
+    'Isracard Key': buyerToken.buyerKey,
+    'Card Suffix': cardSuffix,
+    isSubscriptionCard,
+    'Securden ID': accountId,
+    'Created At': admin.firestore.FieldValue.serverTimestamp(),
+    'Created From': createdFrom
+  };
+
+  const paymentRef = await clientRef.collection('Payment credentials').add(paymentDoc as any);
+
+  res.status(200).json({
+    success: true,
+    paymentCredentialId: paymentRef.id,
+    payme: {
+      buyerKey: buyerToken.buyerKey,
+      buyerCard: buyerToken.buyerCard
+    },
+    securden: {
+      folderId: folderId || null,
+      accountId: accountId || null,
+      warnings: securdenWarnings
+    }
+  });
 }
 
 

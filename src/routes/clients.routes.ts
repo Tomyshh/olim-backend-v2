@@ -9,6 +9,14 @@ const router = Router();
 // POST /api/clients
 router.post('/', authenticateToken, requireConseiller, asyncHandler(clientsController.createClient as any));
 
+// POST /api/clients/:clientId/payment-credentials/credit-card
+router.post(
+  '/:clientId/payment-credentials/credit-card',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(clientsController.addClientCreditCardPaymentCredential as any)
+);
+
 export default router;
 
 

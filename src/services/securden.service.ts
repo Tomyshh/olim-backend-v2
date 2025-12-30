@@ -13,6 +13,15 @@ export type SecurdenResult = {
   warnings: string[];
 };
 
+export type SecurdenCreateCreditCardAccountInput = {
+  folderId: string;
+  clientName: string;
+  cardNumber: unknown;
+  expirationDate: unknown;
+  cvv: unknown;
+  isRegistration?: boolean;
+};
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -229,6 +238,82 @@ async function addCreditCardAccount(params: {
 
   logSecurdenError('add_account', status, data);
   return { ok: false, status, error: data?.message || data?.error || `HTTP ${status}` };
+}
+
+/**
+ * Crée un compte "Credit Card 2" dans un folder Securden existant.
+ * - Ne log jamais de données sensibles
+ * - Valide/normalise le numéro de carte (digits only)
+ */
+export async function createSecurdenCreditCardAccountInFolder(
+  input: SecurdenCreateCreditCardAccountInput
+): Promise<{ accountId?: string; warnings: string[]; status?: number }> {
+  const warnings: string[] = [];
+  const token = getSecurdenToken();
+
+  if (!token) {
+    warnings.push('SECURDEN_AUTH_TOKEN manquant: création de carte Securden ignorée.');
+    return { warnings };
+  }
+
+  const baseUrl = getSecurdenBaseUrl();
+  if (!baseUrl.toLowerCase().startsWith('https://')) {
+    warnings.push('Securden: SECURDEN_BASE_URL doit être en HTTPS (TLS obligatoire).');
+    return { warnings };
+  }
+
+  const folderId = typeof input.folderId === 'string' ? input.folderId.trim() : '';
+  const clientName = typeof input.clientName === 'string' ? input.clientName.trim() : '';
+  if (!folderId) {
+    warnings.push('Securden: folderId manquant.');
+    return { warnings };
+  }
+  if (!clientName) {
+    warnings.push('Securden: clientName manquant.');
+    return { warnings };
+  }
+
+  const norm = normalizeCardNumberDigitsOnly(input.cardNumber);
+  const expirationDate = typeof input.expirationDate === 'string' ? input.expirationDate.trim() : '';
+  const cvv = typeof input.cvv === 'string' ? input.cvv.trim() : '';
+  if (!norm.ok || !expirationDate || !cvv) {
+    warnings.push('Securden: carte incomplète/invalide (account non créé).');
+    return { warnings };
+  }
+
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 15000);
+
+  try {
+    const accountResult = await addCreditCardAccount(
+      {
+        folderId,
+        clientName,
+        cardNumber: norm.digitsOnly,
+        expirationDate,
+        cvv,
+        isRegistration: input.isRegistration === true
+      },
+      ctrl.signal
+    );
+
+    if (accountResult.ok && accountResult.accountId) {
+      return { accountId: accountResult.accountId, warnings, status: accountResult.status };
+    }
+
+    warnings.push(`Securden: échec création account (${accountResult.error || 'status ' + accountResult.status}).`);
+    return { warnings, status: accountResult.status };
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      warnings.push('Securden: timeout (opération trop longue).');
+    } else {
+      console.error('[Securden] Exception:', e?.message || e);
+      warnings.push('Securden: erreur inattendue.');
+    }
+    return { warnings };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ---------------------------------------------------------------------------

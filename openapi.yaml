@@ -24,6 +24,7 @@ tags:
   - name: Cinema
   - name: Admin
   - name: QA
+  - name: Clients
 
 paths:
   /health:
@@ -2582,6 +2583,308 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
+  /api/clients:
+    post:
+      tags: [Clients]
+      summary: Créer un client (conseiller uniquement)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                clientData:
+                  type: object
+                  additionalProperties: true
+      responses:
+        '201':
+          description: Client créé
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [clientId]
+                properties:
+                  clientId:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/clients/{clientId}/payment-credentials/credit-card:
+    post:
+      tags: [Clients]
+      summary: Ajouter une carte de crédit pour un client (conseiller uniquement)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cardNumber, cvv, expirationDate]
+              properties:
+                cardNumber:
+                  type: string
+                cvv:
+                  type: string
+                expirationDate:
+                  type: string
+                cardholderName:
+                  type: string
+      responses:
+        '201':
+          description: Carte ajoutée
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message]
+                properties:
+                  message:
+                    type: string
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/auth/phone/otp/send:
+    post:
+      tags: [Auth]
+      summary: Envoyer OTP pour login/inscription (v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+                languageCode:
+                  type: string
+                  example: "fr"
+                channels:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: OTP envoyé
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/auth/phone/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Vérifier OTP login (v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber, code]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+                code:
+                  type: string
+                  example: "123456"
+      responses:
+        '200':
+          description: Token généré
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [customToken, isNewUser]
+                properties:
+                  customToken:
+                    type: string
+                  isNewUser:
+                    type: boolean
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/auth/visitor/phone/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Vérifier OTP visiteur (v1)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber, code]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+                code:
+                  type: string
+                  example: "123456"
+                language:
+                  type: string
+                  example: "fr"
+      responses:
+        '200':
+          description: Token généré
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [customToken, isNewUser]
+                properties:
+                  customToken:
+                    type: string
+                  isNewUser:
+                    type: boolean
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/me/phone/otp/send:
+    post:
+      tags: [Auth]
+      summary: Envoyer OTP pour lier téléphone (v1)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+                languageCode:
+                  type: string
+                  example: "fr"
+                channels:
+                  type: array
+                  items:
+                    type: string
+      responses:
+        '200':
+          description: OTP envoyé
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/me/phone/otp/verify:
+    post:
+      tags: [Auth]
+      summary: Vérifier OTP et lier téléphone (v1)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phoneNumber, code]
+              properties:
+                phoneNumber:
+                  type: string
+                  example: "+972501234567"
+                code:
+                  type: string
+                  example: "123456"
+      responses:
+        '200':
+          description: Téléphone lié
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/notifications/sms:
+    post:
+      tags: [Notifications]
+      summary: Envoyer SMS générique (v1)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [to, body]
+              properties:
+                to:
+                  type: string
+                  example: "+972501234567"
+                body:
+                  type: string
+                  example: "Message SMS"
+      responses:
+        '200':
+          description: SMS envoyé
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
 components:
   securitySchemes:
     bearerAuth:
@@ -2658,6 +2961,12 @@ components:
         type: string
     PartnerId:
       name: partnerId
+      in: path
+      required: true
+      schema:
+        type: string
+    ClientId:
+      name: clientId
       in: path
       required: true
       schema:
