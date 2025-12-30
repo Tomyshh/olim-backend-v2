@@ -63,6 +63,18 @@ cp env.example .env
 # Éditer .env avec vos valeurs
 ```
 
+### Variables d’environnement (essentielles)
+
+- **Firebase Admin**:
+  - **`FIREBASE_SERVICE_ACCOUNT`**: JSON string (recommandé)
+  - ou **`FIREBASE_SERVICE_ACCOUNT_PATH`**: chemin vers un fichier (ex: `serviceAccountKey.json`)
+- **Securden**:
+  - **`SECURDEN_AUTH_TOKEN`**: obligatoire (création folder/account carte)
+  - **`SECURDEN_BASE_URL`**: optionnel, défaut `https://olimservice.securden-vault.com/api/` (**HTTPS obligatoire**)
+- **PayMe.io**:
+  - **`PAYME_SELLER_KEY`**: obligatoire (clé marchand PayMe)
+  - **`PAYME_BASE_URL`**: optionnel, défaut `https://live.payme.io/api/` (**HTTPS obligatoire**)
+
 3. **Compiler TypeScript**
 ```bash
 npm run build
@@ -100,6 +112,9 @@ npm start
 - `POST /api/profile/addresses` - Ajouter adresse
 - `PATCH /api/profile/addresses/:addressId` - Modifier adresse
 - `DELETE /api/profile/addresses/:addressId` - Supprimer adresse
+
+### Clients (`/api/clients`)
+- `POST /api/clients` - Créer un client (Firebase Auth + Firestore + Securden, réservé aux conseillers)
 
 ### Demandes (`/api/requests`)
 - `GET /api/requests` - Liste des demandes

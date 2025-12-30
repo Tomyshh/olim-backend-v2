@@ -1,10 +1,17 @@
 import admin from 'firebase-admin';
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 
 let firebaseInitialized = false;
 
 function loadServiceAccount(): Record<string, unknown> {
+  // Compat: variable demandée côté infra/front
+  // - FIREBASE_SERVICE_ACCOUNT (JSON string)
+  const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (raw?.trim()) {
+    return JSON.parse(raw);
+  }
+
   const json = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
   if (json?.trim()) {
     return JSON.parse(json);
@@ -16,9 +23,13 @@ function loadServiceAccount(): Record<string, unknown> {
     return JSON.parse(decoded);
   }
 
-  const serviceAccountPath =
-    process.env.FIREBASE_SERVICE_ACCOUNT_PATH || 'olimservice-7dbee-firebase-adminsdk-r13so-8e1912f7d8.json';
-  return JSON.parse(readFileSync(join(process.cwd(), serviceAccountPath), 'utf8'));
+  const envPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
+  const defaultCandidates = ['serviceAccountKey.json', 'olimservice-7dbee-firebase-adminsdk-r13so-8e1912f7d8.json'];
+  const chosen =
+    envPath ||
+    defaultCandidates.find((p) => existsSync(join(process.cwd(), p))) ||
+    defaultCandidates[defaultCandidates.length - 1]!;
+  return JSON.parse(readFileSync(join(process.cwd(), chosen), 'utf8'));
 }
 
 export function initializeFirebase(): void {
