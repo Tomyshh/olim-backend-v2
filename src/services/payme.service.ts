@@ -164,6 +164,7 @@ export async function paymeGenerateSale(params: {
   installments?: number;
 }): Promise<{ approved: boolean }> {
   const seller_payme_id = requirePaymeSellerKey();
+  const debug = process.env.PAYME_DEBUG === 'true';
 
   const { ok, status, json } = await paymePostJson(
     'generate-sale',
@@ -180,14 +181,29 @@ export async function paymeGenerateSale(params: {
     20000
   );
 
-  if (!ok || json?.status_error_code || json?.sale_status === 'failed') {
+  const saleStatusRaw = pickFirstString(json, ['sale_status', 'saleStatus']);
+  const saleStatus = saleStatusRaw.toLowerCase().trim();
+
+  if (debug) {
+    console.log('[PayMe] Réponse generate-sale:', {
+      ok,
+      status,
+      errorCode: json?.status_error_code,
+      saleStatus: saleStatusRaw || null,
+      keys: Object.keys(json || {})
+    });
+  }
+
+  // Échec explicite
+  if (!ok || json?.status_error_code || ['failed', 'declined', 'error'].includes(saleStatus)) {
     const err = new HttpError(400, `PayMe generate-sale: ${safePaymeErrorMessage(json)}`);
     (err as any).statusCode = status;
     (err as any).errorCode = json?.status_error_code;
     throw err;
   }
 
-  return { approved: json?.sale_status === 'approved' };
+  // PayMe peut renvoyer des champs variables; si pas d'échec explicite, on considère OK.
+  return { approved: saleStatus ? saleStatus === 'approved' : true };
 }
 
 export async function paymeGenerateSubscription(params: {

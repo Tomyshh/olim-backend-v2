@@ -74,6 +74,7 @@ cp env.example .env
 - **PayMe.io**:
   - **`PAYME_SELLER_KEY`**: obligatoire (clé marchand PayMe)
   - **`PAYME_BASE_URL`**: optionnel, défaut `https://live.payme.io/api/` (**HTTPS obligatoire**)
+  - `PAYME_DEBUG=true` (optionnel) : logs de debug PayMe (sans données carte)
 
 3. **Compiler TypeScript**
 ```bash

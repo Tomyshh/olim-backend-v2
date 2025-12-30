@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import crypto from 'crypto';
 import { getAuth, getFirestore } from '../config/firebase.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { HttpError } from '../utils/errors.js';
@@ -44,6 +45,20 @@ function coerceObject(value: unknown): Record<string, any> | undefined {
   if (!isPlainObject(value)) return undefined;
   if (Object.keys(value).length === 0) return undefined;
   return value;
+}
+
+function emailLockId(email: string): string {
+  // Firestore docId safe
+  return crypto.createHash('sha256').update(email).digest('hex');
+}
+
+function timestampToMs(value: any): number {
+  if (!value) return 0;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  const d = value instanceof Date ? value : null;
+  if (d) return d.getTime();
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function mapClientDoc(params: { uid: string; email: string; clientData: Record<string, any> }): Record<string, any> {
@@ -134,6 +149,68 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
 
   const isPayingClient = clientData.isFreeClient === false;
 
+  const auth = getAuth();
+  const db = getFirestore();
+
+  // ---------------------------------------------------------------------------
+  // Idempotence (anti double-charge): lock Firestore par email AVANT PayMe
+  // ---------------------------------------------------------------------------
+  const lockRef = db.collection('ClientCreationLocks').doc(emailLockId(email));
+  const lockTtlMs = 2 * 60 * 1000; // 2 min (clic double / retry réseau)
+
+  // Si déjà traité récemment, éviter de relancer PayMe (risque de double prélèvement)
+  const existingLock = await lockRef.get().catch(() => null as any);
+  if (existingLock?.exists) {
+    const data = existingLock.data() as any;
+    const status = String(data?.status || '');
+    const updatedAtMs = Math.max(timestampToMs(data?.updatedAt), timestampToMs(data?.startedAt));
+    const ageMs = updatedAtMs ? Date.now() - updatedAtMs : Number.POSITIVE_INFINITY;
+    const existingUid = typeof data?.uid === 'string' ? data.uid : null;
+
+    if (status === 'completed' && existingUid) {
+      res.status(200).json({
+        success: true,
+        uid: existingUid,
+        securden: { folderId: null, accountId: null, warnings: ['Requête dupliquée: réponse idempotente (déjà créé).'] },
+        payme: null,
+        durationMs: Date.now() - startedAt
+      });
+      return;
+    }
+
+    if (status === 'in_progress' && ageMs <= lockTtlMs) {
+      throw new HttpError(409, 'Création déjà en cours. Réessayez dans quelques secondes.');
+    }
+  }
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(lockRef);
+    if (snap.exists) {
+      const data = snap.data() as any;
+      const status = String(data?.status || '');
+      const updatedAtMs = Math.max(timestampToMs(data?.updatedAt), timestampToMs(data?.startedAt));
+      const ageMs = updatedAtMs ? Date.now() - updatedAtMs : Number.POSITIVE_INFINITY;
+      if (status === 'in_progress' && ageMs <= lockTtlMs) {
+        throw new HttpError(409, 'Création déjà en cours. Réessayez dans quelques secondes.');
+      }
+    }
+    tx.set(lockRef, { email, status: 'in_progress', startedAt: new Date(), updatedAt: new Date() }, { merge: true });
+  });
+
+  // Éviter de débiter si l'email existe déjà
+  try {
+    await auth.getUserByEmail(email);
+    // si on arrive ici => user existe
+    await lockRef.set({ status: 'failed', updatedAt: new Date(), lastError: 'email-already-exists' }, { merge: true }).catch(() => {});
+    throw new HttpError(400, 'Email déjà existant.');
+  } catch (e: any) {
+    // ok si user-not-found
+    if (e?.code && e.code !== 'auth/user-not-found') {
+      await lockRef.set({ status: 'failed', updatedAt: new Date(), lastError: 'auth-check-failed' }, { merge: true }).catch(() => {});
+      throw e;
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // PayMe.io (bloquant si échec) - avant création Auth/Firestore
   // ---------------------------------------------------------------------------
@@ -213,9 +290,6 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     if (subCode != null) clientData.subCode = subCode;
     if (subID != null) clientData.paymeSubID = subID;
   }
-
-  const auth = getAuth();
-  const db = getFirestore();
 
   let uid: string | undefined;
   try {
@@ -326,11 +400,18 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
         : null,
       durationMs: Date.now() - startedAt
     });
+
+    // Marquer lock completed
+    await lockRef.set({ status: 'completed', uid, updatedAt: new Date() }, { merge: true }).catch(() => {});
   } catch (err: any) {
     // Si Firestore a échoué après création Auth => rollback user Auth
     if (uid) {
       await auth.deleteUser(uid).catch(() => {});
     }
+
+    await lockRef
+      .set({ status: 'failed', updatedAt: new Date(), lastError: String(err?.message || err?.code || 'unknown') }, { merge: true })
+      .catch(() => {});
 
     // Firebase errors -> 400
     if (err?.code === 'auth/email-already-exists') throw new HttpError(400, 'Email déjà existant.');
