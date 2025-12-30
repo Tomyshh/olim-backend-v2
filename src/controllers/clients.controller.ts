@@ -52,6 +52,97 @@ function coerceObject(value: unknown): Record<string, any> | undefined {
   return value;
 }
 
+/**
+ * Construit le document subscription/current avec la structure complète attendue.
+ */
+function buildSubscriptionCurrentDoc(params: {
+  plan: number; // 3=monthly, 4=annual
+  membershipType: string;
+  priceInCents: number;
+  payme: { buyerKey: string; buyerCard: string; subCode?: string | number | null; subID?: string | null } | null;
+  installments?: number;
+  subscriptionDataFromPayload?: Record<string, any>;
+  createdByUid?: string;
+}): Record<string, any> {
+  const now = new Date();
+  const isAnnual = params.plan === 4;
+  const planType = isAnnual ? 'annual' : 'monthly';
+
+  // Calculer endDate (1 mois ou 1 an après now)
+  const endDate = new Date(now);
+  if (isAnnual) {
+    endDate.setFullYear(endDate.getFullYear() + 1);
+  } else {
+    endDate.setMonth(endDate.getMonth() + 1);
+  }
+
+  // Calculer nextPaymentDate (même logique que endDate pour le premier paiement)
+  const nextPaymentDate = new Date(endDate);
+
+  return {
+    // 1. plan
+    plan: {
+      type: planType,
+      membership: params.membershipType || 'Pack Start',
+      price: params.priceInCents,
+      currency: 'ILS',
+      ...(params.subscriptionDataFromPayload?.plan || {})
+    },
+
+    // 2. payment
+    payment: {
+      method: 'credit-card',
+      installments: params.installments && params.installments > 1 ? params.installments : 1,
+      nextPaymentDate: nextPaymentDate,
+      lastPaymentDate: now,
+      ...(params.subscriptionDataFromPayload?.payment || {})
+    },
+
+    // 3. payme
+    payme: {
+      subCode: params.payme?.subCode ?? null,
+      subID: params.payme?.subID ?? null,
+      buyerKey: params.payme?.buyerKey ?? null,
+      status: params.payme ? 1 : null, // 1 = actif
+      ...(params.subscriptionDataFromPayload?.payme || {})
+    },
+
+    // 4. dates
+    dates: {
+      startDate: now,
+      endDate: endDate,
+      pausedDate: null,
+      cancelledDate: null,
+      resumedDate: null,
+      ...(params.subscriptionDataFromPayload?.dates || {})
+    },
+
+    // 5. states
+    states: {
+      isActive: true,
+      isPaused: false,
+      willExpire: false,
+      isAnnual: isAnnual,
+      ...(params.subscriptionDataFromPayload?.states || {})
+    },
+
+    // 6. history
+    history: {
+      previousMembership: null,
+      lastModified: now,
+      modifiedBy: params.createdByUid || 'system',
+      ...(params.subscriptionDataFromPayload?.history || {})
+    },
+
+    // 7. promoCode (optionnel, depuis payload si fourni)
+    ...(params.subscriptionDataFromPayload?.promoCode ? { promoCode: params.subscriptionDataFromPayload.promoCode } : {}),
+
+    // Timestamps système
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
 function emailLockId(email: string): string {
   // Firestore docId safe
   return crypto.createHash('sha256').update(email).digest('hex');
@@ -220,10 +311,16 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
   // PayMe.io (bloquant si échec) - avant création Auth/Firestore
   // ---------------------------------------------------------------------------
   let payme: null | { buyerKey: string; buyerCard: string; subCode?: string | number | null; subID?: string | null } = null;
+  // Variables pour subscription/current (accessibles après PayMe)
+  let planNumber = 0;
+  let priceInCentsFinal = 0;
+  let membershipTypeFinal = pickString(clientData.membershipType) || 'Pack Start';
+  let installmentsUsed = 1;
+
   if (isPayingClient) {
     try {
-      const plan = Number(clientData.plan || 0);
-      if (![3, 4].includes(plan)) throw new HttpError(400, 'Plan invalide (PayMe).');
+      planNumber = Number(clientData.plan || 0);
+      if (![3, 4].includes(planNumber)) throw new HttpError(400, 'Plan invalide (PayMe).');
 
       const cardNumberRaw = (body.clientData as any)?.cardNumber;
       const expRaw = (body.clientData as any)?.expirationDate;
@@ -235,8 +332,8 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
 
       // Prix (centimes) - fallback sur valeurs connues si non fourni
       const priceFromPayload = Number((clientData as any).membershipPrice || 0);
-      const priceInCents = Number.isFinite(priceFromPayload) && priceFromPayload > 0 ? priceFromPayload : plan === 4 ? 249000 : 24900;
-      const membershipType = pickString(clientData.membershipType) || 'Pack Start';
+      priceInCentsFinal = Number.isFinite(priceFromPayload) && priceFromPayload > 0 ? priceFromPayload : planNumber === 4 ? 249000 : 24900;
+      membershipTypeFinal = pickString(clientData.membershipType) || 'Pack Start';
       const fullName = `${firstName} ${lastName}`.trim();
       const cardHolder = pickString((clientData as any).cardHolder) || fullName;
 
@@ -253,29 +350,29 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       let subCode: string | number | null = null;
       let subID: string | null = null;
 
-      if (plan === 4) {
+      if (planNumber === 4) {
         // Annuel: sale unique (installments optionnel)
-        const installments = Number((clientData as any).selectedInstallments || 0);
+        installmentsUsed = Number((clientData as any).selectedInstallments || 0);
         await paymeGenerateSale({
-          priceInCents,
-          description: membershipType,
+          priceInCents: priceInCentsFinal,
+          description: membershipTypeFinal,
           buyerKey: buyerToken.buyerKey,
-          installments: Number.isFinite(installments) ? installments : undefined
+          installments: Number.isFinite(installmentsUsed) && installmentsUsed > 1 ? installmentsUsed : undefined
         });
         subCode = null;
         subID = null;
       } else {
         // Mensuel: sale immédiat + subscription future (J+1 mois)
         await paymeGenerateSale({
-          priceInCents,
-          description: `${membershipType} - Premier mois`,
+          priceInCents: priceInCentsFinal,
+          description: `${membershipTypeFinal} - Premier mois`,
           buyerKey: buyerToken.buyerKey
         });
 
         const startDateDdMmYyyy = calculateSubscriptionStartDate(3);
         const sub = await paymeGenerateSubscription({
-          priceInCents,
-          description: membershipType,
+          priceInCents: priceInCentsFinal,
+          description: membershipTypeFinal,
           email,
           buyerKey: buyerToken.buyerKey,
           planIterationType: 3,
@@ -342,7 +439,7 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     }
 
     // Payment credentials (si payant) - sans carte
-    const paymentRef = clientRef.collection('Payment credentials').doc('securden');
+    const paymentRef = clientRef.collection('Payment credentials').doc('first_registration');
     if (isPayingClient) {
       batch.set(
         paymentRef,
@@ -360,12 +457,24 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       );
     }
 
-    // subscription/current
-    const subscriptionData = coerceObject((body.clientData as any)?.subscriptionData);
-    if (subscriptionData) {
+    // subscription/current (structure complète pour clients payants, ou payload brut pour visiteurs)
+    const subscriptionDataFromPayload = coerceObject((body.clientData as any)?.subscriptionData);
+    if (isPayingClient) {
+      const subscriptionDoc = buildSubscriptionCurrentDoc({
+        plan: planNumber,
+        membershipType: membershipTypeFinal,
+        priceInCents: priceInCentsFinal,
+        payme,
+        installments: installmentsUsed,
+        subscriptionDataFromPayload,
+        createdByUid: req.uid
+      });
+      batch.set(clientRef.collection('subscription').doc('current'), subscriptionDoc, { merge: true });
+    } else if (subscriptionDataFromPayload) {
+      // Visiteur: stocker le payload tel quel (si fourni)
       batch.set(
         clientRef.collection('subscription').doc('current'),
-        { ...subscriptionData, updatedAt: new Date(), createdAt: new Date() },
+        { ...subscriptionDataFromPayload, updatedAt: new Date(), createdAt: new Date() },
         { merge: true }
       );
     }
