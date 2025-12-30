@@ -424,18 +424,43 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       batch.set(clientRef.collection('Addresses').doc('primary'), { ...addressFields, createdAt: new Date() }, { merge: true });
     }
 
-    // Family Members (si présent)
-    const familyFields = {
-      firstName: pickString(clientData.familyFirstName),
-      lastName: pickString(clientData.familyLastName),
-      birthday: pickString(clientData.familyBirthday),
-      koupatHolim: pickString(clientData.familyKoupatHolim),
-      email: pickString(clientData.familyEmail),
-      phoneNumber: clientData.familyPhoneNumber
+    // Family Members - Account Owner (le titulaire du compte)
+    const accountOwnerDoc: Record<string, any> = {
+      'Last Name': lastName,
+      'First Name': firstName,
+      'Father Name': pickString(clientData.fatherName),
+      'Teoudat Zeout': pickString(clientData.teoudatZeout),
+      Birthday: pickString(clientData.birthday),
+      'Family Member Status': 'Account Owner',
+      'Koupat Holim': pickString(clientData.koupatHolim),
+      'Phone Number': coercePhoneField(clientData.phoneNumber) || [],
+      Email: email,
+      isConnected: false,
+      hasGOVacces: false,
+      createdAt: new Date()
     };
-    const hasFamily = Boolean(familyFields.firstName || familyFields.lastName || familyFields.email || familyFields.birthday);
-    if (hasFamily) {
-      batch.set(clientRef.collection('Family Members').doc('primary'), { ...familyFields, createdAt: new Date() }, { merge: true });
+    batch.set(clientRef.collection('Family Members').doc('account_owner'), accountOwnerDoc, { merge: true });
+
+    // Family Members - Conjoint/Autre (si présent dans le payload)
+    const familyFirstName = pickString(clientData.familyFirstName);
+    const familyLastName = pickString(clientData.familyLastName);
+    const hasAdditionalFamily = Boolean(familyFirstName || familyLastName);
+    if (hasAdditionalFamily) {
+      const familyMemberDoc: Record<string, any> = {
+        'Last Name': familyLastName,
+        'First Name': familyFirstName,
+        'Father Name': pickString(clientData.familyFatherName),
+        'Teoudat Zeout': pickString(clientData.familyTeoudatZeout),
+        Birthday: pickString(clientData.familyBirthday),
+        'Family Member Status': pickString(clientData.familyMemberStatus) || 'Conjoint',
+        'Koupat Holim': pickString(clientData.familyKoupatHolim),
+        'Phone Number': coercePhoneField(clientData.familyPhoneNumber) || [],
+        Email: pickString(clientData.familyEmail),
+        isConnected: false,
+        hasGOVacces: false,
+        createdAt: new Date()
+      };
+      batch.set(clientRef.collection('Family Members').doc('family_member_1'), familyMemberDoc, { merge: true });
     }
 
     // Payment credentials (si payant) - sans carte
