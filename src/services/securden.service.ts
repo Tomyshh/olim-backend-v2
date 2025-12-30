@@ -23,6 +23,11 @@ async function securdenPostJson<T = any>(path: string, body: unknown, signal: Ab
   const token = process.env.SECURDEN_AUTH_TOKEN || '';
   const baseUrl = getSecurdenBaseUrl();
   const url = baseUrl + path.replace(/^\/+/, '');
+  const debug = process.env.SECURDEN_DEBUG === 'true';
+
+  if (debug) {
+    console.log(`[Securden] POST ${path}`);
+  }
 
   const res = await fetch(url, {
     method: 'POST',
@@ -44,6 +49,10 @@ async function securdenPostJson<T = any>(path: string, body: unknown, signal: Ab
     } catch {
       data = undefined;
     }
+  }
+
+  if (debug) {
+    console.log(`[Securden] Réponse ${path}:`, { ok: res.ok, status, keys: Object.keys(data || {}) });
   }
 
   return { ok: res.ok, status, data };
@@ -119,13 +128,13 @@ export async function tryCreateSecurdenFolderAndCard(params: {
           {
             folderId,
             name: 'Carte bancaire',
-            accountType: 'Credit Card',
+            accountType: 'Credit Card 2',
             fields: { cardNumber: norm.digitsOnly, expirationDate: exp, cvv }
           },
           {
             folderId,
             title: 'Carte bancaire',
-            accountType: 'Credit Card',
+            accountType: 'Credit Card 2',
             attributes: { cardNumber: norm.digitsOnly, expirationDate: exp, cvv }
           }
         ];
