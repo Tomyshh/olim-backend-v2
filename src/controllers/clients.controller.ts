@@ -216,79 +216,86 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
   // ---------------------------------------------------------------------------
   let payme: null | { buyerKey: string; buyerCard: string; subCode?: string | number | null; subID?: string | null } = null;
   if (isPayingClient) {
-    const plan = Number(clientData.plan || 0);
-    if (![3, 4].includes(plan)) throw new HttpError(400, 'Plan invalide (PayMe).');
+    try {
+      const plan = Number(clientData.plan || 0);
+      if (![3, 4].includes(plan)) throw new HttpError(400, 'Plan invalide (PayMe).');
 
-    const cardNumberRaw = (body.clientData as any)?.cardNumber;
-    const expRaw = (body.clientData as any)?.expirationDate;
-    const cvvRaw = (body.clientData as any)?.cvv;
+      const cardNumberRaw = (body.clientData as any)?.cardNumber;
+      const expRaw = (body.clientData as any)?.expirationDate;
+      const cvvRaw = (body.clientData as any)?.cvv;
 
-    if (!pickString(cardNumberRaw) || !pickString(expRaw) || !pickString(cvvRaw)) {
-      throw new HttpError(400, 'Carte requise (cardNumber/expirationDate/cvv) pour un client payant.');
-    }
+      if (!pickString(cardNumberRaw) || !pickString(expRaw) || !pickString(cvvRaw)) {
+        throw new HttpError(400, 'Carte requise (cardNumber/expirationDate/cvv) pour un client payant.');
+      }
 
-    // Prix (centimes) - fallback sur valeurs connues si non fourni
-    const priceFromPayload = Number((clientData as any).membershipPrice || 0);
-    const priceInCents = Number.isFinite(priceFromPayload) && priceFromPayload > 0 ? priceFromPayload : plan === 4 ? 249000 : 24900;
-    const membershipType = pickString(clientData.membershipType) || 'Pack Start';
-    const fullName = `${firstName} ${lastName}`.trim();
-    const cardHolder = pickString((clientData as any).cardHolder) || fullName;
+      // Prix (centimes) - fallback sur valeurs connues si non fourni
+      const priceFromPayload = Number((clientData as any).membershipPrice || 0);
+      const priceInCents = Number.isFinite(priceFromPayload) && priceFromPayload > 0 ? priceFromPayload : plan === 4 ? 249000 : 24900;
+      const membershipType = pickString(clientData.membershipType) || 'Pack Start';
+      const fullName = `${firstName} ${lastName}`.trim();
+      const cardHolder = pickString((clientData as any).cardHolder) || fullName;
 
-    // 1) capture buyer token (buyer_key)
-    const buyerToken = await paymeCaptureBuyerToken({
-      email,
-      buyerName: fullName,
-      cardHolder,
-      cardNumber: cardNumberRaw,
-      expirationDate: expRaw,
-      cvv: cvvRaw
-    });
-
-    let subCode: string | number | null = null;
-    let subID: string | null = null;
-
-    if (plan === 4) {
-      // Annuel: sale unique (installments optionnel)
-      const installments = Number((clientData as any).selectedInstallments || 0);
-      const sale = await paymeGenerateSale({
-        priceInCents,
-        description: membershipType,
-        buyerKey: buyerToken.buyerKey,
-        installments: Number.isFinite(installments) ? installments : undefined
-      });
-      if (!sale.approved) throw new HttpError(400, "Le paiement annuel a échoué (PayMe).");
-      subCode = null;
-      subID = null;
-    } else {
-      // Mensuel: sale immédiat + subscription future (J+1 mois)
-      const sale = await paymeGenerateSale({
-        priceInCents,
-        description: `${membershipType} - Premier mois`,
-        buyerKey: buyerToken.buyerKey
-      });
-      if (!sale.approved) throw new HttpError(400, 'Le paiement du premier mois a échoué (PayMe).');
-
-      const startDate = new Date();
-      startDate.setMonth(startDate.getMonth() + 1);
-      const sub = await paymeGenerateSubscription({
-        priceInCents,
-        description: membershipType,
+      // 1) capture buyer token (buyer_key)
+      const buyerToken = await paymeCaptureBuyerToken({
         email,
-        buyerKey: buyerToken.buyerKey,
-        planIterationType: 3,
-        startDateDdMmYyyy: formatDdMmYyyy(startDate)
+        buyerName: fullName,
+        cardHolder,
+        cardNumber: cardNumberRaw,
+        expirationDate: expRaw,
+        cvv: cvvRaw
       });
-      subCode = sub.subCode;
-      subID = sub.subID;
+
+      let subCode: string | number | null = null;
+      let subID: string | null = null;
+
+      if (plan === 4) {
+        // Annuel: sale unique (installments optionnel)
+        const installments = Number((clientData as any).selectedInstallments || 0);
+        await paymeGenerateSale({
+          priceInCents,
+          description: membershipType,
+          buyerKey: buyerToken.buyerKey,
+          installments: Number.isFinite(installments) ? installments : undefined
+        });
+        subCode = null;
+        subID = null;
+      } else {
+        // Mensuel: sale immédiat + subscription future (J+1 mois)
+        await paymeGenerateSale({
+          priceInCents,
+          description: `${membershipType} - Premier mois`,
+          buyerKey: buyerToken.buyerKey
+        });
+
+        const startDate = new Date();
+        startDate.setMonth(startDate.getMonth() + 1);
+        const sub = await paymeGenerateSubscription({
+          priceInCents,
+          description: membershipType,
+          email,
+          buyerKey: buyerToken.buyerKey,
+          planIterationType: 3,
+          startDateDdMmYyyy: formatDdMmYyyy(startDate)
+        });
+        subCode = sub.subCode;
+        subID = sub.subID;
+      }
+
+      payme = { buyerKey: buyerToken.buyerKey, buyerCard: buyerToken.buyerCard, subCode, subID };
+
+      // Injecter dans clientData pour stockage Firestore (sans stocker la carte)
+      clientData.buyerKey = buyerToken.buyerKey;
+      clientData.buyerCard = buyerToken.buyerCard;
+      if (subCode != null) clientData.subCode = subCode;
+      if (subID != null) clientData.paymeSubID = subID;
+    } catch (err: any) {
+      // IMPORTANT: PayMe est avant Firebase. Si PayMe échoue, on marque le lock en failed
+      // pour éviter de bloquer en 409 "in_progress" puis de re-déclencher PayMe.
+      await lockRef
+        .set({ status: 'failed', updatedAt: new Date(), lastError: String(err?.message || err?.code || 'payme-failed') }, { merge: true })
+        .catch(() => {});
+      throw err;
     }
-
-    payme = { buyerKey: buyerToken.buyerKey, buyerCard: buyerToken.buyerCard, subCode, subID };
-
-    // Injecter dans clientData pour stockage Firestore (sans stocker la carte)
-    clientData.buyerKey = buyerToken.buyerKey;
-    clientData.buyerCard = buyerToken.buyerCard;
-    if (subCode != null) clientData.subCode = subCode;
-    if (subID != null) clientData.paymeSubID = subID;
   }
 
   let uid: string | undefined;

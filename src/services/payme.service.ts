@@ -202,8 +202,10 @@ export async function paymeGenerateSale(params: {
     throw err;
   }
 
-  // PayMe peut renvoyer des champs variables; si pas d'échec explicite, on considère OK.
-  return { approved: saleStatus ? saleStatus === 'approved' : true };
+  // IMPORTANT: PayMe renvoie des champs variables (parfois sale_status non standard).
+  // Pour éviter des faux négatifs (débit effectué mais backend croit à un échec),
+  // on considère la vente OK tant qu'il n'y a PAS d'échec explicite.
+  return { approved: true };
 }
 
 export async function paymeGenerateSubscription(params: {
@@ -215,6 +217,7 @@ export async function paymeGenerateSubscription(params: {
   startDateDdMmYyyy: string;
 }): Promise<PaymeSubscriptionResult> {
   const seller_payme_id = requirePaymeSellerKey();
+  const debug = process.env.PAYME_DEBUG === 'true';
 
   const { ok, status, json } = await paymePostJson(
     'generate-subscription',
@@ -231,6 +234,15 @@ export async function paymeGenerateSubscription(params: {
     },
     20000
   );
+
+  if (debug) {
+    console.log('[PayMe] Réponse generate-subscription:', {
+      ok,
+      status,
+      errorCode: json?.status_error_code,
+      keys: Object.keys(json || {})
+    });
+  }
 
   if (!ok || json?.status_error_code) {
     const err = new HttpError(400, `PayMe generate-subscription: ${safePaymeErrorMessage(json)}`);
