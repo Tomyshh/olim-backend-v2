@@ -162,7 +162,7 @@ export async function paymeGenerateSale(params: {
   description: string;
   buyerKey: string;
   installments?: number;
-}): Promise<{ approved: boolean }> {
+}): Promise<{ approved: true; salePaymeId?: string }> {
   const seller_payme_id = requirePaymeSellerKey();
   const debug = process.env.PAYME_DEBUG === 'true';
 
@@ -202,10 +202,14 @@ export async function paymeGenerateSale(params: {
     throw err;
   }
 
+  const salePaymeId =
+    pickFirstString(json, ['sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']) ||
+    pickFirstString(json?.data, ['sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']);
+
   // IMPORTANT: PayMe renvoie des champs variables (parfois sale_status non standard).
   // Pour éviter des faux négatifs (débit effectué mais backend croit à un échec),
   // on considère la vente OK tant qu'il n'y a PAS d'échec explicite.
-  return { approved: true };
+  return { approved: true, ...(salePaymeId ? { salePaymeId } : {}) };
 }
 
 export async function paymeGenerateSubscription(params: {

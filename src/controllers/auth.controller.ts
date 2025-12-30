@@ -4,7 +4,7 @@ import { sendLoginOtp, verifyLoginOtp, sendLinkPhoneOtp, verifyLinkPhoneOtp, ver
 import { getClientIp } from '../utils/errors.js';
 
 export async function sendPhoneOtp(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const uid = req.uid!;
+    const uid = req.uid!;
   await sendLinkPhoneOtp({
     uid,
     phoneNumber: req.body?.phoneNumber,
@@ -16,7 +16,7 @@ export async function sendPhoneOtp(req: AuthenticatedRequest, res: Response): Pr
 }
 
 export async function verifyPhoneOtpAndLink(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const uid = req.uid!;
+    const uid = req.uid!;
   const result = await verifyLinkPhoneOtp({
     uid,
     phoneNumber: req.body?.phoneNumber,

@@ -165,67 +165,62 @@ function timestampToMs(value: any): number {
 function mapClientDoc(params: { uid: string; email: string; clientData: Record<string, any> }): Record<string, any> {
   const cd = params.clientData;
 
+  // Champs STRICTS (ni plus ni moins) selon votre tableau (2 parties).
+  // IMPORTANT: ne pas ajouter de champs “confort” en dehors de cette whitelist.
   const firstName = pickString(cd.firstName);
   const lastName = pickString(cd.lastName);
-  const birthday = pickString(cd.birthday);
-  const phone = coercePhoneField(cd.phoneNumber);
-
-  const planRaw = cd.plan;
-  const plan = typeof planRaw === 'number' || typeof planRaw === 'string' ? String(planRaw) : undefined;
-  const subCodeRaw = cd.subCode;
-  const subCode = typeof subCodeRaw === 'number' || typeof subCodeRaw === 'string' ? String(subCodeRaw) : undefined;
-
-  const isFreeClient = cd.isFreeClient === true;
-
-  const doc: Record<string, any> = {
-    uid: params.uid,
-    Email: params.email,
-    'First Name': firstName || undefined,
-    'Last Name': lastName || undefined,
-    ...(phone ? { 'Phone Number': phone } : {}),
-    ...(birthday ? { birthday, Birthday: birthday } : {}),
-    registrationComplete: true,
-    registrationCompletedAt: new Date(),
-    createdVia: 'api/clients',
-    createdAt: new Date(),
-    language: 'fr',
-    isFreeClient
-  };
-
-  // Champs "métier" (compat / recherche)
-  const teoudatZeout = pickString(cd.teoudatZeout);
   const fatherName = pickString(cd.fatherName);
+  const teoudatZeout = pickString(cd.teoudatZeout);
+  const birthday = pickString(cd.birthday);
   const koupatHolim = pickString(cd.koupatHolim);
   const civility = pickString(cd.civility);
-  const membershipType = pickString(cd.membershipType);
+  const phone = coercePhoneField(cd.phoneNumber);
 
-  if (teoudatZeout) doc['Teoudat Zeout'] = teoudatZeout;
-  if (fatherName) doc['Father Name'] = fatherName;
-  if (koupatHolim) doc['Koupat Holim'] = koupatHolim;
-  if (civility) doc.Civility = civility;
-  if (membershipType) {
-    doc.membershipType = membershipType;
-    // Legacy key parfois utilisé
-    doc.Membership = membershipType;
+  const isFreeClient = cd.isFreeClient === true;
+  const membership = pickString(cd.membershipType) || (isFreeClient ? 'Visitor' : '');
+  const subPlanRaw = cd.plan;
+  const subPlan = typeof subPlanRaw === 'number' ? subPlanRaw : isFreeClient ? 0 : Number(subPlanRaw || 0);
+
+  const promoCodeUsed = pickString(cd.promoCodeUsed || cd.promoCode);
+  const codePromoExpirationDate = cd.codePromoExpirationDate ?? null;
+
+  const israCardSubCode = cd.subCode ?? cd.paymeSubCode ?? null;
+  const israCardSubId = pickString(cd.paymeSubID || cd.subID);
+
+  const doc: Record<string, any> = {
+    'Client ID': params.uid,
+    ...(params.email ? { Email: params.email } : {}),
+    ...(lastName ? { 'Last Name': lastName } : {}),
+    ...(firstName ? { 'First Name': firstName } : {}),
+    ...(fatherName ? { 'Father Name': fatherName } : {}),
+    ...(phone ? { 'Phone Number': phone } : {}),
+    ...(teoudatZeout ? { 'Teoudat Zeout': teoudatZeout } : {}),
+    ...(birthday ? { Birthday: birthday } : {}),
+    ...(membership ? { Membership: membership } : {}),
+    ...(koupatHolim ? { 'Koupat Holim': koupatHolim } : {}),
+    ...(civility ? { Civility: civility } : {}),
+    ...(typeof israCardSubCode === 'number' || typeof israCardSubCode === 'string' ? { israCard_subCode: israCardSubCode } : {}),
+    Devices: Array.isArray(cd.Devices) ? cd.Devices : [],
+    ...(pickString(cd.securden_Folder) ? { securden_Folder: pickString(cd.securden_Folder) } : {}),
+    subPlan: Number.isFinite(subPlan) ? subPlan : isFreeClient ? 0 : 0,
+    ...(promoCodeUsed ? { promoCodeUsed: promoCodeUsed } : {}),
+    ...(codePromoExpirationDate ? { codePromoExpirationDate } : {}),
+    createdFrom: 'CRM',
+    language: 'fr',
+    registrationComplete: true,
+    registrationCompletedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+
+  // Champs additionnels si inscription avec paiement
+  if (!isFreeClient) {
+    // Votre tableau mentionne aussi "Client UID" en supplément (paiement)
+    doc['Client UID'] = params.uid;
+    doc['Created At'] = admin.firestore.FieldValue.serverTimestamp();
+    if (israCardSubId) doc['IsraCard Sub ID'] = israCardSubId;
+    const salePaymeId = pickString(cd.sale_payme_id);
+    if (salePaymeId) doc.sale_payme_id = salePaymeId;
+    doc['Registration Status'] = 'completed';
   }
-  if (plan) doc['Membership Plan'] = plan;
-  if (subCode) doc['IsraCard Sub Code'] = subCode;
-
-  // PayMe (si fourni par le flow de paiement)
-  const buyerKey = pickString(cd.buyerKey);
-  const buyerCard = pickString(cd.buyerCard);
-  const paymeSubId = pickString(cd.paymeSubID || cd.subID);
-  const paymeSubCode = cd.paymeSubCode ?? cd.subCodePayme ?? cd.subCode;
-  if (buyerKey) doc['Isracard Key'] = buyerKey;
-  if (buyerCard) doc['Card Number'] = buyerCard; // attendu: "****1234"
-  if (paymeSubId) doc['IsraCard Sub ID'] = paymeSubId;
-  if (typeof paymeSubCode === 'number' || typeof paymeSubCode === 'string') doc['IsraCard Sub Code'] = String(paymeSubCode);
-
-  // Payloads bruts (sans champs carte), pour ne pas perdre d'info côté back-office
-  const membershipData = coerceObject(cd.membershipData);
-  const subscriptionData = coerceObject(cd.subscriptionData);
-  if (membershipData) doc.membershipData = membershipData;
-  if (subscriptionData) doc.subscriptionData = subscriptionData;
 
   return doc;
 }
@@ -360,21 +355,23 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       if (planNumber === 4) {
         // Annuel: sale unique (installments optionnel)
         installmentsUsed = Number((clientData as any).selectedInstallments || 0);
-        await paymeGenerateSale({
+        const sale = await paymeGenerateSale({
           priceInCents: priceInCentsFinal,
           description: membershipTypeFinal,
           buyerKey: buyerToken.buyerKey,
           installments: Number.isFinite(installmentsUsed) && installmentsUsed > 1 ? installmentsUsed : undefined
         });
+        if (sale?.salePaymeId) clientData.sale_payme_id = sale.salePaymeId;
         subCode = null;
         subID = null;
       } else {
         // Mensuel: sale immédiat + subscription future (J+1 mois)
-        await paymeGenerateSale({
+        const sale = await paymeGenerateSale({
           priceInCents: priceInCentsFinal,
           description: `${membershipTypeFinal} - Premier mois`,
           buyerKey: buyerToken.buyerKey
         });
+        if (sale?.salePaymeId) clientData.sale_payme_id = sale.salePaymeId;
 
         const startDateDdMmYyyy = calculateSubscriptionStartDate(3);
         const sub = await paymeGenerateSubscription({
@@ -475,31 +472,31 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     // Payment credentials (si payant) - sans carte
     const paymentRef = clientRef.collection('Payment credentials').doc('first_registration');
     if (isPayingClient) {
-      const cardSuffix = pickString((clientData as any).cardSuffix);
+      // IMPORTANT: selon votre tableau, Payment credentials doit contenir EXACTEMENT les champs listés.
+      // Donc: pas de champ "payme" imbriqué, pas de champs "Updated *", pas de warnings, etc.
+      const rawCardNumber = (body.clientData as any)?.cardNumber;
+      const cardDigitsOnly = digitsOnly(rawCardNumber);
+      const cardSuffix = cardDigitsOnly.length >= 4 ? cardDigitsOnly.slice(-4) : pickString((clientData as any).cardSuffix);
+      const maskedCardNumber =
+        cardDigitsOnly && cardSuffix
+          ? `${'*'.repeat(Math.max(0, cardDigitsOnly.length - 4))}${cardSuffix}`
+          : null;
       const cardHolder = pickString((clientData as any).cardHolder) || `${firstName} ${lastName}`.trim();
       const cardName = pickString((clientData as any).cardName) || cardHolder;
       batch.set(
         paymentRef,
         {
-          // Champs attendus (doc)
+          // Champs attendus (doc) — STRICTEMENT comme dans le tableau.
           'Card Name': cardName,
-          // IMPORTANT: on ne stocke pas le numéro complet (PCI). On stocke le suffixe 4 derniers chiffres.
+          // Afficher uniquement les 4 derniers chiffres, le reste masqué par "*"
+          'Card Number': maskedCardNumber,
           'Card Suffix': cardSuffix || null,
           'Card Holder': cardHolder || null,
           'Isracard Key': payme?.buyerKey ?? null,
           isSubscriptionCard: planNumber === 3,
           'Securden ID': null,
           'Created At': admin.firestore.FieldValue.serverTimestamp(),
-          'Created From': 'CRM',
-          // Bonus: infos PayMe utiles
-          payme: payme
-            ? {
-                buyerKey: payme.buyerKey ?? null,
-                buyerCard: payme.buyerCard ?? null,
-                subCode: payme.subCode ?? null,
-                subID: payme.subID ?? null
-              }
-            : null
+          'Created From': 'CRM'
         },
         { merge: true }
       );
@@ -541,16 +538,22 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
 
     // Stocker uniquement les IDs/état (jamais la carte)
     if (isPayingClient && (securden.folderId || securden.accountId || securden.warnings.length)) {
+      // Mettre à jour le doc client avec l'ID du folder Securden (schéma Clients)
+      if (securden.folderId) {
+        await clientRef.set(
+          {
+            // IMPORTANT: selon votre tableau, seul `securden_Folder` est autorisé dans Clients
+            securden_Folder: securden.folderId
+          },
+          { merge: true }
+        ).catch(() => {});
+      }
+
       await paymentRef
         .set(
           {
-            'Securden ID': securden.accountId || null,
-            folderId: securden.folderId || null,
-            accountId: securden.accountId || null,
-            warnings: securden.warnings,
-            'Updated At': admin.firestore.FieldValue.serverTimestamp(),
-            'Updated From': 'CRM',
-            updatedAt: new Date()
+            // STRICT: uniquement le champ attendu par le tableau
+            'Securden ID': securden.accountId || null
           },
           { merge: true }
         )
