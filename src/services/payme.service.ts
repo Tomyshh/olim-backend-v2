@@ -38,6 +38,14 @@ function safePaymeErrorMessage(json: any): string {
   return details || 'Erreur PayMe.';
 }
 
+function pickFirstString(obj: any, keys: string[]): string {
+  for (const k of keys) {
+    const v = obj?.[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return '';
+}
+
 async function paymePostJson(path: string, body: unknown, timeoutMs: number): Promise<{ ok: boolean; status: number; json: any }> {
   const baseUrl = getPaymeBaseUrl();
   assertHttps(baseUrl, 'PAYME_BASE_URL');
@@ -97,7 +105,8 @@ export async function paymeCaptureBuyerToken(params: {
   if (!credit_card_exp) throw new HttpError(400, "Date d'expiration manquante (PayMe).");
   if (!credit_card_cvv) throw new HttpError(400, 'CVV manquant (PayMe).');
 
-  console.log('[PayMe] Tentative capture-buyer-token pour:', { email: buyer_email, name: buyer_name, seller: seller_payme_id.substring(0, 10) + '...' });
+  const debug = process.env.PAYME_DEBUG === 'true';
+  if (debug) console.log('[PayMe] Tentative capture-buyer-token:', { status: 'start' });
 
   const { ok, status, json } = await paymePostJson(
     'capture-buyer-token',
@@ -113,7 +122,14 @@ export async function paymeCaptureBuyerToken(params: {
     12000
   );
 
-  console.log('[PayMe] Réponse capture-buyer-token:', { ok, status, errorCode: json?.status_error_code, hasKey: Boolean(json?.buyer_key), hasCard: Boolean(json?.buyer_card) });
+  if (debug) {
+    console.log('[PayMe] Réponse capture-buyer-token:', {
+      ok,
+      status,
+      errorCode: json?.status_error_code,
+      keys: Object.keys(json || {})
+    });
+  }
 
   if (!ok || json?.status_error_code) {
     const err = new HttpError(400, `PayMe capture-buyer-token: ${safePaymeErrorMessage(json)}`);
@@ -122,9 +138,10 @@ export async function paymeCaptureBuyerToken(params: {
     throw err;
   }
 
-  const buyerKey = typeof json?.buyer_key === 'string' ? json.buyer_key : '';
-  const buyerCard = typeof json?.buyer_card === 'string' ? json.buyer_card : '';
-  const buyerName = typeof json?.buyer_name === 'string' ? json.buyer_name : undefined;
+  const buyerKey = pickFirstString(json, ['buyer_key', 'buyerKey']);
+  // PayMe renvoie souvent buyer_card_mask (ex: ****1234) plutôt que buyer_card
+  const buyerCard = pickFirstString(json, ['buyer_card', 'buyer_card_mask', 'buyerCard', 'buyerCardMask']);
+  const buyerName = pickFirstString(json, ['buyer_name', 'buyerName']) || undefined;
   
   if (!buyerKey || !buyerCard) {
     // Log la réponse PayMe (sans données carte) pour debug
