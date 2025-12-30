@@ -4,7 +4,12 @@ import { getAuth, getFirestore } from '../config/firebase.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { HttpError } from '../utils/errors.js';
 import { tryCreateSecurdenFolderAndCard } from '../services/securden.service.js';
-import { formatDdMmYyyy, paymeCaptureBuyerToken, paymeGenerateSale, paymeGenerateSubscription } from '../services/payme.service.js';
+import {
+  calculateSubscriptionStartDate,
+  paymeCaptureBuyerToken,
+  paymeGenerateSale,
+  paymeGenerateSubscription
+} from '../services/payme.service.js';
 
 type CreateClientBody = {
   email?: unknown;
@@ -267,15 +272,14 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
           buyerKey: buyerToken.buyerKey
         });
 
-        const startDate = new Date();
-        startDate.setMonth(startDate.getMonth() + 1);
+        const startDateDdMmYyyy = calculateSubscriptionStartDate(3);
         const sub = await paymeGenerateSubscription({
           priceInCents,
           description: membershipType,
           email,
           buyerKey: buyerToken.buyerKey,
           planIterationType: 3,
-          startDateDdMmYyyy: formatDdMmYyyy(startDate)
+          startDateDdMmYyyy
         });
         subCode = sub.subCode;
         subID = sub.subID;

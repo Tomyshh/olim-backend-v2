@@ -267,4 +267,61 @@ export function formatDdMmYyyy(date: Date): string {
   return `${dd}/${mm}/${yyyy}`;
 }
 
+function formatDdMmYyyyParts(day: number, month: number, year: number): string {
+  return `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+}
+
+/**
+ * Calcule la date de début d'abonnement PayMe (format dd/MM/yyyy) selon les règles métier.
+ * - plan=3 (mensuel): +1 mois ; si jour >= 29 => 1er du mois suivant (donc +2 mois) ; sinon day=min(day,28)
+ * - plan=4 (annuel): +1 an ; si 29/02 => 01/03 ; sinon day=min(day,28)
+ */
+export function calculateSubscriptionStartDate(plan: number, now: Date = new Date()): string {
+  if (plan === 3) {
+    // Month in 1..12
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
+    const dayNow = now.getDate();
+
+    // +1 mois
+    let month1 = currentMonth + 1;
+    let year1 = currentYear;
+    if (month1 > 12) {
+      month1 = 1;
+      year1 += 1;
+    }
+
+    // si jour >= 29 => 1er du mois suivant (donc +2 mois au total)
+    if (dayNow >= 29) {
+      let month2 = month1 + 1;
+      let year2 = year1;
+      if (month2 > 12) {
+        month2 = 1;
+        year2 += 1;
+      }
+      return formatDdMmYyyyParts(1, month2, year2);
+    }
+
+    // sinon, garder le même jour mais <= 28
+    const day = Math.min(dayNow, 28);
+    return formatDdMmYyyyParts(day, month1, year1);
+  }
+
+  if (plan === 4) {
+    const targetYear = now.getFullYear() + 1;
+    const month = now.getMonth() + 1;
+    const dayNow = now.getDate();
+
+    // 29 février => 1er mars
+    if (dayNow === 29 && month === 2) {
+      return formatDdMmYyyyParts(1, 3, targetYear);
+    }
+
+    const day = Math.min(dayNow, 28);
+    return formatDdMmYyyyParts(day, month, targetYear);
+  }
+
+  throw new Error(`Plan invalide: ${plan}`);
+}
+
 
