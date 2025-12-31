@@ -43,6 +43,32 @@ paths:
           description: Utilisateur créé
         '401':
           description: Non authentifié (token manquant/invalide)
+  /api/auth/session:
+    get:
+      summary: Vérifier la session (ID Token Firebase)
+      description: >
+        Vérifie le token Firebase (Bearer) et renvoie un état minimal de session
+        (uid + infos basiques + flags DB).
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Non authentifié (token manquant/invalide)
+  /api/auth/logout:
+    post:
+      summary: Déconnexion serveur (révocation refresh tokens)
+      description: >
+        Optionnel : le frontend fait déjà `Firebase signOut`. Cet endpoint révoque les refresh tokens
+        Firebase pour forcer une reconnexion lors du prochain rafraîchissement de token.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+        '401':
+          description: Non authentifié (token manquant/invalide)
   /health:
     get:
       tags: [System]

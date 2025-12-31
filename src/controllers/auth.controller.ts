@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { sendLoginOtp, verifyLoginOtp, sendLinkPhoneOtp, verifyLinkPhoneOtp, verifyVisitorOtp } from '../services/phoneOtp.service.js';
 import { getClientIp } from '../utils/errors.js';
+import { getAuth, getFirestore } from '../config/firebase.js';
 
 export async function sendPhoneOtp(req: AuthenticatedRequest, res: Response): Promise<void> {
     const uid = req.uid!;
@@ -70,5 +71,55 @@ export async function loginEmail(req: AuthenticatedRequest, res: Response): Prom
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
+}
+
+/**
+ * GET /api/auth/session
+ * Simple "login check" côté backend : le token est validé par authenticateToken,
+ * on renvoie un état minimal de session.
+ */
+export async function getSession(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const uid = req.uid;
+  if (!uid) {
+    res.status(401).json({ message: 'Vous devez être connecté.', error: 'Vous devez être connecté.' });
+    return;
+  }
+
+  const decoded = req.user as any;
+  const db = getFirestore();
+  const clientSnap = await db.collection('Clients').doc(uid).get();
+  const data = clientSnap.exists ? (clientSnap.data() as any) : null;
+
+  res.json({
+    ok: true,
+    uid,
+    email: typeof decoded?.email === 'string' ? decoded.email : null,
+    phoneNumber: typeof decoded?.phone_number === 'string' ? decoded.phone_number : null,
+    authTime: typeof decoded?.auth_time === 'number' ? decoded.auth_time : null,
+    issuedAt: typeof decoded?.iat === 'number' ? decoded.iat : null,
+    expiresAt: typeof decoded?.exp === 'number' ? decoded.exp : null,
+    clientExists: clientSnap.exists,
+    registrationComplete: data?.registrationComplete === true
+  });
+}
+
+/**
+ * POST /api/auth/logout
+ *
+ * Optionnel côté backend (le frontend fait déjà Firebase signOut).
+ * Ici, on révoque les refresh tokens Firebase, ce qui invalide les futurs ID tokens
+ * après rafraîchissement. L'ID token courant peut rester valide jusqu'à expiration.
+ */
+export async function logout(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const uid = req.uid;
+  if (!uid) {
+    res.status(401).json({ message: 'Vous devez être connecté.', error: 'Vous devez être connecté.' });
+    return;
+  }
+
+  const auth = getAuth();
+  await auth.revokeRefreshTokens(uid);
+
+  res.json({ ok: true });
 }
 
