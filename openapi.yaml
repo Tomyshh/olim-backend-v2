@@ -27,6 +27,22 @@ tags:
   - name: Clients
 
 paths:
+  /users/init:
+    post:
+      summary: Initialiser un utilisateur (signup)
+      description: >
+        Le frontend crée l'utilisateur dans Firebase Auth, puis appelle cet endpoint avec l'ID Token
+        en `Authorization: Bearer <ID_TOKEN>`. Le backend vérifie le token et crée (si absent) le doc
+        Firestore `Clients/{uid}` de façon idempotente.
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Utilisateur déjà existant (idempotent)
+        '201':
+          description: Utilisateur créé
+        '401':
+          description: Non authentifié (token manquant/invalide)
   /health:
     get:
       tags: [System]
