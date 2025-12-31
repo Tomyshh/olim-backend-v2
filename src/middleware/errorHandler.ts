@@ -30,6 +30,7 @@ export function errorHandler(
     message,
     // compat legacy (certaines routes existantes renvoient encore {error})
     error: message,
+    ...(typeof err?.code === 'string' && err.code.trim() ? { code: err.code } : {}),
     ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.twilio && { details: { provider: 'twilio', ...err.twilio } }),
     ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.sms && { details: { provider: 'sms', ...err.sms } }),
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })

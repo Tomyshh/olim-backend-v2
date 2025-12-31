@@ -162,7 +162,7 @@ export async function paymeGenerateSale(params: {
   description: string;
   buyerKey: string;
   installments?: number;
-}): Promise<{ approved: true; salePaymeId?: string }> {
+}): Promise<{ approved: true; salePaymeId: string }> {
   const seller_payme_id = requirePaymeSellerKey();
   const debug = process.env.PAYME_DEBUG === 'true';
 
@@ -194,9 +194,17 @@ export async function paymeGenerateSale(params: {
     });
   }
 
+  // Statuts possibles (PayMe peut varier selon environnements/versions)
+  const SUCCESS_STATUSES = new Set(['approved', 'success', 'succeeded', 'paid', 'completed', 'ok']);
+  const FAILURE_STATUSES = new Set(['failed', 'declined', 'error']);
+
   // Échec explicite
-  if (!ok || json?.status_error_code || ['failed', 'declined', 'error'].includes(saleStatus)) {
-    const err = new HttpError(400, `PayMe generate-sale: ${safePaymeErrorMessage(json)}`);
+  if (!ok || json?.status_error_code || (saleStatus && FAILURE_STATUSES.has(saleStatus))) {
+    const err = new HttpError(
+      400,
+      `Paiement refusé: ${safePaymeErrorMessage(json)}`,
+      'PAYME_SALE_DECLINED'
+    );
     (err as any).statusCode = status;
     (err as any).errorCode = json?.status_error_code;
     throw err;
@@ -206,10 +214,41 @@ export async function paymeGenerateSale(params: {
     pickFirstString(json, ['sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']) ||
     pickFirstString(json?.data, ['sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']);
 
-  // IMPORTANT: PayMe renvoie des champs variables (parfois sale_status non standard).
-  // Pour éviter des faux négatifs (débit effectué mais backend croit à un échec),
-  // on considère la vente OK tant qu'il n'y a PAS d'échec explicite.
-  return { approved: true, ...(salePaymeId ? { salePaymeId } : {}) };
+  // Sécurité: si PayMe ne renvoie pas d'identifiant de vente, on ne peut pas confirmer
+  // que le débit est réellement passé => on bloque le flow (pas de subscription / pas de user / pas de Firestore).
+  if (!salePaymeId) {
+    console.error('PayMe generate-sale: vente non confirmée (salePaymeId manquant).', {
+      status,
+      saleStatus: saleStatusRaw || null,
+      keys: Object.keys(json || {})
+    });
+    const err = new HttpError(
+      400,
+      "Paiement non confirmé: la première vente n'est pas passée. Aucun abonnement n'a été créé.",
+      'PAYME_SALE_NOT_CONFIRMED'
+    );
+    (err as any).statusCode = status;
+    throw err;
+  }
+
+  // Si PayMe fournit un statut et qu'il n'est pas explicitement un succès, on bloque aussi (robustesse).
+  if (saleStatus && !SUCCESS_STATUSES.has(saleStatus)) {
+    console.error('PayMe generate-sale: statut non reconnu => vente non confirmée.', {
+      status,
+      saleStatus: saleStatusRaw || null,
+      salePaymeId,
+      keys: Object.keys(json || {})
+    });
+    const err = new HttpError(
+      400,
+      "Paiement non confirmé: la première vente n'est pas passée. Aucun abonnement n'a été créé.",
+      'PAYME_SALE_NOT_CONFIRMED'
+    );
+    (err as any).statusCode = status;
+    throw err;
+  }
+
+  return { approved: true, salePaymeId };
 }
 
 export async function paymeGenerateSubscription(params: {

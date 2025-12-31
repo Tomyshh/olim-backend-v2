@@ -365,7 +365,8 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
           buyerKey: buyerToken.buyerKey,
           installments: Number.isFinite(installmentsUsed) && installmentsUsed > 1 ? installmentsUsed : undefined
         });
-        if (sale?.salePaymeId) clientData.sale_payme_id = sale.salePaymeId;
+        // Si la vente n'est pas confirmée, paymeGenerateSale throw déjà.
+        clientData.sale_payme_id = sale.salePaymeId;
         subCode = null;
         subID = null;
       } else {
@@ -375,7 +376,8 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
           description: `${membershipTypeFinal} - Premier mois`,
           buyerKey: buyerToken.buyerKey
         });
-        if (sale?.salePaymeId) clientData.sale_payme_id = sale.salePaymeId;
+        // Si la vente n'est pas confirmée, paymeGenerateSale throw déjà.
+        clientData.sale_payme_id = sale.salePaymeId;
 
         const startDateDdMmYyyy = calculateSubscriptionStartDate(3);
         const sub = await paymeGenerateSubscription({
