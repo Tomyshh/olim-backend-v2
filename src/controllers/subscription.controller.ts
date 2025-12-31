@@ -1,6 +1,68 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
-import { getFirestore } from '../config/firebase.js';
+import { admin, getFirestore } from '../config/firebase.js';
+import { paymeCaptureBuyerToken } from '../services/payme.service.js';
+import {
+  createSecurdenCreditCardAccountInFolder,
+  normalizeCardNumberDigitsOnly,
+  tryCreateSecurdenFolderAndCard
+} from '../services/securden.service.js';
+
+function pickString(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function digitsOnly(value: unknown): string {
+  return (typeof value === 'string' ? value : '').replace(/\D+/g, '');
+}
+
+function parseExpiryMmYy(value: unknown): { month: number | null; year: number | null; normalized: string } {
+  const raw = pickString(value);
+  // Accepte "MM/YY" ou "MM/YYYY"
+  const m = raw.match(/^(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/);
+  if (!m) return { month: null, year: null, normalized: raw };
+  const month = Number(m[1]);
+  let year = Number(m[2]);
+  if (!Number.isFinite(month) || month < 1 || month > 12) return { month: null, year: null, normalized: raw };
+  if (!Number.isFinite(year)) return { month: null, year: null, normalized: raw };
+  if (year < 100) year = 2000 + year; // YY -> 20YY
+  const normalized = `${String(month).padStart(2, '0')}/${String(year).slice(-2)}`;
+  return { month, year, normalized };
+}
+
+function detectCardBrand(cardDigits: string): string {
+  // Heuristique simple (non critique)
+  if (/^4\d{12,18}$/.test(cardDigits)) return 'visa';
+  if (/^(5[1-5]\d{14}|2(2[2-9]\d{12}|[3-6]\d{13}|7[01]\d{12}|720\d{12}))$/.test(cardDigits)) return 'mastercard';
+  if (/^3[47]\d{13}$/.test(cardDigits)) return 'amex';
+  if (/^6(011|5\d{2})\d{12}$/.test(cardDigits)) return 'discover';
+  return '';
+}
+
+function mapPaymentCredentialToCard(docId: string, data: Record<string, any>): Record<string, any> {
+  const suffix = pickString(data['Card Suffix']) || pickString(data.last4) || '';
+  const masked = pickString(data['Card Number']);
+  const last4 = suffix || (masked ? masked.replace(/\D+/g, '').slice(-4) : '');
+
+  const expiryMonth = Number.isFinite(Number(data.expiryMonth)) ? Number(data.expiryMonth) : null;
+  const expiryYear = Number.isFinite(Number(data.expiryYear)) ? Number(data.expiryYear) : null;
+  const isDefault = data.isDefault === true;
+  const brand = pickString(data.brand);
+
+  return {
+    cardId: docId,
+    last4: last4 || '',
+    brand: brand || '',
+    expiryMonth: expiryMonth ?? null,
+    expiryYear: expiryYear ?? null,
+    isDefault,
+    createdAt: data.createdAt ?? data['Created At'] ?? null,
+    updatedAt: data.updatedAt ?? data['Updated At'] ?? null,
+    // Champs additionnels utiles à l’app
+    cardHolder: data['Card Holder'] ?? null,
+    cardName: data['Card Name'] ?? null
+  };
+}
 
 export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -65,17 +127,26 @@ export async function getCards(req: AuthenticatedRequest, res: Response): Promis
   try {
     const uid = req.uid!;
     const db = getFirestore();
-    const cardsSnapshot = await db
+
+    // Source principale: Payment credentials (aligné CRM / PayMe tokenisation)
+    const paymentSnapshot = await db
       .collection('Clients')
       .doc(uid)
-      .collection('cards')
+      .collection('Payment credentials')
       .get();
 
-    const cards = cardsSnapshot.docs.map(doc => ({
+    if (paymentSnapshot.size > 0) {
+      const cards = paymentSnapshot.docs.map((d) => mapPaymentCredentialToCard(d.id, d.data() as any));
+      res.json({ cards });
+      return;
+    }
+
+    // Fallback legacy: Clients/{uid}/cards (si existe dans d’anciens environnements)
+    const legacySnapshot = await db.collection('Clients').doc(uid).collection('cards').get();
+    const cards = legacySnapshot.docs.map((doc) => ({
       cardId: doc.id,
       ...doc.data()
     }));
-
     res.json({ cards });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -85,24 +156,154 @@ export async function getCards(req: AuthenticatedRequest, res: Response): Promis
 export async function addCard(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const cardData = req.body;
     const db = getFirestore();
 
-    // TODO: Intégrer avec processeur de paiement (Stripe, etc.)
-    // TODO: Stocker token sécurisé
+    const body = (req.body || {}) as {
+      cardNumber?: unknown;
+      expirationDate?: unknown; // "MM/YY"
+      cvv?: unknown;
+      cardHolder?: unknown;
+      cardName?: unknown;
+      isSubscriptionCard?: unknown;
+      isDefault?: unknown;
+    };
 
-    const cardRef = await db
-      .collection('Clients')
-      .doc(uid)
+    // Validation minimale
+    const norm = normalizeCardNumberDigitsOnly(body.cardNumber);
+    const expParsed = parseExpiryMmYy(body.expirationDate);
+    const expirationDate = expParsed.normalized; // normalisé vers "MM/YY"
+    const cvv = pickString(body.cvv);
+    if (!norm.ok) {
+      res.status(400).json({ error: 'cardNumber invalide.' });
+      return;
+    }
+    if (!expirationDate) {
+      res.status(400).json({ error: 'expirationDate requis.' });
+      return;
+    }
+    if (!cvv) {
+      res.status(400).json({ error: 'cvv requis.' });
+      return;
+    }
+
+    // Charger client (nom + email) pour PayMe
+    const clientRef = db.collection('Clients').doc(uid);
+    const clientSnap = await clientRef.get();
+    if (!clientSnap.exists) {
+      res.status(404).json({ error: 'Client introuvable.' });
+      return;
+    }
+    const clientData = (clientSnap.data() || {}) as Record<string, any>;
+    const firstName = pickString(clientData['First Name'] ?? clientData.firstName);
+    const lastName = pickString(clientData['Last Name'] ?? clientData.lastName);
+    const clientName = `${firstName} ${lastName}`.trim() || pickString(clientData.Email) || uid;
+    const email = pickString(clientData.Email);
+    if (!email) {
+      res.status(400).json({ error: 'Email requis pour générer le buyer token (PayMe).' });
+      return;
+    }
+
+    // 1) PayMe: tokenisation (buyerKey)
+    const cardHolder = pickString(body.cardHolder) || clientName;
+    const buyerToken = await paymeCaptureBuyerToken({
+      email,
+      buyerName: clientName,
+      cardHolder,
+      cardNumber: norm.digitsOnly,
+      expirationDate,
+      cvv
+    });
+
+    // 2) Securden: best effort (ne doit pas bloquer l’app)
+    let folderId = pickString(clientData.securden_Folder);
+    let accountId: string | undefined;
+    const securdenWarnings: string[] = [];
+
+    try {
+      if (folderId) {
+        const result = await createSecurdenCreditCardAccountInFolder({
+          folderId,
+          clientName,
+          cardNumber: norm.digitsOnly,
+          expirationDate,
+          cvv,
+          isRegistration: false
+        });
+        accountId = result.accountId;
+        securdenWarnings.push(...(result.warnings || []));
+      } else if (firstName && lastName) {
+        const securden = await tryCreateSecurdenFolderAndCard({
+          firstName,
+          lastName,
+          isPayingClient: true,
+          cardNumber: norm.digitsOnly,
+          expirationDate,
+          cvv
+        });
+        folderId = securden.folderId || '';
+        accountId = securden.accountId;
+        securdenWarnings.push(...(securden.warnings || []));
+        if (folderId) {
+          await clientRef.set({ securden_Folder: folderId }, { merge: true }).catch(() => {});
+        }
+      }
+    } catch (e: any) {
+      securdenWarnings.push('Securden: erreur inattendue (ignorée).');
+    }
+
+    // 3) Firestore: Payment credentials (sans carte en clair)
+    const cardDigits = digitsOnly(body.cardNumber);
+    const last4 = cardDigits.length >= 4 ? cardDigits.slice(-4) : '';
+    const maskedCardNumber = last4 ? `${'*'.repeat(Math.max(0, cardDigits.length - 4))}${last4}` : null;
+    const cardName = pickString(body.cardName) || cardHolder;
+    const isSubscriptionCard = body.isSubscriptionCard === true;
+    const isDefault = body.isDefault === true;
+    const brand = detectCardBrand(norm.digitsOnly);
+
+    const paymentDoc: Record<string, any> = {
+      // Format "Payment credentials" (aligné avec CRM)
+      'Card Name': cardName,
+      'Card Number': maskedCardNumber,
+      'Card Holder': cardHolder || null,
+      'Isracard Key': buyerToken.buyerKey,
+      'Card Suffix': last4 || null,
+      isSubscriptionCard,
+      'Securden ID': accountId || null,
+      'Created At': admin.firestore.FieldValue.serverTimestamp(),
+      'Created From': 'Mobile App',
+
+      // Champs "Card" (OpenAPI / app)
+      last4: last4 || buyerToken.buyerCard.replace(/\D+/g, '').slice(-4) || '',
+      brand,
+      expiryMonth: expParsed.month,
+      expiryYear: expParsed.year,
+      isDefault,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: null
+    };
+
+    const paymentRef = await clientRef.collection('Payment credentials').add(paymentDoc as any);
+
+    // Compat legacy (optionnel): garder un doc minimal dans Clients/{uid}/cards
+    await clientRef
       .collection('cards')
-      .add({
-        ...cardData,
-        createdAt: new Date()
-      });
+      .doc(paymentRef.id)
+      .set(
+        {
+          last4: paymentDoc.last4,
+          brand: paymentDoc.brand,
+          expiryMonth: paymentDoc.expiryMonth,
+          expiryYear: paymentDoc.expiryYear,
+          isDefault: paymentDoc.isDefault,
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      )
+      .catch(() => {});
 
-    res.status(201).json({ cardId: cardRef.id, ...cardData });
+    res.status(201).json(mapPaymentCredentialToCard(paymentRef.id, paymentDoc));
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.status(error?.status || 500).json({ error: error.message });
   }
 }
 
@@ -110,9 +311,32 @@ export async function updateCard(req: AuthenticatedRequest, res: Response): Prom
   try {
     const uid = req.uid!;
     const { cardId } = req.params;
-    const updates = req.body;
     const db = getFirestore();
 
+    const updates = (req.body || {}) as Record<string, any>;
+    // Sécurité: ne jamais accepter les champs sensibles
+    delete updates.cardNumber;
+    delete updates.cvv;
+    delete updates.expirationDate;
+    delete updates['Isracard Key'];
+    delete updates.buyerKey;
+
+    const paymentRef = db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId);
+    const snap = await paymentRef.get();
+    if (snap.exists) {
+      await paymentRef.set(
+        {
+          ...updates,
+          'Updated At': admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      res.json({ message: 'Card updated', cardId });
+      return;
+    }
+
+    // fallback legacy
     await db
       .collection('Clients')
       .doc(uid)
@@ -135,12 +359,10 @@ export async function deleteCard(req: AuthenticatedRequest, res: Response): Prom
     const { cardId } = req.params;
     const db = getFirestore();
 
-    await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('cards')
-      .doc(cardId)
-      .delete();
+    // Supprimer dans Payment credentials (principal)
+    await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).delete().catch(() => {});
+    // Supprimer fallback legacy
+    await db.collection('Clients').doc(uid).collection('cards').doc(cardId).delete().catch(() => {});
 
     res.json({ message: 'Card deleted', cardId });
   } catch (error: any) {
@@ -154,26 +376,30 @@ export async function setDefaultCard(req: AuthenticatedRequest, res: Response): 
     const { cardId } = req.params;
     const db = getFirestore();
 
-    // Retirer isDefault de toutes les cartes
-    const allCards = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('cards')
-      .get();
-
+    const clientRef = db.collection('Clients').doc(uid);
     const batch = db.batch();
-    allCards.docs.forEach(doc => {
-      batch.update(doc.ref, { isDefault: false });
-    });
-    await batch.commit();
 
-    // Définir la nouvelle carte par défaut
-    await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('cards')
-      .doc(cardId)
-      .update({ isDefault: true });
+    // Ne pas créer un doc vide par accident si cardId est invalide
+    const [credDoc, legacyDoc] = await Promise.all([
+      clientRef.collection('Payment credentials').doc(cardId).get(),
+      clientRef.collection('cards').doc(cardId).get()
+    ]);
+    if (!credDoc.exists && !legacyDoc.exists) {
+      res.status(404).json({ error: 'Card not found' });
+      return;
+    }
+
+    // Payment credentials
+    const credsSnap = await clientRef.collection('Payment credentials').get();
+    credsSnap.docs.forEach((d) => batch.set(d.ref, { isDefault: false }, { merge: true }));
+    batch.set(clientRef.collection('Payment credentials').doc(cardId), { isDefault: true }, { merge: true });
+
+    // Legacy cards (fallback)
+    const legacySnap = await clientRef.collection('cards').get();
+    legacySnap.docs.forEach((d) => batch.set(d.ref, { isDefault: false }, { merge: true }));
+    batch.set(clientRef.collection('cards').doc(cardId), { isDefault: true }, { merge: true });
+
+    await batch.commit();
 
     res.json({ message: 'Default card set', cardId });
   } catch (error: any) {
