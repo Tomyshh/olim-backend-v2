@@ -268,14 +268,51 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     const existingUid = typeof data?.uid === 'string' ? data.uid : null;
 
     if (status === 'completed' && existingUid) {
-      res.status(200).json({
-        success: true,
+      // Sécurité: ne pas répondre "success" si l'état est incohérent (user Auth supprimé, mauvais projet, etc.)
+      // Sinon le frontend voit un succès alors qu'aucun compte n'existe.
+      let authUserExists = false;
+      try {
+        await auth.getUser(existingUid);
+        authUserExists = true;
+      } catch (e: any) {
+        if (e?.code && e.code !== 'auth/user-not-found') throw e;
+      }
+
+      const clientSnap = await db
+        .collection('Clients')
+        .doc(existingUid)
+        .get()
+        .catch(() => null as any);
+      const clientDocExists = Boolean(clientSnap?.exists);
+
+      if (authUserExists && clientDocExists) {
+        res.status(200).json({
+          success: true,
+          uid: existingUid,
+          securden: { folderId: null, accountId: null, warnings: ['Requête dupliquée: réponse idempotente (déjà créé).'] },
+          payme: null,
+          durationMs: Date.now() - startedAt
+        });
+        return;
+      }
+
+      console.warn('[createClient] Lock "completed" incohérent: on relance la création.', {
+        email,
         uid: existingUid,
-        securden: { folderId: null, accountId: null, warnings: ['Requête dupliquée: réponse idempotente (déjà créé).'] },
-        payme: null,
-        durationMs: Date.now() - startedAt
+        authUserExists,
+        clientDocExists
       });
-      return;
+      await lockRef
+        .set(
+          {
+            status: 'failed',
+            updatedAt: new Date(),
+            lastError: 'stale-completed-missing-auth-or-client',
+            uid: admin.firestore.FieldValue.delete()
+          },
+          { merge: true }
+        )
+        .catch(() => {});
     }
 
     if (status === 'in_progress' && ageMs <= lockTtlMs) {

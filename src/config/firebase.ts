@@ -48,7 +48,11 @@ export function initializeFirebase(): void {
     });
 
     firebaseInitialized = true;
-    console.log('✅ Firebase Admin initialized successfully');
+    // Important pour debug prod: savoir dans quel projet Firebase on écrit réellement (Auth/Firestore).
+    console.log('✅ Firebase Admin initialized successfully', {
+      projectId: (serviceAccount as any).project_id,
+      clientEmail: (serviceAccount as any).client_email
+    });
   } catch (error) {
     console.error('❌ Error initializing Firebase Admin:', error);
     throw error;
