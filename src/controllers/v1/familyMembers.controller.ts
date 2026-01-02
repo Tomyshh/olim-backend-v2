@@ -128,6 +128,11 @@ function stripUndefinedDeep<T>(value: T): T {
 }
 
 function normalizePayload(body: any): { member: Record<string, any>; flags: Record<string, any>; payment: Record<string, any>; raw: any } {
+  // PATCH legacy: { memberId, fields: { "First Name": "...", ... } }
+  if (isPlainObject(body?.fields)) {
+    return { member: {}, flags: {}, payment: {}, raw: body.fields };
+  }
+
   // Forme principale: { member, flags, payment }
   if (isPlainObject(body?.member) || isPlainObject(body?.flags) || isPlainObject(body?.payment)) {
     return {
@@ -194,7 +199,9 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
   }
   const age = birthdayStr ? computeAgeYearsFromBirthdayString(birthdayStr) : null;
 
-  const phoneNumbers = coerceStringList(pickFromMany(member.phoneNumbers, getLegacyKey(raw, 'phoneNumbers', 'phoneNumbers')));
+  const phoneNumbers = coerceStringList(
+    pickFromMany(member.phoneNumbers, getLegacyKey(raw, 'phoneNumbers', 'phoneNumbers'), getLegacyKey(raw, 'Phone Number', 'phoneNumber'))
+  );
   const phoneNumber =
     pickStringOrNull(pickFromMany(member.phoneNumber, getLegacyKey(raw, 'Phone Number', 'phoneNumber'))) ??
     (phoneNumbers.length > 0 ? phoneNumbers[0]! : null);
@@ -256,8 +263,16 @@ function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any>
     updates.Email = pickStringOrNull(pickFromMany(member.email, maybe('Email', 'email')));
   }
 
-  if (member.phoneNumbers !== undefined || member.phoneNumber !== undefined || maybe('phoneNumbers', 'phoneNumbers') !== undefined || maybe('Phone Number', 'phoneNumber') !== undefined) {
-    const phoneNumbers = coerceStringList(pickFromMany(member.phoneNumbers, maybe('phoneNumbers', 'phoneNumbers')));
+  if (
+    member.phoneNumbers !== undefined ||
+    member.phoneNumber !== undefined ||
+    maybe('phoneNumbers', 'phoneNumbers') !== undefined ||
+    maybe('Phone Number', 'phoneNumber') !== undefined
+  ) {
+    // Tolérance: certains payloads envoient Phone Number comme array (au lieu de string)
+    const phoneNumbers = coerceStringList(
+      pickFromMany(member.phoneNumbers, maybe('phoneNumbers', 'phoneNumbers'), maybe('Phone Number', 'phoneNumber'))
+    );
     const phoneNumber =
       pickStringOrNull(pickFromMany(member.phoneNumber, maybe('Phone Number', 'phoneNumber'))) ??
       (phoneNumbers.length > 0 ? phoneNumbers[0]! : null);
