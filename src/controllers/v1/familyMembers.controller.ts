@@ -128,10 +128,35 @@ function stripUndefinedDeep<T>(value: T): T {
 }
 
 function normalizePayload(body: any): { member: Record<string, any>; flags: Record<string, any>; payment: Record<string, any>; raw: any } {
-  const member = isPlainObject(body?.member) ? body.member : {};
-  const flags = isPlainObject(body?.flags) ? body.flags : {};
-  const payment = isPlainObject(body?.payment) ? body.payment : {};
-  return { member, flags, payment, raw: body };
+  // Forme principale: { member, flags, payment }
+  if (isPlainObject(body?.member) || isPlainObject(body?.flags) || isPlainObject(body?.payment)) {
+    return {
+      member: isPlainObject(body?.member) ? body.member : {},
+      flags: isPlainObject(body?.flags) ? body.flags : {},
+      payment: isPlainObject(body?.payment) ? body.payment : {},
+      raw: body
+    };
+  }
+
+  // Tolérance: PATCH/POST peuvent envoyer directement les champs du membre à la racine
+  // ex: { firstName, lastName, relationship, birthday, phoneNumbers, ... }
+  if (isPlainObject(body)) {
+    const hasMemberLikeKeys =
+      'firstName' in body ||
+      'lastName' in body ||
+      'fatherName' in body ||
+      'relationship' in body ||
+      'birthday' in body ||
+      'phoneNumbers' in body ||
+      'email' in body ||
+      'teoudatZeout' in body ||
+      'koupatHolim' in body;
+    if (hasMemberLikeKeys) {
+      return { member: body, flags: {}, payment: {}, raw: body };
+    }
+  }
+
+  return { member: {}, flags: {}, payment: {}, raw: body };
 }
 
 function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Record<string, any> }): Record<string, any> {
@@ -336,13 +361,19 @@ export async function v1UpdateFamilyMember(req: AuthenticatedRequest, res: Respo
   if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
 
   const updates = buildUpdateDoc({ uid, body: req.body || {} });
+  // Si rien à mettre à jour (à part updatedAt), on évite un faux-positif
+  const meaningfulKeys = Object.keys(updates).filter((k) => k !== 'updatedAt');
+  if (meaningfulKeys.length === 0) {
+    throw new HttpError(400, 'Aucun champ à modifier.');
+  }
   await ref.set(stripUndefinedDeep(updates), { merge: true });
 
   if (patchAffectsMonthlySupplement(req.body || {})) {
     await recomputeAndApplyFamilyMonthlySupplement(uid);
   }
 
-  res.json({ ok: true, memberId });
+  const after = await ref.get();
+  res.json({ ok: true, memberId, member: { memberId, ...(after.data() || {}) } });
 }
 
 export async function v1DeactivateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
