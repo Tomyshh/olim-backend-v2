@@ -36,59 +36,93 @@ function getLegacyKey(body: any, legacyKey: string, camelKey?: string): unknown 
   return undefined;
 }
 
+function isPlainObject(value: any): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function pickFromMany(...values: unknown[]): unknown {
+  for (const v of values) {
+    if (v !== undefined && v !== null) return v;
+  }
+  return undefined;
+}
+
+function normalizePayload(body: any): { member: Record<string, any>; flags: Record<string, any>; payment: Record<string, any>; raw: any } {
+  const member = isPlainObject(body?.member) ? body.member : {};
+  const flags = isPlainObject(body?.flags) ? body.flags : {};
+  const payment = isPlainObject(body?.payment) ? body.payment : {};
+  return { member, flags, payment, raw: body };
+}
+
 function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Record<string, any> }): Record<string, any> {
   const { uid, body } = params;
-  // Contrat frontend: { member: { firstName, ... } }
-  // Tolérance: accepter aussi le format legacy flat (First Name, etc.)
-  const payload = (body && typeof body === 'object' && body.member && typeof body.member === 'object') ? body.member : body;
+  // Contrat frontend: { member: { firstName, relationship, ... }, flags, payment }
+  // Tolérance legacy: accepter aussi le format flat (First Name, Family Member Status, etc.)
+  const { member, flags, payment, raw } = normalizePayload(body);
 
-  const firstName = pickString(getLegacyKey(payload, 'First Name', 'firstName'));
+  const firstName = pickString(
+    pickFromMany(
+      member.firstName,
+      getLegacyKey(raw, 'First Name'),
+      getLegacyKey(raw, 'Prénom'),
+      getLegacyKey(raw, 'firstName', 'firstName')
+    )
+  );
   if (!firstName) throw new HttpError(400, 'First Name requis.');
 
-  const familyMemberStatus = pickString(getLegacyKey(payload, 'Family Member Status', 'familyMemberStatus'));
+  const familyMemberStatus = pickString(
+    pickFromMany(
+      member.relationship,
+      getLegacyKey(raw, 'Family Member Status'),
+      getLegacyKey(raw, 'Status'),
+      getLegacyKey(raw, 'relationship', 'relationship'),
+      getLegacyKey(raw, 'familyMemberStatus', 'familyMemberStatus')
+    )
+  );
   if (!familyMemberStatus) throw new HttpError(400, 'Family Member Status requis.');
 
-  const birthdayRaw = getLegacyKey(payload, 'Birthday', 'birthday');
+  const birthdayRaw = pickFromMany(member.birthday, getLegacyKey(raw, 'Birthday', 'birthday'));
   const birthdayTs = birthdayToTimestamp(birthdayRaw);
   if (birthdayRaw != null && !birthdayTs) {
     throw new HttpError(400, 'Birthday invalide (attendu Timestamp ou "dd/MM/yyyy").');
   }
 
-  const phoneNumber = pickStringOrNull(getLegacyKey(payload, 'Phone Number', 'phoneNumber'));
-  const phoneNumbers = coerceStringList(getLegacyKey(payload, 'phoneNumbers', 'phoneNumbers'));
+  const phoneNumbers = coerceStringList(pickFromMany(member.phoneNumbers, getLegacyKey(raw, 'phoneNumbers', 'phoneNumbers')));
+  const phoneNumber =
+    pickStringOrNull(pickFromMany(member.phoneNumber, getLegacyKey(raw, 'Phone Number', 'phoneNumber'))) ??
+    (phoneNumbers.length > 0 ? phoneNumbers[0]! : null);
 
   const doc: Record<string, any> = {
     // Champs legacy (exact)
     'First Name': firstName,
-    'Last Name': pickStringOrNull(getLegacyKey(payload, 'Last Name', 'lastName')),
-    'Father Name': pickStringOrNull(getLegacyKey(payload, 'Father Name', 'fatherName')),
-    Email: pickStringOrNull(getLegacyKey(payload, 'Email', 'email')),
+    'Last Name': pickStringOrNull(pickFromMany(member.lastName, getLegacyKey(raw, 'Last Name', 'lastName'))),
+    'Father Name': pickStringOrNull(pickFromMany(member.fatherName, getLegacyKey(raw, 'Father Name', 'fatherName'))),
+    Email: pickStringOrNull(pickFromMany(member.email, getLegacyKey(raw, 'Email', 'email'))),
     'Phone Number': phoneNumber,
     phoneNumbers: phoneNumbers,
-    'Teoudat Zeout': pickStringOrNull(getLegacyKey(payload, 'Teoudat Zeout', 'teoudatZeout')),
+    'Teoudat Zeout': pickStringOrNull(pickFromMany(member.teoudatZeout, getLegacyKey(raw, 'Teoudat Zeout', 'teoudatZeout'))),
     ...(birthdayTs ? { Birthday: birthdayTs } : {}),
-    'Koupat Holim': pickStringOrNull(getLegacyKey(payload, 'Koupat Holim', 'koupatHolim')),
+    'Koupat Holim': pickStringOrNull(pickFromMany(member.koupatHolim, getLegacyKey(raw, 'Koupat Holim', 'koupatHolim'))),
     'Family Member Status': familyMemberStatus,
-    hasGOVacces: pickBool(getLegacyKey(payload, 'hasGOVacces', 'hasGOVacces'), false),
-    isConnected: pickBool(getLegacyKey(payload, 'isConnected', 'isConnected'), false),
+    hasGOVacces: pickBool(pickFromMany(raw?.hasGOVacces, raw?.hasGOVacces), false),
+    isConnected: pickBool(pickFromMany(raw?.isConnected, raw?.isConnected), false),
     'Client ID': uid,
-    'Created From': pickStringOrNull(getLegacyKey(payload, 'Created From', 'createdFrom')) ?? 'Application',
+    'Created From': pickStringOrNull(pickFromMany(getLegacyKey(raw, 'Created From', 'createdFrom'))) ?? 'Application',
 
     // Nouveaux champs (flat, non cassants)
-    isAccountOwner: pickBool(getLegacyKey(payload, 'isAccountOwner', 'isAccountOwner'), false),
-    isChild:
-      getLegacyKey(payload, 'isChild', 'isChild') === undefined ? undefined : pickBool(getLegacyKey(payload, 'isChild', 'isChild'), false),
-    isActive: pickBool(getLegacyKey(payload, 'isActive', 'isActive'), true),
-    livesAtHome: pickBool(getLegacyKey(payload, 'livesAtHome', 'livesAtHome'), false),
-    validationStatus: pickStringOrNull(getLegacyKey(payload, 'validationStatus', 'validationStatus')) ?? 'en_attente',
-    serviceActive: pickBool(getLegacyKey(payload, 'serviceActive', 'serviceActive'), false),
-    selectedCardId: pickStringOrNull(getLegacyKey(payload, 'selectedCardId', 'selectedCardId')),
-    serviceActivatedAt: getLegacyKey(payload, 'serviceActivatedAt', 'serviceActivatedAt') ?? null,
-    serviceActivationPaymentId: pickStringOrNull(getLegacyKey(payload, 'serviceActivationPaymentId', 'serviceActivationPaymentId')),
-    monthlySupplementApplied: pickBool(getLegacyKey(payload, 'monthlySupplementApplied', 'monthlySupplementApplied'), false),
+    isAccountOwner: pickBool(pickFromMany(raw?.isAccountOwner, raw?.isAccountOwner), false),
+    isChild: raw?.isChild === undefined ? undefined : pickBool(raw?.isChild, false),
+    isActive: pickBool(pickFromMany(raw?.isActive, raw?.isActive), true),
+    livesAtHome: pickBool(pickFromMany(flags.livesAtHome, raw?.livesAtHome), false),
+    validationStatus: pickStringOrNull(pickFromMany(flags.validationStatus, raw?.validationStatus)) ?? 'en_attente',
+    serviceActive: pickBool(pickFromMany(raw?.serviceActive, raw?.serviceActive), false),
+    selectedCardId: pickStringOrNull(pickFromMany(payment.cardId, raw?.selectedCardId)),
+    serviceActivatedAt: pickFromMany(raw?.serviceActivatedAt, null) ?? null,
+    serviceActivationPaymentId: pickStringOrNull(pickFromMany(raw?.serviceActivationPaymentId)),
+    monthlySupplementApplied: pickBool(pickFromMany(raw?.monthlySupplementApplied), false),
     monthlySupplementNis:
-      typeof getLegacyKey(payload, 'monthlySupplementNis', 'monthlySupplementNis') === 'number'
-        ? (getLegacyKey(payload, 'monthlySupplementNis', 'monthlySupplementNis') as number)
+      typeof pickFromMany(raw?.monthlySupplementNis) === 'number'
+        ? (pickFromMany(raw?.monthlySupplementNis) as number)
         : 69
   };
 
@@ -97,39 +131,65 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
 
 function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any> {
   const { uid, body } = params;
-  const payload = (body && typeof body === 'object' && body.member && typeof body.member === 'object') ? body.member : body;
+  const { member, flags, payment, raw } = normalizePayload(body);
   const updates: Record<string, any> = {};
 
-  const maybe = (legacyKey: string, camelKey?: string) => getLegacyKey(payload, legacyKey, camelKey);
+  const maybe = (legacyKey: string, camelKey?: string) => getLegacyKey(raw, legacyKey, camelKey);
 
-  if (maybe('First Name', 'firstName') !== undefined) updates['First Name'] = pickString(maybe('First Name', 'firstName'));
-  if (maybe('Last Name', 'lastName') !== undefined) updates['Last Name'] = pickStringOrNull(maybe('Last Name', 'lastName'));
-  if (maybe('Father Name', 'fatherName') !== undefined) updates['Father Name'] = pickStringOrNull(maybe('Father Name', 'fatherName'));
-  if (maybe('Email', 'email') !== undefined) updates.Email = pickStringOrNull(maybe('Email', 'email'));
+  if (member.firstName !== undefined || maybe('First Name') !== undefined || maybe('Prénom') !== undefined) {
+    updates['First Name'] = pickString(pickFromMany(member.firstName, maybe('First Name'), maybe('Prénom')));
+  }
+  if (member.lastName !== undefined || maybe('Last Name', 'lastName') !== undefined) {
+    updates['Last Name'] = pickStringOrNull(pickFromMany(member.lastName, maybe('Last Name', 'lastName')));
+  }
+  if (member.fatherName !== undefined || maybe('Father Name', 'fatherName') !== undefined) {
+    updates['Father Name'] = pickStringOrNull(pickFromMany(member.fatherName, maybe('Father Name', 'fatherName')));
+  }
+  if (member.email !== undefined || maybe('Email', 'email') !== undefined) {
+    updates.Email = pickStringOrNull(pickFromMany(member.email, maybe('Email', 'email')));
+  }
 
-  if (maybe('Phone Number', 'phoneNumber') !== undefined) updates['Phone Number'] = pickStringOrNull(maybe('Phone Number', 'phoneNumber'));
-  if (maybe('phoneNumbers', 'phoneNumbers') !== undefined) updates.phoneNumbers = coerceStringList(maybe('phoneNumbers', 'phoneNumbers'));
+  if (member.phoneNumbers !== undefined || member.phoneNumber !== undefined || maybe('phoneNumbers', 'phoneNumbers') !== undefined || maybe('Phone Number', 'phoneNumber') !== undefined) {
+    const phoneNumbers = coerceStringList(pickFromMany(member.phoneNumbers, maybe('phoneNumbers', 'phoneNumbers')));
+    const phoneNumber =
+      pickStringOrNull(pickFromMany(member.phoneNumber, maybe('Phone Number', 'phoneNumber'))) ??
+      (phoneNumbers.length > 0 ? phoneNumbers[0]! : null);
+    updates['Phone Number'] = phoneNumber;
+    updates.phoneNumbers = phoneNumbers;
+  }
 
-  if (maybe('Teoudat Zeout', 'teoudatZeout') !== undefined) updates['Teoudat Zeout'] = pickStringOrNull(maybe('Teoudat Zeout', 'teoudatZeout'));
-  if (maybe('Koupat Holim', 'koupatHolim') !== undefined) updates['Koupat Holim'] = pickStringOrNull(maybe('Koupat Holim', 'koupatHolim'));
-  if (maybe('Family Member Status', 'familyMemberStatus') !== undefined)
-    updates['Family Member Status'] = pickString(maybe('Family Member Status', 'familyMemberStatus'));
+  if (member.teoudatZeout !== undefined || maybe('Teoudat Zeout', 'teoudatZeout') !== undefined) {
+    updates['Teoudat Zeout'] = pickStringOrNull(pickFromMany(member.teoudatZeout, maybe('Teoudat Zeout', 'teoudatZeout')));
+  }
+  if (member.koupatHolim !== undefined || maybe('Koupat Holim', 'koupatHolim') !== undefined) {
+    updates['Koupat Holim'] = pickStringOrNull(pickFromMany(member.koupatHolim, maybe('Koupat Holim', 'koupatHolim')));
+  }
+  if (member.relationship !== undefined || maybe('Family Member Status') !== undefined || maybe('Status') !== undefined || maybe('relationship') !== undefined) {
+    updates['Family Member Status'] = pickString(pickFromMany(member.relationship, maybe('Family Member Status'), maybe('Status'), maybe('relationship')));
+  }
 
-  if (maybe('Birthday', 'birthday') !== undefined) {
-    const birthdayTs = birthdayToTimestamp(maybe('Birthday', 'birthday'));
+  if (member.birthday !== undefined || maybe('Birthday', 'birthday') !== undefined) {
+    const birthdayTs = birthdayToTimestamp(pickFromMany(member.birthday, maybe('Birthday', 'birthday')));
     if (!birthdayTs) throw new HttpError(400, 'Birthday invalide (attendu Timestamp ou "dd/MM/yyyy").');
     updates.Birthday = birthdayTs;
   }
 
-  if (maybe('hasGOVacces', 'hasGOVacces') !== undefined) updates.hasGOVacces = pickBool(maybe('hasGOVacces', 'hasGOVacces'), false);
-  if (maybe('isConnected', 'isConnected') !== undefined) updates.isConnected = pickBool(maybe('isConnected', 'isConnected'), false);
+  if (raw?.hasGOVacces !== undefined) updates.hasGOVacces = pickBool(raw.hasGOVacces, false);
+  if (raw?.isConnected !== undefined) updates.isConnected = pickBool(raw.isConnected, false);
 
   // Nouveaux champs
-  if (maybe('isAccountOwner', 'isAccountOwner') !== undefined) updates.isAccountOwner = pickBool(maybe('isAccountOwner', 'isAccountOwner'), false);
-  if (maybe('isChild', 'isChild') !== undefined) updates.isChild = pickBool(maybe('isChild', 'isChild'), false);
-  if (maybe('isActive', 'isActive') !== undefined) updates.isActive = pickBool(maybe('isActive', 'isActive'), true);
-  if (maybe('livesAtHome', 'livesAtHome') !== undefined) updates.livesAtHome = pickBool(maybe('livesAtHome', 'livesAtHome'), false);
-  if (maybe('validationStatus', 'validationStatus') !== undefined) updates.validationStatus = pickStringOrNull(maybe('validationStatus', 'validationStatus'));
+  if (raw?.isAccountOwner !== undefined) updates.isAccountOwner = pickBool(raw.isAccountOwner, false);
+  if (raw?.isChild !== undefined) updates.isChild = pickBool(raw.isChild, false);
+  if (raw?.isActive !== undefined) updates.isActive = pickBool(raw.isActive, true);
+  if (flags.livesAtHome !== undefined || raw?.livesAtHome !== undefined) {
+    updates.livesAtHome = pickBool(pickFromMany(flags.livesAtHome, raw?.livesAtHome), false);
+  }
+  if (flags.validationStatus !== undefined || raw?.validationStatus !== undefined) {
+    updates.validationStatus = pickStringOrNull(pickFromMany(flags.validationStatus, raw?.validationStatus));
+  }
+  if (payment.cardId !== undefined || raw?.selectedCardId !== undefined) {
+    updates.selectedCardId = pickStringOrNull(pickFromMany(payment.cardId, raw?.selectedCardId));
+  }
 
   // Champs système
   updates['Client ID'] = uid;
@@ -139,13 +199,14 @@ function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any>
 }
 
 function patchAffectsMonthlySupplement(body: any): boolean {
-  const payload = (body && typeof body === 'object' && body.member && typeof body.member === 'object') ? body.member : body;
-  const keys = new Set(Object.keys(payload || {}));
+  const { member, flags, raw } = normalizePayload(body);
+  const keys = new Set<string>([...Object.keys(raw || {}), ...Object.keys(member || {}), ...Object.keys(flags || {})]);
   return (
     keys.has('Birthday') ||
     keys.has('birthday') ||
     keys.has('Family Member Status') ||
     keys.has('familyMemberStatus') ||
+    keys.has('relationship') ||
     keys.has('isActive') ||
     keys.has('livesAtHome')
   );
