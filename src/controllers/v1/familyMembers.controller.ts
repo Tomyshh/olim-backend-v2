@@ -3,7 +3,7 @@ import { admin, getFirestore } from '../../config/firebase.js';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { HttpError } from '../../utils/errors.js';
 import { paymeGenerateSale } from '../../services/payme.service.js';
-import { birthdayToTimestamp, isConjoint, recomputeAndApplyFamilyMonthlySupplement } from '../../services/familyBilling.service.js';
+import { isConjoint, recomputeAndApplyFamilyMonthlySupplement } from '../../services/familyBilling.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
 
@@ -37,7 +37,11 @@ function getLegacyKey(body: any, legacyKey: string, camelKey?: string): unknown 
 }
 
 function isPlainObject(value: any): value is Record<string, any> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  // Important: exclure les sentinelles Firestore (FieldValue.serverTimestamp(), etc.)
+  // et autres objets non "plain" (Timestamp, DocumentReference, etc.)
+  return proto === Object.prototype || proto === null;
 }
 
 function pickFromMany(...values: unknown[]): unknown {
@@ -45,6 +49,66 @@ function pickFromMany(...values: unknown[]): unknown {
     if (v !== undefined && v !== null) return v;
   }
   return undefined;
+}
+
+function formatDdMmYyyyFromDate(date: Date): string {
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const yyyy = String(date.getUTCFullYear());
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+function parseBirthdayToDdMmYyyy(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return formatDdMmYyyyFromDate(value);
+  if (typeof (value as any)?.toDate === 'function') {
+    try {
+      const d = (value as any).toDate();
+      if (d instanceof Date && !Number.isNaN(d.getTime())) return formatDdMmYyyyFromDate(d);
+    } catch {
+      // ignore
+    }
+  }
+  if (typeof value === 'object' && value != null) {
+    const seconds = (value as any).seconds;
+    if (typeof seconds === 'number' && Number.isFinite(seconds)) return formatDdMmYyyyFromDate(new Date(seconds * 1000));
+  }
+
+  const raw = pickString(value);
+  if (!raw) return null;
+  const m = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return null;
+  if (yyyy < 1900 || yyyy > 2100) return null;
+  if (mm < 1 || mm > 12) return null;
+  if (dd < 1 || dd > 31) return null;
+  const d = new Date(Date.UTC(yyyy, mm - 1, dd, 0, 0, 0));
+  if (d.getUTCFullYear() !== yyyy || d.getUTCMonth() !== mm - 1 || d.getUTCDate() !== dd) return null;
+  return raw;
+}
+
+function computeAgeYearsFromBirthdayString(ddMmYyyy: string, now: Date = new Date()): number | null {
+  const m = ddMmYyyy.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return null;
+  const b = new Date(Date.UTC(yyyy, mm - 1, dd, 0, 0, 0));
+  if (Number.isNaN(b.getTime())) return null;
+
+  const yNow = now.getUTCFullYear();
+  const mNow = now.getUTCMonth() + 1;
+  const dNow = now.getUTCDate();
+  const yB = b.getUTCFullYear();
+  const mB = b.getUTCMonth() + 1;
+  const dB = b.getUTCDate();
+  let age = yNow - yB;
+  if (mNow < mB || (mNow === mB && dNow < dB)) age -= 1;
+  return age;
 }
 
 function stripUndefinedDeep<T>(value: T): T {
@@ -97,11 +161,13 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
   );
   if (!familyMemberStatus) throw new HttpError(400, 'Family Member Status requis.');
 
+  // Requis côté storage: string "dd/MM/yyyy" (JJ/MM/YYYY)
   const birthdayRaw = pickFromMany(member.birthday, getLegacyKey(raw, 'Birthday', 'birthday'));
-  const birthdayTs = birthdayToTimestamp(birthdayRaw);
-  if (birthdayRaw != null && !birthdayTs) {
-    throw new HttpError(400, 'Birthday invalide (attendu Timestamp ou "dd/MM/yyyy").');
+  const birthdayStr = birthdayRaw == null ? null : parseBirthdayToDdMmYyyy(birthdayRaw);
+  if (birthdayRaw != null && !birthdayStr) {
+    throw new HttpError(400, 'Birthday invalide (attendu "dd/MM/yyyy").');
   }
+  const age = birthdayStr ? computeAgeYearsFromBirthdayString(birthdayStr) : null;
 
   const phoneNumbers = coerceStringList(pickFromMany(member.phoneNumbers, getLegacyKey(raw, 'phoneNumbers', 'phoneNumbers')));
   const phoneNumber =
@@ -117,12 +183,12 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
     'Phone Number': phoneNumber,
     phoneNumbers: phoneNumbers,
     'Teoudat Zeout': pickStringOrNull(pickFromMany(member.teoudatZeout, getLegacyKey(raw, 'Teoudat Zeout', 'teoudatZeout'))),
-    ...(birthdayTs ? { Birthday: birthdayTs } : {}),
+    ...(birthdayStr ? { Birthday: birthdayStr } : {}),
+    ...(typeof age === 'number' && Number.isFinite(age) ? { age } : {}),
     'Koupat Holim': pickStringOrNull(pickFromMany(member.koupatHolim, getLegacyKey(raw, 'Koupat Holim', 'koupatHolim'))),
     'Family Member Status': familyMemberStatus,
     hasGOVacces: pickBool(pickFromMany(raw?.hasGOVacces, raw?.hasGOVacces), false),
     isConnected: pickBool(pickFromMany(raw?.isConnected, raw?.isConnected), false),
-    'Client ID': uid,
     'Created From': pickStringOrNull(pickFromMany(getLegacyKey(raw, 'Created From', 'createdFrom'))) ?? 'Application',
 
     // Nouveaux champs (flat, non cassants)
@@ -185,9 +251,11 @@ function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any>
   }
 
   if (member.birthday !== undefined || maybe('Birthday', 'birthday') !== undefined) {
-    const birthdayTs = birthdayToTimestamp(pickFromMany(member.birthday, maybe('Birthday', 'birthday')));
-    if (!birthdayTs) throw new HttpError(400, 'Birthday invalide (attendu Timestamp ou "dd/MM/yyyy").');
-    updates.Birthday = birthdayTs;
+    const birthdayStr = parseBirthdayToDdMmYyyy(pickFromMany(member.birthday, maybe('Birthday', 'birthday')));
+    if (!birthdayStr) throw new HttpError(400, 'Birthday invalide (attendu "dd/MM/yyyy").');
+    updates.Birthday = birthdayStr;
+    const age = computeAgeYearsFromBirthdayString(birthdayStr);
+    if (typeof age === 'number' && Number.isFinite(age)) updates.age = age;
   }
 
   if (raw?.hasGOVacces !== undefined) updates.hasGOVacces = pickBool(raw.hasGOVacces, false);
@@ -208,7 +276,6 @@ function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any>
   }
 
   // Champs système
-  updates['Client ID'] = uid;
   updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
   return stripUndefinedDeep(updates);
