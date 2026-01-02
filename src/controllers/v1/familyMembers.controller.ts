@@ -38,53 +38,57 @@ function getLegacyKey(body: any, legacyKey: string, camelKey?: string): unknown 
 
 function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Record<string, any> }): Record<string, any> {
   const { uid, body } = params;
+  // Contrat frontend: { member: { firstName, ... } }
+  // Tolérance: accepter aussi le format legacy flat (First Name, etc.)
+  const payload = (body && typeof body === 'object' && body.member && typeof body.member === 'object') ? body.member : body;
 
-  const firstName = pickString(getLegacyKey(body, 'First Name', 'firstName'));
+  const firstName = pickString(getLegacyKey(payload, 'First Name', 'firstName'));
   if (!firstName) throw new HttpError(400, 'First Name requis.');
 
-  const familyMemberStatus = pickString(getLegacyKey(body, 'Family Member Status', 'familyMemberStatus'));
+  const familyMemberStatus = pickString(getLegacyKey(payload, 'Family Member Status', 'familyMemberStatus'));
   if (!familyMemberStatus) throw new HttpError(400, 'Family Member Status requis.');
 
-  const birthdayRaw = getLegacyKey(body, 'Birthday', 'birthday');
+  const birthdayRaw = getLegacyKey(payload, 'Birthday', 'birthday');
   const birthdayTs = birthdayToTimestamp(birthdayRaw);
   if (birthdayRaw != null && !birthdayTs) {
     throw new HttpError(400, 'Birthday invalide (attendu Timestamp ou "dd/MM/yyyy").');
   }
 
-  const phoneNumber = pickStringOrNull(getLegacyKey(body, 'Phone Number', 'phoneNumber'));
-  const phoneNumbers = coerceStringList(getLegacyKey(body, 'phoneNumbers', 'phoneNumbers'));
+  const phoneNumber = pickStringOrNull(getLegacyKey(payload, 'Phone Number', 'phoneNumber'));
+  const phoneNumbers = coerceStringList(getLegacyKey(payload, 'phoneNumbers', 'phoneNumbers'));
 
   const doc: Record<string, any> = {
     // Champs legacy (exact)
     'First Name': firstName,
-    'Last Name': pickStringOrNull(getLegacyKey(body, 'Last Name', 'lastName')),
-    'Father Name': pickStringOrNull(getLegacyKey(body, 'Father Name', 'fatherName')),
-    Email: pickStringOrNull(getLegacyKey(body, 'Email', 'email')),
+    'Last Name': pickStringOrNull(getLegacyKey(payload, 'Last Name', 'lastName')),
+    'Father Name': pickStringOrNull(getLegacyKey(payload, 'Father Name', 'fatherName')),
+    Email: pickStringOrNull(getLegacyKey(payload, 'Email', 'email')),
     'Phone Number': phoneNumber,
     phoneNumbers: phoneNumbers,
-    'Teoudat Zeout': pickStringOrNull(getLegacyKey(body, 'Teoudat Zeout', 'teoudatZeout')),
+    'Teoudat Zeout': pickStringOrNull(getLegacyKey(payload, 'Teoudat Zeout', 'teoudatZeout')),
     ...(birthdayTs ? { Birthday: birthdayTs } : {}),
-    'Koupat Holim': pickStringOrNull(getLegacyKey(body, 'Koupat Holim', 'koupatHolim')),
+    'Koupat Holim': pickStringOrNull(getLegacyKey(payload, 'Koupat Holim', 'koupatHolim')),
     'Family Member Status': familyMemberStatus,
-    hasGOVacces: pickBool(getLegacyKey(body, 'hasGOVacces', 'hasGOVacces'), false),
-    isConnected: pickBool(getLegacyKey(body, 'isConnected', 'isConnected'), false),
+    hasGOVacces: pickBool(getLegacyKey(payload, 'hasGOVacces', 'hasGOVacces'), false),
+    isConnected: pickBool(getLegacyKey(payload, 'isConnected', 'isConnected'), false),
     'Client ID': uid,
-    'Created From': pickStringOrNull(getLegacyKey(body, 'Created From', 'createdFrom')) ?? 'Application',
+    'Created From': pickStringOrNull(getLegacyKey(payload, 'Created From', 'createdFrom')) ?? 'Application',
 
     // Nouveaux champs (flat, non cassants)
-    isAccountOwner: pickBool(getLegacyKey(body, 'isAccountOwner', 'isAccountOwner'), false),
-    isChild: getLegacyKey(body, 'isChild', 'isChild') === undefined ? undefined : pickBool(getLegacyKey(body, 'isChild', 'isChild'), false),
-    isActive: pickBool(getLegacyKey(body, 'isActive', 'isActive'), true),
-    livesAtHome: pickBool(getLegacyKey(body, 'livesAtHome', 'livesAtHome'), false),
-    validationStatus: pickStringOrNull(getLegacyKey(body, 'validationStatus', 'validationStatus')) ?? 'en_attente',
-    serviceActive: pickBool(getLegacyKey(body, 'serviceActive', 'serviceActive'), false),
-    selectedCardId: pickStringOrNull(getLegacyKey(body, 'selectedCardId', 'selectedCardId')),
-    serviceActivatedAt: getLegacyKey(body, 'serviceActivatedAt', 'serviceActivatedAt') ?? null,
-    serviceActivationPaymentId: pickStringOrNull(getLegacyKey(body, 'serviceActivationPaymentId', 'serviceActivationPaymentId')),
-    monthlySupplementApplied: pickBool(getLegacyKey(body, 'monthlySupplementApplied', 'monthlySupplementApplied'), false),
+    isAccountOwner: pickBool(getLegacyKey(payload, 'isAccountOwner', 'isAccountOwner'), false),
+    isChild:
+      getLegacyKey(payload, 'isChild', 'isChild') === undefined ? undefined : pickBool(getLegacyKey(payload, 'isChild', 'isChild'), false),
+    isActive: pickBool(getLegacyKey(payload, 'isActive', 'isActive'), true),
+    livesAtHome: pickBool(getLegacyKey(payload, 'livesAtHome', 'livesAtHome'), false),
+    validationStatus: pickStringOrNull(getLegacyKey(payload, 'validationStatus', 'validationStatus')) ?? 'en_attente',
+    serviceActive: pickBool(getLegacyKey(payload, 'serviceActive', 'serviceActive'), false),
+    selectedCardId: pickStringOrNull(getLegacyKey(payload, 'selectedCardId', 'selectedCardId')),
+    serviceActivatedAt: getLegacyKey(payload, 'serviceActivatedAt', 'serviceActivatedAt') ?? null,
+    serviceActivationPaymentId: pickStringOrNull(getLegacyKey(payload, 'serviceActivationPaymentId', 'serviceActivationPaymentId')),
+    monthlySupplementApplied: pickBool(getLegacyKey(payload, 'monthlySupplementApplied', 'monthlySupplementApplied'), false),
     monthlySupplementNis:
-      typeof getLegacyKey(body, 'monthlySupplementNis', 'monthlySupplementNis') === 'number'
-        ? (getLegacyKey(body, 'monthlySupplementNis', 'monthlySupplementNis') as number)
+      typeof getLegacyKey(payload, 'monthlySupplementNis', 'monthlySupplementNis') === 'number'
+        ? (getLegacyKey(payload, 'monthlySupplementNis', 'monthlySupplementNis') as number)
         : 69
   };
 
@@ -93,9 +97,10 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
 
 function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any> {
   const { uid, body } = params;
+  const payload = (body && typeof body === 'object' && body.member && typeof body.member === 'object') ? body.member : body;
   const updates: Record<string, any> = {};
 
-  const maybe = (legacyKey: string, camelKey?: string) => getLegacyKey(body, legacyKey, camelKey);
+  const maybe = (legacyKey: string, camelKey?: string) => getLegacyKey(payload, legacyKey, camelKey);
 
   if (maybe('First Name', 'firstName') !== undefined) updates['First Name'] = pickString(maybe('First Name', 'firstName'));
   if (maybe('Last Name', 'lastName') !== undefined) updates['Last Name'] = pickStringOrNull(maybe('Last Name', 'lastName'));
@@ -134,7 +139,8 @@ function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any>
 }
 
 function patchAffectsMonthlySupplement(body: any): boolean {
-  const keys = new Set(Object.keys(body || {}));
+  const payload = (body && typeof body === 'object' && body.member && typeof body.member === 'object') ? body.member : body;
+  const keys = new Set(Object.keys(payload || {}));
   return (
     keys.has('Birthday') ||
     keys.has('birthday') ||
