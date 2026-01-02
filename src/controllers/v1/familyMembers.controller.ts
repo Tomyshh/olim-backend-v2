@@ -47,6 +47,22 @@ function pickFromMany(...values: unknown[]): unknown {
   return undefined;
 }
 
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    // On garde les arrays, mais on nettoie leurs items
+    return value.map((v) => stripUndefinedDeep(v)) as any;
+  }
+  if (isPlainObject(value)) {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (v === undefined) continue;
+      out[k] = stripUndefinedDeep(v as any);
+    }
+    return out as any;
+  }
+  return value;
+}
+
 function normalizePayload(body: any): { member: Record<string, any>; flags: Record<string, any>; payment: Record<string, any>; raw: any } {
   const member = isPlainObject(body?.member) ? body.member : {};
   const flags = isPlainObject(body?.flags) ? body.flags : {};
@@ -126,7 +142,7 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
         : 69
   };
 
-  return { ...(params.defaults || {}), ...doc };
+  return stripUndefinedDeep({ ...(params.defaults || {}), ...doc });
 }
 
 function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any> {
@@ -195,7 +211,7 @@ function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any>
   updates['Client ID'] = uid;
   updates.updatedAt = admin.firestore.FieldValue.serverTimestamp();
 
-  return updates;
+  return stripUndefinedDeep(updates);
 }
 
 function patchAffectsMonthlySupplement(body: any): boolean {
@@ -228,7 +244,7 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
     }
   });
 
-  const ref = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).add(doc);
+  const ref = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
 
   // Appliquer supplément uniquement si le nouveau membre peut l'impacter
   const status = pickString(doc['Family Member Status']);
@@ -253,7 +269,7 @@ export async function v1UpdateFamilyMember(req: AuthenticatedRequest, res: Respo
   if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
 
   const updates = buildUpdateDoc({ uid, body: req.body || {} });
-  await ref.set(updates, { merge: true });
+  await ref.set(stripUndefinedDeep(updates), { merge: true });
 
   if (patchAffectsMonthlySupplement(req.body || {})) {
     await recomputeAndApplyFamilyMonthlySupplement(uid);
