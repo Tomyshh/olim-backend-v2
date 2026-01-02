@@ -31,6 +31,8 @@ import aiRoutes from './routes/ai.routes.js';
 import v1AuthPhoneOtpRoutes from './routes/v1/auth.phoneOtp.routes.js';
 import v1MePhoneOtpRoutes from './routes/v1/me.phoneOtp.routes.js';
 import v1NotificationsRoutes from './routes/v1/notifications.routes.js';
+import v1MeMembershipRoutes from './routes/v1/me.membership.routes.js';
+import v1FamilyMembersRoutes from './routes/v1/family.members.routes.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -105,6 +107,8 @@ app.get('/openapi.yaml', (req, res) => {
 app.use('/v1', v1AuthPhoneOtpRoutes);
 app.use('/v1', v1MePhoneOtpRoutes);
 app.use('/v1', v1NotificationsRoutes);
+app.use('/v1', v1MeMembershipRoutes);
+app.use('/v1', v1FamilyMembersRoutes);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);

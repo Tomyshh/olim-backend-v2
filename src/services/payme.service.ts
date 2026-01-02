@@ -47,6 +47,19 @@ function pickFirstString(obj: any, keys: string[]): string {
 }
 
 async function paymePostJson(path: string, body: unknown, timeoutMs: number): Promise<{ ok: boolean; status: number; json: any }> {
+  return paymeRequestJson('POST', path, body, timeoutMs);
+}
+
+async function paymePatchJson(path: string, body: unknown, timeoutMs: number): Promise<{ ok: boolean; status: number; json: any }> {
+  return paymeRequestJson('PATCH', path, body, timeoutMs);
+}
+
+async function paymeRequestJson(
+  method: 'POST' | 'PATCH',
+  path: string,
+  body: unknown,
+  timeoutMs: number
+): Promise<{ ok: boolean; status: number; json: any }> {
   const baseUrl = getPaymeBaseUrl();
   assertHttps(baseUrl, 'PAYME_BASE_URL');
 
@@ -57,7 +70,7 @@ async function paymePostJson(path: string, body: unknown, timeoutMs: number): Pr
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
-      method: 'POST',
+      method,
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json'
@@ -301,6 +314,45 @@ export async function paymeGenerateSubscription(params: {
   }
 
   return { subCode, subID };
+}
+
+export async function paymeSetSubscriptionPrice(params: { subId: string; priceInCents: number }): Promise<{ ok: true }> {
+  const seller_payme_id = requirePaymeSellerKey();
+  const debug = process.env.PAYME_DEBUG === 'true';
+
+  const subId = (params.subId || '').trim();
+  if (!subId) throw new HttpError(400, 'PayMe set-price: subId manquant.');
+  const priceInCents = Number(params.priceInCents);
+  if (!Number.isFinite(priceInCents) || priceInCents <= 0) throw new HttpError(400, 'PayMe set-price: prix invalide.');
+
+  const { ok, status, json } = await paymePatchJson(
+    `subscriptions/${encodeURIComponent(subId)}/set-price`,
+    {
+      seller_payme_id,
+      // PayMe attend une valeur en agorot (ex: 50.75 => 5075)
+      sub_price: priceInCents
+    },
+    20000
+  );
+
+  if (debug) {
+    console.log('[PayMe] Réponse subscriptions/{subId}/set-price:', {
+      ok,
+      status,
+      errorCode: json?.status_error_code,
+      keys: Object.keys(json || {})
+    });
+  }
+
+  if (!ok || json?.status_error_code) {
+    const err = new HttpError(400, `PayMe set-price: ${safePaymeErrorMessage(json)}`);
+    (err as any).statusCode = status;
+    (err as any).errorCode = json?.status_error_code;
+    throw err;
+  }
+
+  // Réponse attendue typique: { status_code: 0 }
+  return { ok: true };
 }
 
 export function formatDdMmYyyy(date: Date): string {
