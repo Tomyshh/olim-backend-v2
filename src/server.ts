@@ -80,6 +80,9 @@ const corsOptions: NonNullable<Parameters<typeof cors>[0]> = {
 
     return callback(new Error(`CORS: origin non autorisée: ${origin}`));
   },
+  // Important pour Flutter Web (préflight avec Authorization)
+  methods: ['GET', 'PUT', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Authorization', 'Content-Type', 'Accept'],
   credentials: true,
   optionsSuccessStatus: 204
 };
