@@ -198,6 +198,17 @@ export async function recomputeAndApplyFamilyMonthlySupplement(uid: string): Pro
   const targetPriceInCents = basePriceInCents + supplementTotalInCents;
   await paymeSetSubscriptionPrice({ subId, priceInCents: targetPriceInCents });
 
+  // Aligner Firestore avec Payme (sinon on a l'impression que rien n'a changé côté DB)
+  await subscriptionRef.set(
+    {
+      plan: {
+        price: targetPriceInCents
+      },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+
   return { eligibleAdultsCount, targetPriceInCents, paymeUpdated: true };
 }
 

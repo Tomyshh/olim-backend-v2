@@ -195,7 +195,11 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
   // Requis côté storage: string "dd/MM/yyyy" (JJ/MM/YYYY)
   const birthdayRaw = pickFromMany(member.birthday, getLegacyKey(raw, 'Birthday', 'birthday'));
   const birthdayStr = birthdayRaw == null ? null : parseBirthdayToDdMmYyyy(birthdayRaw);
-  if (birthdayRaw != null && !birthdayStr) {
+  // Birthday requis (car on doit calculer age et la facturation dépend de l'âge)
+  if (birthdayRaw == null) {
+    throw new HttpError(400, 'Birthday requis (format "dd/MM/yyyy").');
+  }
+  if (!birthdayStr) {
     throw new HttpError(400, 'Birthday invalide (attendu "dd/MM/yyyy").');
   }
   const age = birthdayStr ? computeAgeYearsFromBirthdayString(birthdayStr) : null;
@@ -365,6 +369,7 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
   const status = pickString(doc['Family Member Status']);
   const age = typeof (doc as any).age === 'number' ? Number((doc as any).age) : null;
   const isAdult = age != null && Number.isFinite(age) && age >= 18;
+  let salePaymeId: string | null = null;
 
   // Si majeur (hors conjoint), l'ajout doit déclencher les 2 actions:
   // - one-shot (activation service)
@@ -372,6 +377,11 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
   if (isAdult && !isConjoint(status)) {
     if (!cardIdFromPayload) {
       throw new HttpError(400, 'payment.cardId requis pour ajouter un membre majeur.');
+    }
+    // Par défaut, un membre majeur ajouté est considéré "au foyer" si le frontend n'a pas explicitement fourni le flag.
+    // Sans livesAtHome=true, le supplément mensuel ne peut pas être appliqué.
+    if ((doc as any).livesAtHome !== true) {
+      (doc as any).livesAtHome = true;
     }
 
     // Récupérer buyerKey depuis Payment credentials/{cardId}
@@ -391,6 +401,7 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
       description: `Ajout membre famille (majeur) - ${pickString(doc['First Name'])} ${pickString(doc['Last Name'])}`.trim(),
       buyerKey
     });
+    salePaymeId = sale.salePaymeId;
 
     // Marquer service activé (idempotence: ce membre est nouveau)
     (doc as any).serviceActive = true;
@@ -405,11 +416,26 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
   const shouldRecompute =
     doc.isActive === true && doc.livesAtHome === true && !isConjoint(status) && doc.Birthday != null;
 
+  let monthly: { attempted: boolean; paymeUpdated: boolean; eligibleAdultsCount?: number; targetPriceInCents?: number | null } = {
+    attempted: false,
+    paymeUpdated: false
+  };
   if (shouldRecompute) {
-    await recomputeAndApplyFamilyMonthlySupplement(uid);
+    monthly.attempted = true;
+    const result = await recomputeAndApplyFamilyMonthlySupplement(uid);
+    monthly.paymeUpdated = result.paymeUpdated;
+    monthly.eligibleAdultsCount = result.eligibleAdultsCount;
+    monthly.targetPriceInCents = result.targetPriceInCents;
   }
 
-  res.status(201).json({ memberId: ref.id, ...doc });
+  res.status(201).json({
+    memberId: ref.id,
+    ...doc,
+    billing: {
+      sale: { attempted: isAdult && !isConjoint(status), salePaymeId },
+      monthly
+    }
+  });
 }
 
 export async function v1UpdateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
