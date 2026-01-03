@@ -1,10 +1,9 @@
 import { admin, getFirestore } from '../config/firebase.js';
 import { HttpError } from '../utils/errors.js';
 import { paymeSetSubscriptionPrice } from './payme.service.js';
+import { getFamilyMemberPricingNis, nisToCents } from './remoteConfigPricing.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
-const MONTHLY_SUPPLEMENT_NIS = 69;
-const MONTHLY_SUPPLEMENT_CENTS = MONTHLY_SUPPLEMENT_NIS * 100;
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -140,12 +139,16 @@ export async function recomputeAndApplyFamilyMonthlySupplement(uid: string): Pro
   paymeUpdated: boolean;
 }> {
   const db = getFirestore();
+  const pricing = await getFamilyMemberPricingNis();
+  const monthlySupplementNis = pricing.monthlyNis;
+  const monthlySupplementCents = nisToCents(monthlySupplementNis);
+
   const membersSnap = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).get();
 
   const members = membersSnap.docs.map((d) => ({ id: d.id, data: (d.data() || {}) as Record<string, any> }));
   const eligibleAdults = members.filter((m) => memberIsEligibleAdultSupplement(m.id, m.data));
   const eligibleAdultsCount = eligibleAdults.length;
-  const supplementTotalInCents = eligibleAdultsCount * MONTHLY_SUPPLEMENT_CENTS;
+  const supplementTotalInCents = eligibleAdultsCount * monthlySupplementCents;
 
   const { subId, planPriceInCents, planBasePriceInCents } = await loadSubscriptionPaymeInfo(uid);
   const basePriceInCents = planBasePriceInCents ?? planPriceInCents;
@@ -158,7 +161,7 @@ export async function recomputeAndApplyFamilyMonthlySupplement(uid: string): Pro
       db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(m.id),
       {
         monthlySupplementApplied: eligible,
-        monthlySupplementNis: MONTHLY_SUPPLEMENT_NIS,
+        monthlySupplementNis: monthlySupplementNis,
         isPaidAdultChild: eligible
       },
       { merge: true }

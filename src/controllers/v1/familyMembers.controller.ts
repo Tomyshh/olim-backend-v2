@@ -4,6 +4,7 @@ import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { HttpError } from '../../utils/errors.js';
 import { paymeGenerateSale } from '../../services/payme.service.js';
 import { isConjoint, recomputeAndApplyFamilyMonthlySupplement } from '../../services/familyBilling.service.js';
+import { getFamilyMemberPricingNis, nisToCents } from '../../services/remoteConfigPricing.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
 
@@ -338,6 +339,7 @@ function patchAffectsMonthlySupplement(body: any): boolean {
 export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = req.uid!;
   const db = getFirestore();
+  const pricing = await getFamilyMemberPricingNis();
 
   const doc = buildMemberFirestoreDoc({
     uid,
@@ -346,7 +348,7 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
       isActive: true,
       serviceActive: false,
       monthlySupplementApplied: false,
-      monthlySupplementNis: 69,
+      monthlySupplementNis: pricing.monthlyNis,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     }
   });
@@ -486,9 +488,15 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
   const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
   if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
 
-  // Débit one-shot 39₪
+  // Débit one-shot (Remote Config: add_family_member_ponctually en NIS)
+  const pricing = await getFamilyMemberPricingNis();
+  const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
+  if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
+    throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+  }
+
   const sale = await paymeGenerateSale({
-    priceInCents: 3900,
+    priceInCents: ponctuallyPriceInCents,
     description: `Activation service - Family Member ${memberId}`,
     buyerKey
   });
