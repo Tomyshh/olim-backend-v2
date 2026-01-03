@@ -38,6 +38,20 @@ function safePaymeErrorMessage(json: any): string {
   return details || 'Erreur PayMe.';
 }
 
+function paymeStatusCode(json: any): number | null {
+  const v = json?.status_code ?? json?.statusCode ?? json?.status;
+  const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+function assertPaymeStatusCodeOk(json: any, prefix: string): void {
+  const code = paymeStatusCode(json);
+  // PayMe: 0 = success (souvent), sinon échec même si HTTP 200
+  if (code != null && code !== 0) {
+    throw new HttpError(400, `${prefix}: ${safePaymeErrorMessage(json)}`, 'PAYME_STATUS_NOT_OK');
+  }
+}
+
 function pickFirstString(obj: any, keys: string[]): string {
   for (const k of keys) {
     const v = obj?.[k];
@@ -223,6 +237,14 @@ export async function paymeGenerateSale(params: {
     throw err;
   }
 
+  // PayMe peut répondre 200 mais status_code != 0 => échec logique
+  try {
+    assertPaymeStatusCodeOk(json, 'Paiement refusé');
+  } catch (e: any) {
+    (e as any).statusCode = status;
+    throw e;
+  }
+
   const salePaymeId =
     pickFirstString(json, ['payme_sale_id', 'paymeSaleId', 'sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']) ||
     pickFirstString(json?.data, ['payme_sale_id', 'paymeSaleId', 'sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']);
@@ -330,7 +352,7 @@ export async function paymeSetSubscriptionPrice(params: { subId: string; priceIn
     {
       seller_payme_id,
       // PayMe attend une valeur en agorot (ex: 50.75 => 5075)
-      sub_price: priceInCents
+      sub_price: String(priceInCents)
     },
     20000
   );
@@ -340,6 +362,7 @@ export async function paymeSetSubscriptionPrice(params: { subId: string; priceIn
       ok,
       status,
       errorCode: json?.status_error_code,
+      statusCode: paymeStatusCode(json),
       keys: Object.keys(json || {})
     });
   }
@@ -352,6 +375,7 @@ export async function paymeSetSubscriptionPrice(params: { subId: string; priceIn
   }
 
   // Réponse attendue typique: { status_code: 0 }
+  assertPaymeStatusCodeOk(json, 'PayMe set-price');
   return { ok: true };
 }
 
