@@ -224,8 +224,8 @@ export async function paymeGenerateSale(params: {
   }
 
   const salePaymeId =
-    pickFirstString(json, ['sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']) ||
-    pickFirstString(json?.data, ['sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']);
+    pickFirstString(json, ['payme_sale_id', 'paymeSaleId', 'sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']) ||
+    pickFirstString(json?.data, ['payme_sale_id', 'paymeSaleId', 'sale_payme_id', 'salePaymeId', 'sale_id', 'saleId']);
 
   // Sécurité: si PayMe ne renvoie pas d'identifiant de vente, on ne peut pas confirmer
   // que le débit est réellement passé => on bloque le flow (pas de subscription / pas de user / pas de Firestore).
