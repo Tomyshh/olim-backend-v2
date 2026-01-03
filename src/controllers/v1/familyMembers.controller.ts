@@ -412,9 +412,9 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
 
   const ref = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
 
-  // Appliquer supplément uniquement si le nouveau membre peut l'impacter
-  const shouldRecompute =
-    doc.isActive === true && doc.livesAtHome === true && !isConjoint(status) && doc.Birthday != null;
+  // Recompute systématique après création (le calcul interne décide si count=0/1/2/...).
+  // C'est ce qui garantit le caractère "cumulable" sans dépendre d'un pré-check fragile.
+  const shouldRecompute = !isConjoint(status);
 
   let monthly: { attempted: boolean; paymeUpdated: boolean; eligibleAdultsCount?: number; targetPriceInCents?: number | null } = {
     attempted: false,

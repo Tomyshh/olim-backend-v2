@@ -105,6 +105,13 @@ export function memberIsEligibleAdultSupplement(docId: string, data: Record<stri
   if (!memberLivesAtHome(data)) return false;
   const status = getMemberStatus(data);
   if (isConjoint(status)) return false;
+
+  // Priorité: champ age déjà calculé côté backend (plus robuste que reparser Birthday)
+  const age = typeof (data as any).age === 'number' ? Number((data as any).age) : null;
+  if (age != null && Number.isFinite(age)) {
+    return age >= 18;
+  }
+
   const b = getMemberBirthdayDate(data);
   if (!b) return false;
   return computeAgeYears(b) >= 18;
