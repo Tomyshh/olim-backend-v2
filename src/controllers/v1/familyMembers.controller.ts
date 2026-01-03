@@ -340,6 +340,15 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
   const uid = req.uid!;
   const db = getFirestore();
   const pricing = await getFamilyMemberPricingNis();
+  const normalized = normalizePayload(req.body || {});
+  const cardIdFromPayload = pickString(
+    pickFromMany(
+      normalized.payment?.cardId,
+      (req.body as any)?.payment?.cardId,
+      (req.body as any)?.cardId,
+      (req.body as any)?.selectedCardId
+    )
+  );
 
   const doc = buildMemberFirestoreDoc({
     uid,
@@ -353,10 +362,46 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
     }
   });
 
+  const status = pickString(doc['Family Member Status']);
+  const age = typeof (doc as any).age === 'number' ? Number((doc as any).age) : null;
+  const isAdult = age != null && Number.isFinite(age) && age >= 18;
+
+  // Si majeur (hors conjoint), l'ajout doit déclencher les 2 actions:
+  // - one-shot (activation service)
+  // - supplément mensuel (géré plus bas via recompute)
+  if (isAdult && !isConjoint(status)) {
+    if (!cardIdFromPayload) {
+      throw new HttpError(400, 'payment.cardId requis pour ajouter un membre majeur.');
+    }
+
+    // Récupérer buyerKey depuis Payment credentials/{cardId}
+    const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardIdFromPayload).get();
+    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+    const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+
+    const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
+    if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
+      throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+    }
+
+    // Débit one-shot immédiatement à l'ajout (membre majeur)
+    const sale = await paymeGenerateSale({
+      priceInCents: ponctuallyPriceInCents,
+      description: `Ajout membre famille (majeur) - ${pickString(doc['First Name'])} ${pickString(doc['Last Name'])}`.trim(),
+      buyerKey
+    });
+
+    // Marquer service activé (idempotence: ce membre est nouveau)
+    (doc as any).serviceActive = true;
+    (doc as any).serviceActivationPaymentId = sale.salePaymeId;
+    (doc as any).selectedCardId = cardIdFromPayload;
+    (doc as any).serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
   const ref = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
 
   // Appliquer supplément uniquement si le nouveau membre peut l'impacter
-  const status = pickString(doc['Family Member Status']);
   const shouldRecompute =
     doc.isActive === true && doc.livesAtHome === true && !isConjoint(status) && doc.Birthday != null;
 
@@ -444,7 +489,7 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
   const memberId = pickString(req.params.id);
   if (!memberId) throw new HttpError(400, 'Id manquant.');
 
-  const cardId = pickString(req.body?.cardId ?? req.body?.selectedCardId);
+  const cardId = pickString(req.body?.payment?.cardId ?? req.body?.cardId ?? req.body?.selectedCardId);
   if (!cardId) throw new HttpError(400, 'cardId requis.');
 
   const db = getFirestore();
