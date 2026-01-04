@@ -4,9 +4,14 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import path from 'path';
+import http from 'node:http';
 import { initializeFirebase } from './config/firebase.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFoundHandler } from './middleware/notFoundHandler.js';
+import { requestIdMiddleware } from './middleware/requestId.middleware.js';
+import { responseTimeMiddleware } from './middleware/responseTime.middleware.js';
+import { rateLimitMiddleware } from './middleware/rateLimit.middleware.js';
+import { loadSheddingMiddleware, setOverloaded } from './middleware/loadShedding.middleware.js';
 
 // Routes
 import authRoutes from './routes/auth.routes.js';
@@ -34,6 +39,10 @@ import v1NotificationsRoutes from './routes/v1/notifications.routes.js';
 import v1MeMembershipRoutes from './routes/v1/me.membership.routes.js';
 import v1FamilyMembersRoutes from './routes/v1/family.members.routes.js';
 import v1AiAudioRoutes from './routes/v1/ai.audio.routes.js';
+import v1JobsRoutes from './routes/v1/jobs.routes.js';
+import { startQueueWorker } from './services/queue.service.js';
+import { sendTwilioMessage } from './services/twilio.service.js';
+import { closeRedisClient } from './config/redis.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -42,6 +51,8 @@ const PORT = process.env.PORT || 3000;
 initializeFirebase();
 
 // Middleware globaux
+// Render (reverse proxy) : nécessaire pour que req.ip soit correct (rate-limit, logs)
+app.set('trust proxy', 1);
 app.use(helmet());
 
 const DEFAULT_ALLOWED_ORIGINS = [
@@ -91,6 +102,26 @@ const corsOptions: NonNullable<Parameters<typeof cors>[0]> = {
 // CORS (inclut explicitement les pré-flights OPTIONS)
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+app.use(requestIdMiddleware);
+app.use(responseTimeMiddleware);
+app.use(loadSheddingMiddleware);
+
+// Rate-limit global (feature-flag) — protège la prod lors de bursts
+if (process.env.GLOBAL_RATE_LIMIT_ENABLED === 'true') {
+  const limit = Number(process.env.GLOBAL_RATE_LIMIT_LIMIT || 300);
+  const windowSeconds = Number(process.env.GLOBAL_RATE_LIMIT_WINDOW_SECONDS || 5 * 60);
+  app.use(
+    rateLimitMiddleware({
+      prefix: 'rl:global:ip',
+      limit: Number.isFinite(limit) && limit > 0 ? limit : 300,
+      windowSeconds: Number.isFinite(windowSeconds) && windowSeconds > 0 ? windowSeconds : 5 * 60,
+      preferUid: false,
+      bypassOnError: true,
+      message: 'Trop de requêtes.'
+    })
+  );
+}
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(morgan('combined'));
@@ -114,6 +145,7 @@ app.use('/v1', v1NotificationsRoutes);
 app.use('/v1', v1MeMembershipRoutes);
 app.use('/v1', v1FamilyMembersRoutes);
 app.use('/v1', v1AiAudioRoutes);
+app.use('/v1', v1JobsRoutes);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
@@ -142,10 +174,68 @@ app.use('/api/users', usersRoutes);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+// Timeouts HTTP (évite connexions pendantes sous surcharge)
+// Valeurs conservatrices, ajustables via env si besoin.
+server.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 60_000);
+server.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 65_000);
+server.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS || 5_000);
+
+server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
+
+// Worker queue (optionnel, activé via QUEUE_WORKER_ENABLED=true)
+startQueueWorker({
+  queues: ['queue:v1:sms'],
+  handlers: {
+    'twilio:sms': async (job) => {
+      await sendTwilioMessage(job.payload);
+    }
+  }
+});
+
+// Event-loop lag (optionnel) => load shedding
+if (process.env.LOAD_SHEDDING_ENABLED === 'true') {
+  const intervalMs = Number(process.env.EVENT_LOOP_LAG_INTERVAL_MS || 500);
+  const thresholdMs = Number(process.env.EVENT_LOOP_LAG_THRESHOLD_MS || 200);
+  const iMs = Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 500;
+  const tMs = Number.isFinite(thresholdMs) && thresholdMs > 0 ? thresholdMs : 200;
+
+  let last = Date.now();
+  setInterval(() => {
+    const now = Date.now();
+    const lag = now - last - iMs;
+    last = now;
+    setOverloaded(lag > tMs);
+  }, iMs).unref();
+}
+
+// Graceful shutdown (Render envoie SIGTERM)
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`🧹 Shutdown (${signal})...`);
+
+  // Stop d’accepter de nouvelles connexions
+  server.close(async () => {
+    try {
+      await closeRedisClient();
+    } finally {
+      process.exit(0);
+    }
+  });
+
+  // Hard timeout
+  const hardMs = Number(process.env.SHUTDOWN_HARD_TIMEOUT_MS || 10_000);
+  setTimeout(() => process.exit(1), Number.isFinite(hardMs) && hardMs > 0 ? hardMs : 10_000).unref();
+}
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
 
 export default app;
 

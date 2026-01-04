@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "script:link-phone-to-email": "tsx scripts/link-phone-to-email.ts",
     "script:list-system-registration": "tsx scripts/list-system-registration-clients.ts",
-    "script:upsert-membership-details": "tsx scripts/upsert-membership-details.ts"
+    "script:upsert-membership-details": "tsx scripts/upsert-membership-details.ts",
+    "script:add-icinema-movies": "tsx scripts/add-icinema-movies.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

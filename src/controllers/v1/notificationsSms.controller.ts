@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { normalizeE164PhoneNumber } from '../../utils/phone.js';
 import { sendTwilioMessage } from '../../services/twilio.service.js';
+import { enqueueJob } from '../../services/queue.service.js';
 
 export async function v1SendGenericSms(req: AuthenticatedRequest, res: Response): Promise<void> {
   const toNorm = normalizeE164PhoneNumber(req.body?.to);
@@ -17,6 +18,25 @@ export async function v1SendGenericSms(req: AuthenticatedRequest, res: Response)
     throw err;
   }
 
+  // Optionnel: queue Redis pour lisser la charge / éviter les timeouts
+  if (process.env.QUEUE_ENABLED === 'true') {
+    const enq = await enqueueJob({
+      queue: 'queue:v1:sms',
+      type: 'twilio:sms',
+      payload: {
+        to: toNorm.e164,
+        body,
+        messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID?.trim() || undefined,
+        from: process.env.TWILIO_SMS_FROM?.trim() || undefined
+      }
+    });
+    if (enq) {
+      res.status(202).json({ ok: true, queued: true, jobId: enq.jobId });
+      return;
+    }
+    // Redis absent => fallback synchro
+  }
+
   await sendTwilioMessage({
     to: toNorm.e164,
     body,
@@ -24,7 +44,7 @@ export async function v1SendGenericSms(req: AuthenticatedRequest, res: Response)
     from: process.env.TWILIO_SMS_FROM?.trim() || undefined
   });
 
-  res.json({ ok: true });
+  res.json({ ok: true, queued: false });
 }
 
 

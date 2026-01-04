@@ -1,6 +1,8 @@
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { consumeRateLimit } from '../../services/rateLimit.service.js';
+import { runWithConcurrencyLimit } from '../../services/concurrencyLimit.service.js';
+import { fetchWithTimeout, HttpTimeoutError } from '../../utils/http.js';
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
@@ -68,13 +70,37 @@ export async function v1AudioTranscription(req: AuthenticatedRequest, res: Respo
     form.append('file', audioBlob, file.originalname || 'audio');
     if (isNonEmptyString(language)) form.append('language', language);
 
-    const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: form
-    });
+    const limit = Number(process.env.OPENAI_AUDIO_CONCURRENCY || 2);
+    const timeoutMs = Number(process.env.OPENAI_AUDIO_TIMEOUT_MS || 30000);
+    const waitTimeoutMs = Number(process.env.OPENAI_AUDIO_WAIT_TIMEOUT_MS || 5000);
+
+    let response: Response;
+    try {
+      response = await runWithConcurrencyLimit({
+        key: 'openai:audio',
+        limit: Number.isFinite(limit) && limit > 0 ? limit : 2,
+        waitTimeoutMs: Number.isFinite(waitTimeoutMs) && waitTimeoutMs > 0 ? waitTimeoutMs : 5000,
+        fn: async () =>
+          await fetchWithTimeout('https://api.openai.com/v1/audio/transcriptions', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${apiKey}`
+            },
+            body: form,
+            timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 30000
+          })
+      });
+    } catch (e: any) {
+      if (e?.name === 'ConcurrencyLimitError') {
+        res.status(503).json({ message: 'Service surchargé. Veuillez réessayer.' });
+        return;
+      }
+      if (e instanceof HttpTimeoutError) {
+        res.status(504).json({ message: 'Timeout transcription.' });
+        return;
+      }
+      throw e;
+    }
 
     if (!response.ok) {
       if (response.status === 429) {

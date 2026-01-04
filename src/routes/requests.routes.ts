@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import * as requestsController from '../controllers/requests.controller.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
+import { idempotencyMiddleware } from '../middleware/idempotency.middleware.js';
 
 const router = Router();
 
@@ -14,7 +15,20 @@ router.get('/', requestsController.getRequests);
 router.get('/:requestId', requestsController.getRequestDetail);
 
 // Création d'une demande
-router.post('/', requestsController.createRequest);
+router.post(
+  '/',
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:requests:create',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  requestsController.createRequest
+);
 
 // Mise à jour d'une demande
 router.patch('/:requestId', requestsController.updateRequest);

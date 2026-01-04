@@ -1,4 +1,5 @@
 import { HttpError } from '../utils/errors.js';
+import { runWithConcurrencyLimit } from './concurrencyLimit.service.js';
 
 type PaymeCaptureBuyerTokenResult = {
   buyerKey: string;
@@ -83,14 +84,23 @@ async function paymeRequestJson(
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      method,
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(body),
-      signal: ctrl.signal
+    const limit = Number(process.env.PAYME_CONCURRENCY || 5);
+    const waitTimeoutMs = Number(process.env.PAYME_WAIT_TIMEOUT_MS || 5000);
+
+    const res = await runWithConcurrencyLimit({
+      key: 'payme',
+      limit: Number.isFinite(limit) && limit > 0 ? limit : 5,
+      waitTimeoutMs: Number.isFinite(waitTimeoutMs) && waitTimeoutMs > 0 ? waitTimeoutMs : 5000,
+      fn: async () =>
+        await fetch(url, {
+          method,
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(body),
+          signal: ctrl.signal
+        })
     });
     const status = res.status;
     const text = await res.text();
@@ -103,6 +113,9 @@ async function paymeRequestJson(
     }
     return { ok: res.ok, status, json };
   } catch (e: any) {
+    if (e?.name === 'ConcurrencyLimitError') {
+      throw new HttpError(503, 'Service paiement surchargé. Veuillez réessayer.', 'PAYME_OVERLOADED');
+    }
     if (e?.name === 'AbortError') throw new HttpError(400, 'Timeout PayMe.');
     throw new HttpError(400, 'Erreur PayMe.');
   } finally {

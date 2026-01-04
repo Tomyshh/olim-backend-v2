@@ -59,4 +59,17 @@ export async function getRedisClientOptional(): Promise<AnyRedisClient | null> {
   }
 }
 
+export async function closeRedisClient(): Promise<void> {
+  try {
+    if (client?.isOpen) {
+      await client.quit();
+    }
+  } catch {
+    // ignore
+  } finally {
+    client = null;
+    connectPromise = null;
+  }
+}
+
 

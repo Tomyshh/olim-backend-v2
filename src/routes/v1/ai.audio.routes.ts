@@ -2,6 +2,7 @@ import { Router } from 'express';
 import multer from 'multer';
 import { authenticateToken } from '../../middleware/auth.middleware.js';
 import { asyncHandler } from '../../middleware/asyncHandler.js';
+import { rateLimitMiddleware } from '../../middleware/rateLimit.middleware.js';
 import { v1AudioTranscription } from '../../controllers/v1/ai.audio.controller.js';
 
 const router = Router();
@@ -15,6 +16,18 @@ const upload = multer({
 router.post(
   '/ai/audio/transcriptions',
   authenticateToken,
+  ...(process.env.ENDPOINT_RATE_LIMIT_ENABLED === 'true'
+    ? [
+        rateLimitMiddleware({
+          prefix: 'rl:v1:audio:uid',
+          limit: Number(process.env.AUDIO_RATE_LIMIT_LIMIT || 30),
+          windowSeconds: Number(process.env.AUDIO_RATE_LIMIT_WINDOW_SECONDS || 60),
+          preferUid: true,
+          bypassOnError: true,
+          message: 'Trop de requêtes.'
+        })
+      ]
+    : []),
   upload.single('file'),
   asyncHandler(v1AudioTranscription as any)
 );
