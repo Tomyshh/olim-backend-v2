@@ -1,0 +1,311 @@
+0 verbose cli /usr/local/bin/node /usr/local/bin/npm
+1 info using npm@10.9.2
+2 info using node@v22.16.0
+3 silly config load:file:/usr/local/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/olimservice/olim_backend_prod/.npmrc
+5 silly config load:file:/Users/olimservice/.npmrc
+6 silly config load:file:/usr/local/etc/npmrc
+7 verbose title npm install
+8 verbose argv "install" "--no-audit" "--no-fund" "--cache" "/Users/olimservice/olim_backend_prod/.npm-cache"
+9 verbose logfile logs-max:10 dir:/Users/olimservice/olim_backend_prod/.npm-cache/_logs/2026-01-04T11_06_07_928Z-
+10 verbose logfile /Users/olimservice/olim_backend_prod/.npm-cache/_logs/2026-01-04T11_06_07_928Z-debug-0.log
+11 silly logfile done cleaning log files
+12 silly packumentCache heap:4345298944 maxSize:1086324736 maxEntrySize:543162368
+13 silly idealTree buildDeps
+14 silly fetch manifest multer@^1.4.5-lts.1
+15 silly packumentCache full:https://registry.npmjs.org/multer cache-miss
+16 http fetch GET 200 https://registry.npmjs.org/multer 347ms (cache miss)
+17 silly packumentCache full:https://registry.npmjs.org/multer set size:undefined disposed:false
+18 silly fetch manifest @types/multer@^1.4.12
+19 silly packumentCache full:https://registry.npmjs.org/@types%2fmulter cache-miss
+20 http fetch GET 200 https://registry.npmjs.org/npm 516ms
+21 http fetch GET 200 https://registry.npmjs.org/@types%2fmulter 138ms (cache miss)
+22 silly packumentCache full:https://registry.npmjs.org/@types%2fmulter set size:undefined disposed:false
+23 silly placeDep ROOT @types/multer@1.4.13 OK for: olim-backend@0.1.0 want: ^1.4.12
+24 silly placeDep ROOT multer@1.4.5-lts.2 OK for: olim-backend@0.1.0 want: ^1.4.5-lts.1
+25 silly fetch manifest xtend@^4.0.0
+26 silly packumentCache full:https://registry.npmjs.org/xtend cache-miss
+27 silly fetch manifest busboy@^1.0.0
+28 silly packumentCache full:https://registry.npmjs.org/busboy cache-miss
+29 silly fetch manifest mkdirp@^0.5.4
+30 silly packumentCache full:https://registry.npmjs.org/mkdirp cache-miss
+31 silly fetch manifest append-field@^1.0.0
+32 silly packumentCache full:https://registry.npmjs.org/append-field cache-miss
+33 silly fetch manifest concat-stream@^1.5.2
+34 silly packumentCache full:https://registry.npmjs.org/concat-stream cache-miss
+35 http fetch GET 200 https://registry.npmjs.org/xtend 103ms (cache miss)
+36 silly packumentCache full:https://registry.npmjs.org/xtend set size:undefined disposed:false
+37 http fetch GET 200 https://registry.npmjs.org/busboy 114ms (cache miss)
+38 silly packumentCache full:https://registry.npmjs.org/busboy set size:undefined disposed:false
+39 http fetch GET 200 https://registry.npmjs.org/append-field 349ms (cache miss)
+40 silly packumentCache full:https://registry.npmjs.org/append-field set size:undefined disposed:false
+41 http fetch GET 200 https://registry.npmjs.org/mkdirp 350ms (cache miss)
+42 silly packumentCache full:https://registry.npmjs.org/mkdirp set size:undefined disposed:false
+43 http fetch GET 200 https://registry.npmjs.org/concat-stream 364ms (cache miss)
+44 silly packumentCache full:https://registry.npmjs.org/concat-stream set size:undefined disposed:false
+45 silly placeDep ROOT append-field@1.0.0 OK for: multer@1.4.5-lts.2 want: ^1.0.0
+46 silly placeDep ROOT busboy@1.6.0 OK for: multer@1.4.5-lts.2 want: ^1.0.0
+47 silly placeDep ROOT concat-stream@1.6.2 OK for: multer@1.4.5-lts.2 want: ^1.5.2
+48 silly placeDep ROOT mkdirp@0.5.6 OK for: multer@1.4.5-lts.2 want: ^0.5.4
+49 silly placeDep ROOT xtend@4.0.2 OK for: multer@1.4.5-lts.2 want: ^4.0.0
+50 silly fetch manifest streamsearch@^1.1.0
+51 silly packumentCache full:https://registry.npmjs.org/streamsearch cache-miss
+52 silly fetch manifest buffer-from@^1.0.0
+53 silly packumentCache full:https://registry.npmjs.org/buffer-from cache-miss
+54 silly fetch manifest readable-stream@^2.2.2
+55 silly packumentCache full:https://registry.npmjs.org/readable-stream cache-miss
+56 silly fetch manifest typedarray@^0.0.6
+57 silly packumentCache full:https://registry.npmjs.org/typedarray cache-miss
+58 silly fetch manifest minimist@^1.2.6
+59 silly packumentCache full:https://registry.npmjs.org/minimist cache-miss
+60 http fetch GET 200 https://registry.npmjs.org/readable-stream 113ms (cache miss)
+61 silly packumentCache full:https://registry.npmjs.org/readable-stream set size:undefined disposed:false
+62 http fetch GET 200 https://registry.npmjs.org/typedarray 116ms (cache miss)
+63 silly packumentCache full:https://registry.npmjs.org/typedarray set size:undefined disposed:false
+64 http fetch GET 200 https://registry.npmjs.org/buffer-from 118ms (cache miss)
+65 silly packumentCache full:https://registry.npmjs.org/buffer-from set size:undefined disposed:false
+66 http fetch GET 200 https://registry.npmjs.org/streamsearch 119ms (cache miss)
+67 silly packumentCache full:https://registry.npmjs.org/streamsearch set size:undefined disposed:false
+68 http fetch GET 200 https://registry.npmjs.org/minimist 119ms (cache miss)
+69 silly packumentCache full:https://registry.npmjs.org/minimist set size:undefined disposed:false
+70 silly placeDep ROOT streamsearch@1.1.0 OK for: busboy@1.6.0 want: ^1.1.0
+71 silly placeDep ROOT buffer-from@1.1.2 OK for: concat-stream@1.6.2 want: ^1.0.0
+72 silly placeDep node_modules/concat-stream readable-stream@2.3.8 OK for: concat-stream@1.6.2 want: ^2.2.2
+73 silly placeDep ROOT typedarray@0.0.6 OK for: concat-stream@1.6.2 want: ^0.0.6
+74 silly fetch manifest isarray@~1.0.0
+75 silly packumentCache full:https://registry.npmjs.org/isarray cache-miss
+76 silly fetch manifest safe-buffer@~5.1.1
+77 silly packumentCache full:https://registry.npmjs.org/safe-buffer cache-miss
+78 silly fetch manifest core-util-is@~1.0.0
+79 silly packumentCache full:https://registry.npmjs.org/core-util-is cache-miss
+80 silly fetch manifest string_decoder@~1.1.1
+81 silly packumentCache full:https://registry.npmjs.org/string_decoder cache-miss
+82 silly fetch manifest process-nextick-args@~2.0.0
+83 silly packumentCache full:https://registry.npmjs.org/process-nextick-args cache-miss
+84 http fetch GET 200 https://registry.npmjs.org/isarray 98ms (cache miss)
+85 silly packumentCache full:https://registry.npmjs.org/isarray set size:undefined disposed:false
+86 http fetch GET 200 https://registry.npmjs.org/core-util-is 101ms (cache miss)
+87 silly packumentCache full:https://registry.npmjs.org/core-util-is set size:undefined disposed:false
+88 http fetch GET 200 https://registry.npmjs.org/safe-buffer 102ms (cache miss)
+89 silly packumentCache full:https://registry.npmjs.org/safe-buffer set size:undefined disposed:false
+90 http fetch GET 200 https://registry.npmjs.org/string_decoder 107ms (cache miss)
+91 silly packumentCache full:https://registry.npmjs.org/string_decoder set size:undefined disposed:false
+92 http fetch GET 200 https://registry.npmjs.org/process-nextick-args 131ms (cache miss)
+93 silly packumentCache full:https://registry.npmjs.org/process-nextick-args set size:undefined disposed:false
+94 silly placeDep ROOT minimist@1.2.8 OK for: mkdirp@0.5.6 want: ^1.2.6
+95 silly placeDep ROOT core-util-is@1.0.3 OK for: readable-stream@2.3.8 want: ~1.0.0
+96 silly placeDep ROOT isarray@1.0.0 OK for: readable-stream@2.3.8 want: ~1.0.0
+97 silly placeDep ROOT process-nextick-args@2.0.1 OK for: readable-stream@2.3.8 want: ~2.0.0
+98 silly placeDep node_modules/concat-stream safe-buffer@5.1.2 OK for: readable-stream@2.3.8 want: ~5.1.1
+99 silly placeDep node_modules/concat-stream string_decoder@1.1.1 OK for: readable-stream@2.3.8 want: ~1.1.1
+100 warn EBADENGINE Unsupported engine {
+100 warn EBADENGINE   package: 'olim-backend@0.1.0',
+100 warn EBADENGINE   required: { node: '20.x' },
+100 warn EBADENGINE   current: { node: 'v22.16.0', npm: '10.9.2' }
+100 warn EBADENGINE }
+101 silly reify moves {}
+102 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/win32-x64
+103 silly reify mark deleted [
+103 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/win32-x64'
+103 silly reify ]
+104 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/win32-ia32
+105 silly reify mark deleted [
+105 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/win32-ia32'
+105 silly reify ]
+106 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/win32-arm64
+107 silly reify mark deleted [
+107 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/win32-arm64'
+107 silly reify ]
+108 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/sunos-x64
+109 silly reify mark deleted [
+109 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/sunos-x64'
+109 silly reify ]
+110 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/openharmony-arm64
+111 silly reify mark deleted [
+111 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/openharmony-arm64'
+111 silly reify ]
+112 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/openbsd-x64
+113 silly reify mark deleted [
+113 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/openbsd-x64'
+113 silly reify ]
+114 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/openbsd-arm64
+115 silly reify mark deleted [
+115 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/openbsd-arm64'
+115 silly reify ]
+116 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/netbsd-x64
+117 silly reify mark deleted [
+117 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/netbsd-x64'
+117 silly reify ]
+118 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/netbsd-arm64
+119 silly reify mark deleted [
+119 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/netbsd-arm64'
+119 silly reify ]
+120 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-x64
+121 silly reify mark deleted [
+121 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-x64'
+121 silly reify ]
+122 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-s390x
+123 silly reify mark deleted [
+123 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-s390x'
+123 silly reify ]
+124 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-riscv64
+125 silly reify mark deleted [
+125 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-riscv64'
+125 silly reify ]
+126 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-ppc64
+127 silly reify mark deleted [
+127 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-ppc64'
+127 silly reify ]
+128 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-mips64el
+129 silly reify mark deleted [
+129 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-mips64el'
+129 silly reify ]
+130 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-loong64
+131 silly reify mark deleted [
+131 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-loong64'
+131 silly reify ]
+132 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-ia32
+133 silly reify mark deleted [
+133 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-ia32'
+133 silly reify ]
+134 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-arm64
+135 silly reify mark deleted [
+135 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-arm64'
+135 silly reify ]
+136 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-arm
+137 silly reify mark deleted [
+137 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/linux-arm'
+137 silly reify ]
+138 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/freebsd-x64
+139 silly reify mark deleted [
+139 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/freebsd-x64'
+139 silly reify ]
+140 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/freebsd-arm64
+141 silly reify mark deleted [
+141 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/freebsd-arm64'
+141 silly reify ]
+142 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/darwin-x64
+143 silly reify mark deleted [
+143 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/darwin-x64'
+143 silly reify ]
+144 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/android-x64
+145 silly reify mark deleted [
+145 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/android-x64'
+145 silly reify ]
+146 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/android-arm64
+147 silly reify mark deleted [
+147 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/android-arm64'
+147 silly reify ]
+148 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/android-arm
+149 silly reify mark deleted [
+149 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/android-arm'
+149 silly reify ]
+150 verbose reify failed optional dependency /Users/olimservice/olim_backend_prod/node_modules/@esbuild/aix-ppc64
+151 silly reify mark deleted [
+151 silly reify   '/Users/olimservice/olim_backend_prod/node_modules/@esbuild/aix-ppc64'
+151 silly reify ]
+152 http cache isarray@https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz 0ms (cache hit)
+153 http cache buffer-from@https://registry.npmjs.org/buffer-from/-/buffer-from-1.1.2.tgz 0ms (cache hit)
+154 http cache typedarray@https://registry.npmjs.org/typedarray/-/typedarray-0.0.6.tgz 0ms (cache hit)
+155 http cache streamsearch@https://registry.npmjs.org/streamsearch/-/streamsearch-1.1.0.tgz 0ms (cache hit)
+156 http cache process-nextick-args@https://registry.npmjs.org/process-nextick-args/-/process-nextick-args-2.0.1.tgz 0ms (cache hit)
+157 http cache core-util-is@https://registry.npmjs.org/core-util-is/-/core-util-is-1.0.3.tgz 0ms (cache hit)
+158 http cache xtend@https://registry.npmjs.org/xtend/-/xtend-4.0.2.tgz 0ms (cache hit)
+159 http cache minimist@https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz 0ms (cache hit)
+160 http cache concat-stream@https://registry.npmjs.org/concat-stream/-/concat-stream-1.6.2.tgz 0ms (cache hit)
+161 http cache busboy@https://registry.npmjs.org/busboy/-/busboy-1.6.0.tgz 1ms (cache hit)
+162 http cache mkdirp@https://registry.npmjs.org/mkdirp/-/mkdirp-0.5.6.tgz 0ms (cache hit)
+163 http cache multer@https://registry.npmjs.org/multer/-/multer-1.4.5-lts.2.tgz 0ms (cache hit)
+164 http cache append-field@https://registry.npmjs.org/append-field/-/append-field-1.0.0.tgz 0ms (cache hit)
+165 http cache @types/multer@https://registry.npmjs.org/@types/multer/-/multer-1.4.13.tgz 0ms (cache hit)
+166 http cache string_decoder@https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz 0ms (cache hit)
+167 http cache safe-buffer@https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz 0ms (cache hit)
+168 http cache readable-stream@https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz 0ms (cache hit)
+169 silly tarball no local data for isarray@https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz. Extracting by manifest.
+170 silly tarball no local data for buffer-from@https://registry.npmjs.org/buffer-from/-/buffer-from-1.1.2.tgz. Extracting by manifest.
+171 silly tarball no local data for typedarray@https://registry.npmjs.org/typedarray/-/typedarray-0.0.6.tgz. Extracting by manifest.
+172 silly tarball no local data for streamsearch@https://registry.npmjs.org/streamsearch/-/streamsearch-1.1.0.tgz. Extracting by manifest.
+173 silly tarball no local data for process-nextick-args@https://registry.npmjs.org/process-nextick-args/-/process-nextick-args-2.0.1.tgz. Extracting by manifest.
+174 silly tarball no local data for core-util-is@https://registry.npmjs.org/core-util-is/-/core-util-is-1.0.3.tgz. Extracting by manifest.
+175 silly tarball no local data for xtend@https://registry.npmjs.org/xtend/-/xtend-4.0.2.tgz. Extracting by manifest.
+176 silly tarball no local data for minimist@https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz. Extracting by manifest.
+177 silly tarball no local data for concat-stream@https://registry.npmjs.org/concat-stream/-/concat-stream-1.6.2.tgz. Extracting by manifest.
+178 silly tarball no local data for busboy@https://registry.npmjs.org/busboy/-/busboy-1.6.0.tgz. Extracting by manifest.
+179 silly tarball no local data for mkdirp@https://registry.npmjs.org/mkdirp/-/mkdirp-0.5.6.tgz. Extracting by manifest.
+180 silly tarball no local data for multer@https://registry.npmjs.org/multer/-/multer-1.4.5-lts.2.tgz. Extracting by manifest.
+181 silly tarball no local data for append-field@https://registry.npmjs.org/append-field/-/append-field-1.0.0.tgz. Extracting by manifest.
+182 silly tarball no local data for @types/multer@https://registry.npmjs.org/@types/multer/-/multer-1.4.13.tgz. Extracting by manifest.
+183 silly tarball no local data for string_decoder@https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz. Extracting by manifest.
+184 silly tarball no local data for safe-buffer@https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz. Extracting by manifest.
+185 silly tarball no local data for readable-stream@https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz. Extracting by manifest.
+186 http fetch GET 200 https://registry.npmjs.org/isarray/-/isarray-1.0.0.tgz 105ms (cache miss)
+187 http fetch GET 200 https://registry.npmjs.org/streamsearch/-/streamsearch-1.1.0.tgz 113ms (cache miss)
+188 http fetch GET 200 https://registry.npmjs.org/typedarray/-/typedarray-0.0.6.tgz 114ms (cache miss)
+189 http fetch GET 200 https://registry.npmjs.org/process-nextick-args/-/process-nextick-args-2.0.1.tgz 114ms (cache miss)
+190 http fetch GET 200 https://registry.npmjs.org/buffer-from/-/buffer-from-1.1.2.tgz 115ms (cache miss)
+191 http fetch GET 200 https://registry.npmjs.org/safe-buffer/-/safe-buffer-5.1.2.tgz 204ms (cache miss)
+192 http fetch GET 200 https://registry.npmjs.org/readable-stream/-/readable-stream-2.3.8.tgz 213ms (cache miss)
+193 http fetch GET 200 https://registry.npmjs.org/core-util-is/-/core-util-is-1.0.3.tgz 327ms (cache miss)
+194 http fetch GET 200 https://registry.npmjs.org/xtend/-/xtend-4.0.2.tgz 366ms (cache miss)
+195 http fetch GET 200 https://registry.npmjs.org/string_decoder/-/string_decoder-1.1.1.tgz 366ms (cache miss)
+196 http fetch GET 200 https://registry.npmjs.org/multer/-/multer-1.4.5-lts.2.tgz 369ms (cache miss)
+197 warn deprecated multer@1.4.5-lts.2: Multer 1.x is impacted by a number of vulnerabilities, which have been patched in 2.x. You should upgrade to the latest 2.x version.
+198 http fetch GET 200 https://registry.npmjs.org/mkdirp/-/mkdirp-0.5.6.tgz 370ms (cache miss)
+199 http fetch GET 200 https://registry.npmjs.org/concat-stream/-/concat-stream-1.6.2.tgz 371ms (cache miss)
+200 http fetch GET 200 https://registry.npmjs.org/minimist/-/minimist-1.2.8.tgz 371ms (cache miss)
+201 http fetch GET 200 https://registry.npmjs.org/append-field/-/append-field-1.0.0.tgz 380ms (cache miss)
+202 http fetch GET 200 https://registry.npmjs.org/busboy/-/busboy-1.6.0.tgz 399ms (cache miss)
+203 http fetch GET 200 https://registry.npmjs.org/@types/multer/-/multer-1.4.13.tgz 526ms (cache miss)
+204 silly ADD node_modules/process-nextick-args
+205 silly ADD node_modules/isarray
+206 silly ADD node_modules/core-util-is
+207 silly ADD node_modules/minimist
+208 silly ADD node_modules/typedarray
+209 silly ADD node_modules/buffer-from
+210 silly ADD node_modules/streamsearch
+211 silly ADD node_modules/xtend
+212 silly ADD node_modules/mkdirp
+213 silly ADD node_modules/concat-stream
+214 silly ADD node_modules/concat-stream/node_modules/string_decoder
+215 silly ADD node_modules/concat-stream/node_modules/safe-buffer
+216 silly ADD node_modules/concat-stream/node_modules/readable-stream
+217 silly ADD node_modules/busboy
+218 silly ADD node_modules/append-field
+219 silly ADD node_modules/multer
+220 silly ADD node_modules/@types/multer
+221 silly ADD
+222 silly ADD
+223 silly ADD
+224 silly ADD
+225 silly ADD
+226 silly ADD
+227 silly ADD
+228 silly ADD
+229 silly ADD
+230 silly ADD
+231 silly ADD
+232 silly ADD
+233 silly ADD
+234 silly ADD
+235 silly ADD
+236 silly ADD
+237 silly ADD
+238 silly ADD
+239 silly ADD
+240 silly ADD
+241 silly ADD
+242 silly ADD
+243 silly ADD
+244 silly ADD
+245 silly ADD
+246 verbose cwd /Users/olimservice/olim_backend_prod
+247 verbose os Darwin 25.0.0
+248 verbose node v22.16.0
+249 verbose npm  v10.9.2
+250 notice
+250 notice New major version of npm available! 10.9.2 -> 11.7.0
+250 notice Changelog: https://github.com/npm/cli/releases/tag/v11.7.0
+250 notice To update run: npm install -g npm@11.7.0
+250 notice  { force: true, [Symbol(proc-log.meta)]: true }
+251 verbose exit 0
+252 info ok
