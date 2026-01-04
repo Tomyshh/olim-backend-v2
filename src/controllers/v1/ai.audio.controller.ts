@@ -8,8 +8,13 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-type MulterFile = Express.Multer.File;
-type TranscriptionRequest = AuthenticatedRequest & { file?: MulterFile; body: any };
+type UploadedFile = {
+  buffer: Buffer;
+  size: number;
+  originalname?: string;
+  mimetype?: string;
+};
+type TranscriptionRequest = AuthenticatedRequest & { file?: UploadedFile; body: any };
 
 export async function v1AudioTranscription(req: AuthenticatedRequest, res: Response): Promise<void> {
   // Auth obligatoire : si jamais le middleware n'a pas posé uid, on force 401 au format attendu
