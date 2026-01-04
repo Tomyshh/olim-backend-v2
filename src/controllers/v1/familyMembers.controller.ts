@@ -128,6 +128,31 @@ function stripUndefinedDeep<T>(value: T): T {
   return value;
 }
 
+async function resolveCardIdForBilling(params: {
+  db: ReturnType<typeof getFirestore>;
+  uid: string;
+  providedCardId: string;
+  memberData: Record<string, any>;
+}): Promise<string> {
+  const { db, uid, providedCardId, memberData } = params;
+  const fromMember = pickString(memberData?.selectedCardId);
+  if (providedCardId) return providedCardId;
+  if (fromMember) return fromMember;
+
+  // Fallback: carte par défaut (Payment credentials.isDefault == true)
+  const snap = await db
+    .collection('Clients')
+    .doc(uid)
+    .collection('Payment credentials')
+    .where('isDefault', '==', true)
+    .limit(1)
+    .get();
+  const doc = snap.docs[0];
+  if (doc) return doc.id;
+
+  throw new HttpError(400, 'payment.cardId requis (aucune carte par défaut / carte membre).');
+}
+
 function normalizePayload(body: any): { member: Record<string, any>; flags: Record<string, any>; payment: Record<string, any>; raw: any } {
   // PATCH legacy: { memberId, fields: { "First Name": "...", ... } }
   if (isPlainObject(body?.fields)) {
@@ -499,7 +524,12 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
 
   const data = (snap.data() || {}) as Record<string, any>;
   const status = pickString(data['Family Member Status']);
-  const age = typeof data.age === 'number' ? Number(data.age) : null;
+  const age =
+    typeof data.age === 'number'
+      ? Number(data.age)
+      : typeof data.Birthday === 'string'
+        ? computeAgeYearsFromBirthdayString(data.Birthday)
+        : null;
   const isAdult = age != null && Number.isFinite(age) && age >= 18;
   const normalized = normalizePayload(req.body || {});
   const cardIdFromPayload = pickString(
@@ -519,12 +549,10 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
 
   // Si majeur (hors conjoint) et service pas encore activé, déclencher le sale
   if (isAdult && !isConjoint(status) && data.serviceActive !== true) {
-    if (!cardIdFromPayload) {
-      throw new HttpError(400, 'payment.cardId requis pour réactiver un membre majeur.');
-    }
+    const cardId = await resolveCardIdForBilling({ db, uid, providedCardId: cardIdFromPayload, memberData: data });
 
     // Récupérer buyerKey depuis Payment credentials/{cardId}
-    const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardIdFromPayload).get();
+    const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
     if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
     const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
     if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
@@ -544,7 +572,7 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
 
     updates.serviceActive = true;
     updates.serviceActivationPaymentId = sale.salePaymeId;
-    updates.selectedCardId = cardIdFromPayload;
+    updates.selectedCardId = cardId;
     updates.serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
   }
 
