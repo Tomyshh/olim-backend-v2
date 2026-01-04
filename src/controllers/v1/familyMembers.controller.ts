@@ -510,6 +510,29 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
   res.json({ ok: true, memberId });
 }
 
+export async function v1DeleteFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const uid = req.uid!;
+  const memberId = pickString(req.params.id);
+  if (!memberId) throw new HttpError(400, 'Id manquant.');
+
+  // Sécurité: ne jamais supprimer le titulaire
+  if (memberId === 'account_owner') {
+    throw new HttpError(400, "Impossible de supprimer le titulaire du compte.");
+  }
+
+  const db = getFirestore();
+  const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+
+  await ref.delete();
+
+  // Recalculer pour retirer le supplément (cumulable) si ce membre contribuait
+  await recomputeAndApplyFamilyMonthlySupplement(uid);
+
+  res.json({ ok: true, memberId, deleted: true });
+}
+
 export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = req.uid!;
   const memberId = pickString(req.params.id);
