@@ -541,15 +541,26 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
     )
   );
 
+  // Idempotence: si déjà actif, rien à faire
+  if (data.isActive === true) {
+    res.json({ ok: true, memberId, alreadyActive: true });
+    return;
+  }
+
   const updates: Record<string, any> = {
-    isActive: true,
+    // on set isActive après le sale (voir plus bas)
     reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedAt: admin.firestore.FieldValue.serverTimestamp()
   };
 
-  // Si majeur (hors conjoint) et service pas encore activé, déclencher le sale
-  if (isAdult && !isConjoint(status) && data.serviceActive !== true) {
-    const cardId = await resolveCardIdForBilling({ db, uid, providedCardId: cardIdFromPayload, memberData: data });
+  // Contrat frontend: /activate doit prélever (sale) AVANT d'activer le membre.
+  // Règle: Conjoint = gratuit => pas de sale.
+  // On déclenche le sale si membre majeur (>=18) et non conjoint.
+  let salePaymeId: string | null = null;
+  if (isAdult && !isConjoint(status)) {
+    // Ici, on exige la cardId envoyée par le frontend (pas de fallback silencieux)
+    const cardId = cardIdFromPayload;
+    if (!cardId) throw new HttpError(400, 'cardId requis pour réactiver un membre majeur.');
 
     // Récupérer buyerKey depuis Payment credentials/{cardId}
     const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
@@ -569,19 +580,31 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
       description: `Réactivation membre famille (majeur) - ${pickString(data['First Name'])} ${pickString(data['Last Name'])}`.trim(),
       buyerKey
     });
+    salePaymeId = sale.salePaymeId;
 
     updates.serviceActive = true;
     updates.serviceActivationPaymentId = sale.salePaymeId;
     updates.selectedCardId = cardId;
     updates.serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+
+    // Pour que le supplément mensuel soit appliqué au moment de la réactivation
+    if (data.livesAtHome !== true) updates.livesAtHome = true;
   }
 
+  // Activer le membre après le sale (ou immédiatement si pas de sale requis)
+  updates.isActive = true;
   await ref.set(stripUndefinedDeep(updates), { merge: true });
 
   // Recalculer le supplément mensuel (si le membre est éligible)
   await recomputeAndApplyFamilyMonthlySupplement(uid);
 
-  res.json({ ok: true, memberId });
+  res.json({
+    ok: true,
+    memberId,
+    billing: {
+      sale: { attempted: isAdult && !isConjoint(status), salePaymeId }
+    }
+  });
 }
 
 export async function v1DeleteFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
