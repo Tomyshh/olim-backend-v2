@@ -6,22 +6,19 @@ export class HttpTimeoutError extends Error {
 }
 
 export async function fetchWithTimeout(
-  input: RequestInfo | URL,
-  init: RequestInit & { timeoutMs?: number } = {}
+  input: string | URL,
+  init: (RequestInit & { timeoutMs?: number }) = {}
 ): Promise<Response> {
-  const timeoutMs = typeof init.timeoutMs === 'number' ? init.timeoutMs : 0;
-  if (!timeoutMs || timeoutMs <= 0) {
-    // @ts-expect-error (timeoutMs est notre extension)
-    const { timeoutMs: _ignored, ...rest } = init;
+  const { timeoutMs, ...rest } = init;
+  const timeout = typeof timeoutMs === 'number' ? timeoutMs : 0;
+  if (!timeout || timeout <= 0) {
     return await fetch(input, rest);
   }
 
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  const t = setTimeout(() => ctrl.abort(), timeout);
 
   try {
-    // @ts-expect-error (timeoutMs est notre extension)
-    const { timeoutMs: _ignored, ...rest } = init;
     return await fetch(input, { ...rest, signal: ctrl.signal });
   } catch (e: any) {
     if (e?.name === 'AbortError') {

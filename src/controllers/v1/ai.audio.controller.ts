@@ -1,4 +1,4 @@
-import type { Response } from 'express';
+import type { Response as ExpressResponse } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { consumeRateLimit } from '../../services/rateLimit.service.js';
 import { runWithConcurrencyLimit } from '../../services/concurrencyLimit.service.js';
@@ -18,7 +18,7 @@ type UploadedFile = {
 };
 type TranscriptionRequest = AuthenticatedRequest & { file?: UploadedFile; body: any };
 
-export async function v1AudioTranscription(req: AuthenticatedRequest, res: Response): Promise<void> {
+export async function v1AudioTranscription(req: AuthenticatedRequest, res: ExpressResponse): Promise<void> {
   // Auth obligatoire : si jamais le middleware n'a pas posé uid, on force 401 au format attendu
   if (!req.uid) {
     res.status(401).json({ message: 'Vous devez être connecté.' });
@@ -74,9 +74,9 @@ export async function v1AudioTranscription(req: AuthenticatedRequest, res: Respo
     const timeoutMs = Number(process.env.OPENAI_AUDIO_TIMEOUT_MS || 30000);
     const waitTimeoutMs = Number(process.env.OPENAI_AUDIO_WAIT_TIMEOUT_MS || 5000);
 
-    let response: Response;
+    let openaiResponse: Awaited<ReturnType<typeof fetchWithTimeout>>;
     try {
-      response = await runWithConcurrencyLimit({
+      openaiResponse = await runWithConcurrencyLimit({
         key: 'openai:audio',
         limit: Number.isFinite(limit) && limit > 0 ? limit : 2,
         waitTimeoutMs: Number.isFinite(waitTimeoutMs) && waitTimeoutMs > 0 ? waitTimeoutMs : 5000,
@@ -102,27 +102,27 @@ export async function v1AudioTranscription(req: AuthenticatedRequest, res: Respo
       throw e;
     }
 
-    if (!response.ok) {
-      if (response.status === 429) {
+    if (!openaiResponse.ok) {
+      if (openaiResponse.status === 429) {
         res.status(429).json({ message: 'Trop de requêtes.' });
         return;
       }
-      if (response.status === 413) {
+      if (openaiResponse.status === 413) {
         res.status(413).json({ message: 'Fichier trop volumineux (max 25MB).' });
         return;
       }
-      if (response.status === 400) {
+      if (openaiResponse.status === 400) {
         res.status(400).json({ message: 'Fichier audio invalide.' });
         return;
       }
 
-      const bodyText = await response.text().catch(() => '');
-      console.error('Erreur Whisper:', response.status, bodyText);
+      const bodyText = await openaiResponse.text().catch(() => '');
+      console.error('Erreur Whisper:', openaiResponse.status, bodyText);
       res.status(500).json({ message: 'Erreur transcription.' });
       return;
     }
 
-    const data: any = await response.json();
+    const data: any = await openaiResponse.json();
     const text = data?.text;
     res.status(200).json({ text: typeof text === 'string' ? text : '' });
   } catch (err) {
