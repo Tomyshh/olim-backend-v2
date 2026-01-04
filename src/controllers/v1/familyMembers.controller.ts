@@ -525,12 +525,30 @@ export async function v1DeleteFamilyMember(req: AuthenticatedRequest, res: Respo
   const snap = await ref.get();
   if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
 
-  await ref.delete();
+  const data = (snap.data() || {}) as Record<string, any>;
+  const hasActiveService = data.serviceActive === true || Boolean(pickString(data.serviceActivationPaymentId));
+
+  // Règle demandée:
+  // - si le membre a un service actif => on NE supprime pas (audit/trace), on désactive (soft delete)
+  // - sinon => suppression complète (hard delete)
+  if (hasActiveService) {
+    await ref.set(
+      {
+        isActive: false,
+        isDeleted: true,
+        deletedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      },
+      { merge: true }
+    );
+  } else {
+    await ref.delete();
+  }
 
   // Recalculer pour retirer le supplément (cumulable) si ce membre contribuait
   await recomputeAndApplyFamilyMonthlySupplement(uid);
 
-  res.json({ ok: true, memberId, deleted: true });
+  res.json({ ok: true, memberId, deleted: !hasActiveService, softDeleted: hasActiveService });
 }
 
 export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, res: Response): Promise<void> {
