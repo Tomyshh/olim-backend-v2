@@ -497,16 +497,62 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
   const snap = await ref.get();
   if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
 
-  await ref.set(
-    {
-      isActive: true,
-      reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    },
-    { merge: true }
+  const data = (snap.data() || {}) as Record<string, any>;
+  const status = pickString(data['Family Member Status']);
+  const age = typeof data.age === 'number' ? Number(data.age) : null;
+  const isAdult = age != null && Number.isFinite(age) && age >= 18;
+  const normalized = normalizePayload(req.body || {});
+  const cardIdFromPayload = pickString(
+    pickFromMany(
+      normalized.payment?.cardId,
+      (req.body as any)?.payment?.cardId,
+      (req.body as any)?.cardId,
+      (req.body as any)?.selectedCardId
+    )
   );
 
+  const updates: Record<string, any> = {
+    isActive: true,
+    reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+
+  // Si majeur (hors conjoint) et service pas encore activé, déclencher le sale
+  if (isAdult && !isConjoint(status) && data.serviceActive !== true) {
+    if (!cardIdFromPayload) {
+      throw new HttpError(400, 'payment.cardId requis pour réactiver un membre majeur.');
+    }
+
+    // Récupérer buyerKey depuis Payment credentials/{cardId}
+    const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardIdFromPayload).get();
+    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+    const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+
+    const pricing = await getFamilyMemberPricingNis();
+    const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
+    if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
+      throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+    }
+
+    // Débit one-shot lors de la réactivation (membre majeur)
+    const sale = await paymeGenerateSale({
+      priceInCents: ponctuallyPriceInCents,
+      description: `Réactivation membre famille (majeur) - ${pickString(data['First Name'])} ${pickString(data['Last Name'])}`.trim(),
+      buyerKey
+    });
+
+    updates.serviceActive = true;
+    updates.serviceActivationPaymentId = sale.salePaymeId;
+    updates.selectedCardId = cardIdFromPayload;
+    updates.serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
+  await ref.set(stripUndefinedDeep(updates), { merge: true });
+
+  // Recalculer le supplément mensuel (si le membre est éligible)
   await recomputeAndApplyFamilyMonthlySupplement(uid);
+
   res.json({ ok: true, memberId });
 }
 
