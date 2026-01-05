@@ -42,6 +42,7 @@ import v1AiAudioRoutes from './routes/v1/ai.audio.routes.js';
 import v1JobsRoutes from './routes/v1/jobs.routes.js';
 import { startQueueWorker } from './services/queue.service.js';
 import { sendTwilioMessage } from './services/twilio.service.js';
+import { startDailyClientActivityScheduler } from './services/clientActivity.service.js';
 import { closeRedisClient } from './config/redis.js';
 
 const app = express();
@@ -49,6 +50,9 @@ const PORT = process.env.PORT || 3000;
 
 // Initialize Firebase Admin
 initializeFirebase();
+
+// Job quotidien (optionnel) : calcule l’activité des clients à 03:00
+startDailyClientActivityScheduler();
 
 // Middleware globaux
 // Render (reverse proxy) : nécessaire pour que req.ip soit correct (rate-limit, logs)

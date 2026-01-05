@@ -11,6 +11,16 @@ export interface Client {
   registrationCompletedAt?: any;
   createdVia?: string;
   createdAt?: any;
+  activity?: {
+    version: 1;
+    score: number; // 0..100
+    status: 'inactive' | 'low' | 'medium' | 'high';
+    lastRequestAt: any; // Date | Timestamp | null
+    daysSinceLastRequest: number | null;
+    requests30d: number;
+    requests90d: number;
+    computedAt: any;
+  };
   Membership?: string; // Legacy
   'Membership Plan'?: string; // Legacy
   'IsraCard Sub Code'?: string; // Legacy
