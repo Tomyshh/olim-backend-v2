@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { admin, getFirestore } from '../config/firebase.js';
 import { runWithConcurrencyLimit } from './concurrencyLimit.service.js';
 
-type ClientActivityStatus = 'inactive' | 'low' | 'medium' | 'high';
+type ClientActivityStatus = 'inactive' | 'low' | 'medium' | 'high' | 'very_high';
 
 export type ClientActivitySnapshot = {
   version: 1;
@@ -10,6 +10,8 @@ export type ClientActivitySnapshot = {
   status: ClientActivityStatus;
   lastRequestAt: Date | null;
   daysSinceLastRequest: number | null;
+  currentMonthRequests: number;
+  monthly_average: number; // moyenne / jour sur le mois courant (jour-à-date)
   requests30d: number;
   requests90d: number;
   computedAt: FirebaseFirestore.FieldValue;
@@ -56,6 +58,10 @@ function daysBetween(now: Date, past: Date): number {
   return Math.floor(ms / (24 * 60 * 60 * 1000));
 }
 
+function monthStartLocal(now: Date): Date {
+  return new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+}
+
 function computeActivity(params: { now: Date; lastRequestAt: Date | null; requests30d: number; requests90d: number }): Omit<
   ClientActivitySnapshot,
   'computedAt'
@@ -66,25 +72,11 @@ function computeActivity(params: { now: Date; lastRequestAt: Date | null; reques
   const requests30d = Math.max(0, Math.trunc(params.requests30d || 0));
   const requests90d = Math.max(0, Math.trunc(params.requests90d || 0));
 
-  // Score simple et interprétable:
-  // - 60 points max pour la récence (perd 2 points par jour)
-  // - 40 points max pour le volume (4 points par requête sur 30j, cap 10 requêtes)
-  const scoreRecency = daysSince == null ? 0 : Math.max(0, 60 - daysSince * 2);
-  const scoreVolume = Math.min(40, requests30d * 4);
-  const score = clampInt(scoreRecency + scoreVolume, 0, 100);
-
-  let status: ClientActivityStatus = 'inactive';
-  if (daysSince == null) {
-    status = 'inactive';
-  } else if (daysSince > 90) {
-    status = 'inactive';
-  } else if (score >= 80) {
-    status = 'high';
-  } else if (score >= 50) {
-    status = 'medium';
-  } else {
-    status = 'low';
-  }
+  // NOTE: le statut est basé sur le nombre de demandes sur le mois courant.
+  // Ici on renvoie uniquement les métriques de base, et on calcule le statut/score
+  // dans `finalizeActivityWithMonthlyStats` une fois `currentMonthRequests` connu.
+  const score = 0;
+  const status: ClientActivityStatus = 'inactive';
 
   return {
     version: 1,
@@ -92,8 +84,44 @@ function computeActivity(params: { now: Date; lastRequestAt: Date | null; reques
     status,
     lastRequestAt,
     daysSinceLastRequest: daysSince,
+    currentMonthRequests: 0,
+    monthly_average: 0,
     requests30d,
     requests90d
+  };
+}
+
+function finalizeActivityWithMonthlyStats(params: {
+  base: Omit<ClientActivitySnapshot, 'computedAt'>;
+  currentMonthRequests: number;
+  now: Date;
+}): Omit<ClientActivitySnapshot, 'computedAt'> {
+  const currentMonthRequests = Math.max(0, Math.trunc(params.currentMonthRequests || 0));
+  const dayOfMonth = Math.max(1, params.now.getDate());
+  const monthly_average = Number((currentMonthRequests / dayOfMonth).toFixed(4));
+
+  // Score: mapping simple 0..14+ req/mois -> 0..100
+  const score = clampInt(Math.min(100, (currentMonthRequests / 14) * 100), 0, 100);
+
+  // 5 statuts (demandes/mois):
+  // - inactive: 0
+  // - low: 1..4
+  // - medium: 5..8 (donc >4 et <=8)
+  // - high: 9..14 (donc >8 et <=14)
+  // - very_high: 15+ (donc >14)
+  let status: ClientActivityStatus = 'inactive';
+  if (currentMonthRequests === 0) status = 'inactive';
+  else if (currentMonthRequests <= 4) status = 'low';
+  else if (currentMonthRequests <= 8) status = 'medium';
+  else if (currentMonthRequests <= 14) status = 'high';
+  else status = 'very_high';
+
+  return {
+    ...params.base,
+    score,
+    status,
+    currentMonthRequests,
+    monthly_average
   };
 }
 
@@ -132,15 +160,22 @@ export async function computeClientActivityForClient(params: {
   const requestsRef = clientRef.collection('Requests');
   const from30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const from90 = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+  const fromMonth = monthStartLocal(now);
 
   const lastSnap = await requestsRef.orderBy('Request Date', 'desc').limit(1).get();
   const lastRequestAt = lastSnap.empty ? null : toDateOrNull(lastSnap.docs[0]?.get('Request Date'));
 
   const q30 = requestsRef.where('Request Date', '>=', from30);
   const q90 = requestsRef.where('Request Date', '>=', from90);
-  const [requests30d, requests90d] = await Promise.all([countQuery(q30), countQuery(q90)]);
+  const qMonth = requestsRef.where('Request Date', '>=', fromMonth);
+  const [requests30d, requests90d, currentMonthRequests] = await Promise.all([
+    countQuery(q30),
+    countQuery(q90),
+    countQuery(qMonth)
+  ]);
 
-  const activity = computeActivity({ now, lastRequestAt, requests30d, requests90d });
+  const base = computeActivity({ now, lastRequestAt, requests30d, requests90d });
+  const activity = finalizeActivityWithMonthlyStats({ base, currentMonthRequests, now });
   return { clientId, activity };
 }
 

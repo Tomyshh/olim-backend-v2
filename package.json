@@ -14,20 +14,22 @@
     "script:link-phone-to-email": "tsx scripts/link-phone-to-email.ts",
     "script:list-system-registration": "tsx scripts/list-system-registration-clients.ts",
     "script:upsert-membership-details": "tsx scripts/upsert-membership-details.ts",
-    "script:add-icinema-movies": "tsx scripts/add-icinema-movies.ts"
+    "script:add-icinema-movies": "tsx scripts/add-icinema-movies.ts",
+    "script:run-analytics-sync": "tsx scripts/run-analytics-sync.ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.89.0",
+    "@types/cors": "^2.8.17",
+    "@types/morgan": "^1.9.9",
+    "@types/multer": "^1.4.12",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "firebase-admin": "^12.5.0",
     "helmet": "^7.1.0",
-    "multer": "^1.4.5-lts.1",
     "morgan": "^1.10.0",
-    "redis": "^4.7.1",
-    "@types/cors": "^2.8.17",
-    "@types/morgan": "^1.9.9",
-    "@types/multer": "^1.4.12"
+    "multer": "^1.4.5-lts.1",
+    "redis": "^4.7.1"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

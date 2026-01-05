@@ -14,9 +14,11 @@ export interface Client {
   activity?: {
     version: 1;
     score: number; // 0..100
-    status: 'inactive' | 'low' | 'medium' | 'high';
+    status: 'inactive' | 'low' | 'medium' | 'high' | 'very_high';
     lastRequestAt: any; // Date | Timestamp | null
     daysSinceLastRequest: number | null;
+    currentMonthRequests: number;
+    monthly_average: number;
     requests30d: number;
     requests90d: number;
     computedAt: any;

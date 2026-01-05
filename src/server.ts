@@ -43,6 +43,7 @@ import v1JobsRoutes from './routes/v1/jobs.routes.js';
 import { startQueueWorker } from './services/queue.service.js';
 import { sendTwilioMessage } from './services/twilio.service.js';
 import { startDailyClientActivityScheduler } from './services/clientActivity.service.js';
+import { startAnalyticsSyncScheduler } from './services/analyticsSync.service.js';
 import { closeRedisClient } from './config/redis.js';
 
 const app = express();
@@ -53,6 +54,9 @@ initializeFirebase();
 
 // Job quotidien (optionnel) : calcule l’activité des clients à 03:00
 startDailyClientActivityScheduler();
+
+// Job analytique : synchronise les données vers Supabase à 04:00
+startAnalyticsSyncScheduler();
 
 // Middleware globaux
 // Render (reverse proxy) : nécessaire pour que req.ip soit correct (rate-limit, logs)
