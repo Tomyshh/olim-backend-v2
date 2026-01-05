@@ -29,5 +29,8 @@ router.post('/fcm/generate-token', adminController.generateFCMAccessToken);
 router.get('/remote-config', adminController.getRemoteConfig);
 router.put('/remote-config', adminController.publishRemoteConfig);
 
+// Firebase Auth (création users depuis le frontend admin)
+router.post('/firebase-auth/users', adminController.createFirebaseAuthUser);
+
 export default router;
 

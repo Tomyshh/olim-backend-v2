@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
-import { admin, getFirestore } from '../config/firebase.js';
+import { admin, getAuth, getFirestore } from '../config/firebase.js';
 
 // ⚠️ Toutes les routes admin sont stubées pour sécurité
 // TODO: Ajouter middleware vérification rôle admin
@@ -233,6 +233,74 @@ export async function createSystemAlert(req: AuthenticatedRequest, res: Response
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+/**
+ * Admin: crée un utilisateur Firebase Auth avec UID imposé.
+ * Endpoint: POST /api/admin/firebase-auth/users
+ * Body: { email, password, uid }
+ */
+export async function createFirebaseAuthUser(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { email, password, uid } = (req.body || {}) as {
+      email?: unknown;
+      password?: unknown;
+      uid?: unknown;
+    };
+
+    if (!isNonEmptyString(email) || !isNonEmptyString(password) || !isNonEmptyString(uid)) {
+      res.status(400).json({ message: 'invalid-argument: email/password/uid manquants ou invalides' });
+      return;
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedUid = uid.trim();
+
+    // Validation minimale (Firebase refera ses propres checks)
+    if (normalizedUid.length > 128) {
+      res.status(400).json({ message: 'invalid-argument: uid trop long (max 128)' });
+      return;
+    }
+
+    const auth = getAuth();
+    const user = await auth.createUser({
+      uid: normalizedUid,
+      email: normalizedEmail,
+      password: password
+    });
+
+    res.status(200).json({ uid: user.uid, email: user.email || normalizedEmail });
+  } catch (error: any) {
+    const code = String(error?.code || '');
+
+    // Conflits attendus
+    if (code === 'auth/email-already-exists') {
+      res.status(409).json({ message: 'email-already-exists' });
+      return;
+    }
+    if (code === 'auth/uid-already-exists') {
+      res.status(409).json({ message: 'uid-already-exists' });
+      return;
+    }
+
+    // Erreurs de validation Firebase
+    if (
+      code === 'auth/invalid-email' ||
+      code === 'auth/invalid-password' ||
+      code === 'auth/invalid-uid' ||
+      code === 'auth/argument-error'
+    ) {
+      res.status(400).json({ message: 'invalid-argument: email/password/uid manquants ou invalides' });
+      return;
+    }
+
+    console.error('Firebase Auth: createUser failed', { code, message: error?.message || String(error) });
+    res.status(500).json({ message: 'internal' });
   }
 }
 
