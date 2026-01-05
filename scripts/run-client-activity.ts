@@ -1,11 +1,15 @@
 import 'dotenv/config';
 import { initializeFirebase } from '../src/config/firebase.js';
-import { computeClientActivityForClient, writeClientActivityForClient } from '../src/services/clientActivity.service.js';
+import { computeClientActivityForClient, writeClientActivityForClient, runDailyClientActivityJob } from '../src/services/clientActivity.service.js';
 
 function pickArg(name: string): string {
   const idx = process.argv.findIndex((x) => x === `--${name}`);
   if (idx >= 0) return String(process.argv[idx + 1] || '').trim();
   return '';
+}
+
+function hasFlag(name: string): boolean {
+  return process.argv.includes(`--${name}`);
 }
 
 async function main(): Promise<void> {
@@ -15,9 +19,13 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
+  const runAll = hasFlag('all') || process.env.RUN_ALL === 'true';
   const clientId = pickArg('clientId') || String(process.env.CLIENT_ID || '').trim();
-  if (!clientId) {
-    console.error('clientId manquant. Utilise --clientId <uid> ou CLIENT_ID=<uid>.');
+
+  if (!runAll && !clientId) {
+    console.error('Usage:');
+    console.error('  - Un seul client: --clientId <uid> ou CLIENT_ID=<uid>');
+    console.error('  - Tous les clients: --all ou RUN_ALL=true');
     process.exit(2);
   }
 
@@ -26,6 +34,28 @@ async function main(): Promise<void> {
 
   initializeFirebase();
 
+  if (runAll) {
+    console.log('[client-activity] Lancement du job complet sur tous les clients...');
+    if (dryRun) {
+      console.error('[client-activity] ERREUR: Le mode --all nécessite WRITE=true (pas de dry-run pour le job complet).');
+      process.exit(2);
+    }
+    const result = await runDailyClientActivityJob();
+    if (result) {
+      console.log('[client-activity] Job terminé:', {
+        runId: result.runId,
+        clientsScanned: result.clientsScanned,
+        clientsUpdated: result.clientsUpdated,
+        clientsFailed: result.clientsFailed,
+        durationMs: result.finishedAt.getTime() - result.startedAt.getTime()
+      });
+    } else {
+      console.log('[client-activity] Job ignoré (déjà en cours ou verrouillé)');
+    }
+    return;
+  }
+
+  // Mode single client
   const { activity } = await computeClientActivityForClient({ clientId });
 
   console.log('[client-activity] computed', {
