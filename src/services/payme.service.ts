@@ -1,5 +1,6 @@
 import { HttpError } from '../utils/errors.js';
 import { runWithConcurrencyLimit } from './concurrencyLimit.service.js';
+import { getOrSetJsonWithLock } from './cache.service.js';
 
 type PaymeCaptureBuyerTokenResult = {
   buyerKey: string;
@@ -10,6 +11,12 @@ type PaymeCaptureBuyerTokenResult = {
 type PaymeSubscriptionResult = {
   subCode: number | string;
   subID: string;
+};
+
+export type PaymeSubscriptionDetails = {
+  subCode: number | string;
+  subStatus: number | null;
+  raw?: any;
 };
 
 function getPaymeBaseUrl(): string {
@@ -121,6 +128,89 @@ async function paymeRequestJson(
   } finally {
     clearTimeout(t);
   }
+}
+
+function coerceSubCode(value: unknown): number | string | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const trimmed = value.trim();
+    const n = Number(trimmed);
+    if (Number.isFinite(n) && String(n) === trimmed) return n;
+    return trimmed;
+  }
+  return null;
+}
+
+function pickSubStatusFromGetSubscriptionsResponse(json: any, subCode: number | string): number | null {
+  const items = Array.isArray(json?.items) ? (json.items as any[]) : null;
+  const first = items && items.length > 0 ? items[0] : null;
+
+  // Priorité: item correspondant au code demandé
+  const match =
+    items?.find((it) => {
+      const code = it?.sub_payme_code ?? it?.subCode ?? it?.sub_code;
+      const coerced = coerceSubCode(code);
+      return coerced != null && String(coerced) === String(subCode);
+    }) ?? first;
+
+  const raw = match?.sub_status ?? match?.subStatus ?? json?.sub_status ?? json?.subStatus;
+  const n = typeof raw === 'string' ? Number(raw) : typeof raw === 'number' ? raw : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * PayMe: POST /api/get-subscriptions
+ * Body: { seller_payme_id, sub_payme_code }
+ * Retour: items[] avec sub_status (statut abonnement)
+ */
+export async function paymeGetSubscriptionDetails(params: {
+  subCode: number | string;
+  /**
+   * Optionnel: si vous avez plusieurs sellers. Par défaut: PAYME_SELLER_KEY
+   */
+  sellerPaymeId?: string;
+}): Promise<PaymeSubscriptionDetails | null> {
+  const subCode = coerceSubCode(params.subCode);
+  if (subCode == null) return null;
+
+  const seller_payme_id = (params.sellerPaymeId || requirePaymeSellerKey()).trim();
+  if (!seller_payme_id) return null;
+
+  const cacheKey = `payme:get-subscriptions:${seller_payme_id}:${String(subCode)}`;
+  const ttlSeconds = Number(process.env.PAYME_SUBSCRIPTION_STATUS_TTL_SECONDS || 300);
+
+  const { value } = await getOrSetJsonWithLock({
+    key: cacheKey,
+    ttlSeconds: Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : 300,
+    lockTtlSeconds: 15,
+    waitScheduleMs: [150, 250, 400],
+    fn: async () => {
+      const { ok, status, json } = await paymePostJson(
+        'get-subscriptions',
+        {
+          seller_payme_id,
+          sub_payme_code: subCode
+        },
+        12000
+      );
+
+      // PayMe peut renvoyer HTTP 200 même en échec logique
+      if (!ok || status < 200 || status >= 300) {
+        return { ok: false, status, json };
+      }
+      return { ok: true, status, json };
+    }
+  });
+
+  if (!value?.ok) return null;
+
+  const subStatus = pickSubStatusFromGetSubscriptionsResponse(value.json, subCode);
+  return { subCode, subStatus, raw: value.json };
+}
+
+export async function paymeGetSubscriptionStatus(subCode: number | string): Promise<number | null> {
+  const details = await paymeGetSubscriptionDetails({ subCode });
+  return details?.subStatus ?? null;
 }
 
 export async function paymeCaptureBuyerToken(params: {
