@@ -33,6 +33,9 @@ export function rateLimitMiddleware(opt: RateLimitOptions) {
   const bypassOnError = opt.bypassOnError ?? true;
 
   return async (req: Request, res: Response, next: NextFunction) => {
+    // Si le client a déjà coupé la connexion, on évite de déclencher le parsing JSON plus loin.
+    if ((req as any).aborted || (req as any).destroyed) return;
+
     try {
       const key = buildKey(req, opt);
       const r = await consumeRateLimit({ key, limit: opt.limit, windowSeconds: opt.windowSeconds });
@@ -45,6 +48,7 @@ export function rateLimitMiddleware(opt: RateLimitOptions) {
       if (process.env.RATE_LIMIT_DEBUG === 'true') {
         res.setHeader('X-RateLimit-Remaining', String(r.remaining));
       }
+      if ((req as any).aborted || (req as any).destroyed || (res as any).writableEnded) return;
       next();
     } catch (err) {
       if (bypassOnError) return next();

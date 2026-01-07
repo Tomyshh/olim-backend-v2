@@ -517,14 +517,128 @@ function msUntilNextLocalTime(params: { hour: number; minute: number; second?: n
     return Math.max(0, next.getTime() - now.getTime());
 }
 
+function toDateOrNull(value: any): Date | null {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (typeof value?.toDate === 'function') {
+        try {
+            const d = value.toDate();
+            return d instanceof Date && Number.isFinite(d.getTime()) ? d : null;
+        } catch {
+            return null;
+        }
+    }
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) {
+        const d = new Date(n);
+        return Number.isFinite(d.getTime()) ? d : null;
+    }
+    return null;
+}
+
+function startOfTodayAtLocalTime(params: { hour: number; minute: number; second?: number }, now: Date = new Date()): Date {
+    const second = params.second ?? 0;
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), params.hour, params.minute, second, 0);
+}
+
+async function tryAcquireJobLease(params: { jobId: string; runId: string; leaseMs: number }): Promise<{ acquired: boolean; reason?: string }> {
+    const db = getFirestore();
+    const now = new Date();
+    const leaseUntil = new Date(now.getTime() + params.leaseMs);
+    const jobRef = db.collection('Jobs').doc(params.jobId);
+
+    try {
+        const acquired = await db.runTransaction(async (tx) => {
+            const snap = await tx.get(jobRef);
+            const data = (snap.data() || {}) as any;
+            const running = data?.running === true;
+            const leaseUntilDate = toDateOrNull(data?.leaseUntil);
+
+            if (running && leaseUntilDate && leaseUntilDate.getTime() > now.getTime()) {
+                return false;
+            }
+
+            tx.set(
+                jobRef,
+                {
+                    jobId: params.jobId,
+                    running: true,
+                    runId: params.runId,
+                    leaseUntil,
+                    startedAt: admin.firestore.FieldValue.serverTimestamp(),
+                    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+                },
+                { merge: true }
+            );
+            return true;
+        });
+
+        return acquired ? { acquired: true } : { acquired: false, reason: 'already_running' };
+    } catch (e: any) {
+        return { acquired: false, reason: String(e?.message || e) };
+    }
+}
+
+export async function runDailyAnalyticsSyncJob(params?: { leaseMs?: number }): Promise<{ runId: string; startedAt: Date; finishedAt: Date } | null> {
+    const db = getFirestore();
+    const runId = randomUUID();
+    const startedAt = new Date();
+
+    const leaseMs = Number(params?.leaseMs ?? Number(process.env.ANALYTICS_SYNC_JOB_LEASE_MS || 2 * 60 * 60 * 1000));
+    const lease = Number.isFinite(leaseMs) && leaseMs > 0 ? leaseMs : 2 * 60 * 60 * 1000;
+
+    const lock = await tryAcquireJobLease({ jobId: 'analyticsSync', runId, leaseMs: lease });
+    if (!lock.acquired) {
+        console.log('[analytics-sync] skipped (no lease)', { reason: lock.reason || 'unknown' });
+        return null;
+    }
+
+    const jobRef = db.collection('Jobs').doc('analyticsSync');
+    try {
+        await syncAnalyticsToSupabase();
+        const finishedAt = new Date();
+        await jobRef.set(
+            {
+                jobId: jobRef.id,
+                running: false,
+                runId,
+                leaseUntil: new Date(finishedAt.getTime()),
+                lastSuccessAt: admin.firestore.FieldValue.serverTimestamp(),
+                lastError: null,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            },
+            { merge: true }
+        );
+        return { runId, startedAt, finishedAt };
+    } catch (e: any) {
+        const finishedAt = new Date();
+        await jobRef.set(
+            {
+                jobId: jobRef.id,
+                running: false,
+                runId,
+                leaseUntil: new Date(finishedAt.getTime()),
+                lastFailedAt: admin.firestore.FieldValue.serverTimestamp(),
+                lastError: String(e?.message || e),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp()
+            },
+            { merge: true }
+        );
+        throw e;
+    }
+}
+
 export function startAnalyticsSyncScheduler(): void {
+    // Opt-out (par défaut: actif pour rester compatible prod)
+    if (process.env.ANALYTICS_SYNC_JOB_ENABLED === 'false') return;
+
     // Use 4 AM as requested by the user
     const hour = 4;
     const minute = 0;
 
     async function runAndReschedule(): Promise<void> {
         try {
-            await syncAnalyticsToSupabase();
+            await runDailyAnalyticsSyncJob();
         } catch (e: any) {
             console.warn('[analytics-sync] Job failed', { error: e.message });
         } finally {
@@ -534,7 +648,30 @@ export function startAnalyticsSyncScheduler(): void {
         }
     }
 
+    async function maybeCatchUp(): Promise<void> {
+        // Si le process démarre APRÈS l'heure cible et que le job n'a pas réussi aujourd'hui, on lance un rattrapage.
+        const db = getFirestore();
+        const now = new Date();
+        const todayTarget = startOfTodayAtLocalTime({ hour, minute, second: 0 }, now);
+        if (now.getTime() < todayTarget.getTime()) return;
+
+        try {
+            const snap = await db.collection('Jobs').doc('analyticsSync').get();
+            const data = (snap.data() || {}) as any;
+            const lastSuccessAt = toDateOrNull(data?.lastSuccessAt);
+            if (lastSuccessAt && lastSuccessAt.getTime() >= todayTarget.getTime()) return;
+        } catch {
+            // ignore (en cas d'erreur lecture, on laisse la planification normale gérer)
+            return;
+        }
+
+        // Décaler légèrement pour éviter de saturer le boot / et laisser la machine se stabiliser
+        console.log('[analytics-sync] catch-up triggered (missed scheduled time)');
+        setTimeout(() => void runDailyAnalyticsSyncJob().catch((e) => console.warn('[analytics-sync] catch-up failed', { error: e?.message })), 30_000).unref();
+    }
+
     const firstDelay = msUntilNextLocalTime({ hour, minute, second: 0 });
     console.log('[analytics-sync] Scheduler enabled for 4:00 AM. First delay:', Math.round(firstDelay / 1000 / 60), 'minutes');
+    void maybeCatchUp();
     setTimeout(() => void runAndReschedule(), firstDelay).unref();
 }

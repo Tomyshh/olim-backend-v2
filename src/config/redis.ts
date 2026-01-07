@@ -11,7 +11,16 @@ function buildRedisClient(): AnyRedisClient {
     throw new Error('REDIS_URL is not set');
   }
 
-  const c = createClient({ url });
+  const rawTimeout = process.env.REDIS_CONNECT_TIMEOUT_MS;
+  const n = rawTimeout ? Number(rawTimeout) : NaN;
+  const connectTimeout = Number.isFinite(n) && n > 0 ? n : 1000;
+
+  const c = createClient({
+    url,
+    socket: {
+      connectTimeout
+    }
+  });
 
   c.on('error', (err) => {
     // Ne pas faire crasher le process sur un problème réseau: on log et on retente au prochain appel.

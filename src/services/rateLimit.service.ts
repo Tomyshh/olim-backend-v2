@@ -3,6 +3,31 @@ import { getRedisClientOptional } from '../config/redis.js';
 type MemoryEntry = { count: number; resetAtMs: number };
 const mem = new Map<string, MemoryEntry>();
 
+function getRedisOpTimeoutMs(): number {
+  const raw = process.env.RATE_LIMIT_REDIS_TIMEOUT_MS;
+  const n = raw ? Number(raw) : NaN;
+  // Valeur conservatrice: on préfère fallback mémoire plutôt que bloquer le handler.
+  return Number.isFinite(n) && n > 0 ? n : 250;
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  if (!Number.isFinite(ms) || ms <= 0) return p;
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label}: timeout after ${ms}ms`)), ms);
+    (t as any).unref?.();
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      }
+    );
+  });
+}
+
 export async function consumeRateLimit(params: {
   key: string;
   limit: number;
@@ -11,18 +36,29 @@ export async function consumeRateLimit(params: {
   const { key, limit, windowSeconds } = params;
   const now = Date.now();
 
-  const redis = await getRedisClientOptional();
+  const timeoutMs = getRedisOpTimeoutMs();
+  let redis = null as Awaited<ReturnType<typeof getRedisClientOptional>>;
+  try {
+    redis = await withTimeout(getRedisClientOptional(), timeoutMs, 'rateLimit.redis.connect');
+  } catch {
+    redis = null;
+  }
   if (redis) {
-    const count = await redis.incr(key);
-    if (count === 1) {
-      await redis.expire(key, windowSeconds);
+    try {
+      const count = await withTimeout(redis.incr(key), timeoutMs, 'rateLimit.redis.incr');
+      if (count === 1) {
+        await withTimeout(redis.expire(key, windowSeconds), timeoutMs, 'rateLimit.redis.expire');
+      }
+      const remaining = Math.max(0, limit - count);
+      if (count > limit) {
+        const ttl = await withTimeout(redis.ttl(key), timeoutMs, 'rateLimit.redis.ttl');
+        return { allowed: false, retryAfterSeconds: Math.max(1, ttl > 0 ? ttl : windowSeconds) };
+      }
+      return { allowed: true, remaining };
+    } catch {
+      // Redis lent/instable => fallback mémoire (évite de bloquer les requêtes).
+      redis = null;
     }
-    const remaining = Math.max(0, limit - count);
-    if (count > limit) {
-      const ttl = await redis.ttl(key);
-      return { allowed: false, retryAfterSeconds: Math.max(1, ttl > 0 ? ttl : windowSeconds) };
-    }
-    return { allowed: true, remaining };
   }
 
   const existing = mem.get(key);
