@@ -854,17 +854,15 @@ async function adminCreateFamilyMember(params: {
   if (mode === 'adult_free') {
     (doc as any).billingExempt = true;
     (doc as any).billingExemptReason = 'admin_free_adult';
-    // On active le service gratuitement
-    (doc as any).serviceActive = true;
-    (doc as any).serviceActivationPaymentId = null;
-    (doc as any).serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+    // IMPORTANT: on ne touche PAS à serviceActive ici.
+    // Le "service" doit rester cohérent avec les routes client :
+    // - /family/members/:id/activate => peut activer service via paiement (majeur non-conjoint)
+    // - /family/members/:id/service/activate => gère l'activation du service (conjoint gratuit)
   }
   if (mode === 'conjoint_free') {
     (doc as any).billingExempt = true;
     (doc as any).billingExemptReason = 'admin_free_conjoint';
-    (doc as any).serviceActive = true;
-    (doc as any).serviceActivationPaymentId = null;
-    (doc as any).serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+    // IMPORTANT: idem, on ne touche PAS à serviceActive lors de la création.
   }
 
   const ref = await db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
@@ -1033,9 +1031,10 @@ async function adminActivateFamilyMember(params: {
     // Free activation: no sale, no monthly impact
     updates.billingExempt = true;
     updates.billingExemptReason = 'admin_free_activation';
-    updates.serviceActive = true;
-    updates.serviceActivationPaymentId = null;
-    updates.serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+    // IMPORTANT: on ne touche PAS à serviceActive ici.
+    // L'activation/désactivation du membre doit uniquement basculer isActive,
+    // exactement comme les routes client. Le service se gère via paiement (/activate paid)
+    // ou via /service/activate (conjoint gratuit).
   }
 
   await ref.set(stripUndefinedDeep(updates), { merge: true });
