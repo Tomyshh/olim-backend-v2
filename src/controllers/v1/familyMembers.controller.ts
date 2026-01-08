@@ -361,8 +361,61 @@ function patchAffectsMonthlySupplement(body: any): boolean {
     keys.has('familyMemberStatus') ||
     keys.has('relationship') ||
     keys.has('isActive') ||
-    keys.has('livesAtHome')
+    keys.has('livesAtHome') ||
+    keys.has('billingExempt')
   );
+}
+
+function pickTargetClientUidFromParams(req: AuthenticatedRequest): string {
+  const uid = pickString((req.params as any)?.uid);
+  if (!uid) throw new HttpError(400, 'Paramètre uid (client) manquant.');
+  return uid;
+}
+
+function ensureRequiredIdentityFields(params: {
+  existing: Record<string, any>;
+  body: any;
+}): { firstName: string; status: string; birthdayStr: string; age: number | null } {
+  const { existing, body } = params;
+  const normalized = normalizePayload(body || {});
+  const raw = normalized.raw || body || {};
+
+  const firstName =
+    pickString(existing['First Name']) ||
+    pickString(
+      pickFromMany(
+        normalized.member?.firstName,
+        getLegacyKey(raw, 'First Name'),
+        getLegacyKey(raw, 'Prénom'),
+        getLegacyKey(raw, 'firstName', 'firstName')
+      )
+    );
+
+  const status =
+    pickString(existing['Family Member Status']) ||
+    pickString(
+      pickFromMany(
+        normalized.member?.relationship,
+        getLegacyKey(raw, 'Family Member Status'),
+        getLegacyKey(raw, 'Status'),
+        getLegacyKey(raw, 'relationship', 'relationship'),
+        getLegacyKey(raw, 'familyMemberStatus', 'familyMemberStatus')
+      )
+    );
+
+  const birthdayRaw = pickFromMany(normalized.member?.birthday, getLegacyKey(raw, 'Birthday', 'birthday'), existing.Birthday);
+  const birthdayStr = birthdayRaw == null ? '' : parseBirthdayToDdMmYyyy(birthdayRaw) || '';
+
+  const missing: string[] = [];
+  if (!firstName) missing.push('First Name');
+  if (!status) missing.push('Family Member Status');
+  if (!birthdayStr) missing.push('Birthday (dd/MM/yyyy)');
+  if (missing.length > 0) {
+    throw new HttpError(400, `Champs requis manquants pour activer: ${missing.join(', ')}.`);
+  }
+
+  const age = birthdayStr ? computeAgeYearsFromBirthdayString(birthdayStr) : null;
+  return { firstName, status, birthdayStr, age };
 }
 
 export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -705,6 +758,329 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
   );
 
   res.json({ ok: true, memberId, serviceActive: true, serviceActivationPaymentId: sale.salePaymeId });
+}
+
+// =========================
+// Admin routes (agir pour un client cible)
+// =========================
+
+async function adminCreateFamilyMember(params: {
+  clientUid: string;
+  adminUid: string;
+  body: any;
+  mode: 'adult_free' | 'adult_paid' | 'child' | 'conjoint_free';
+}): Promise<{
+  memberId: string;
+  doc: Record<string, any>;
+  billing: any;
+}> {
+  const { clientUid, adminUid, body, mode } = params;
+  const db = getFirestore();
+  const pricing = await getFamilyMemberPricingNis();
+  const normalized = normalizePayload(body || {});
+  const cardIdFromPayload = pickString(
+    pickFromMany(
+      normalized.payment?.cardId,
+      (body as any)?.payment?.cardId,
+      (body as any)?.cardId,
+      (body as any)?.selectedCardId
+    )
+  );
+
+  const defaults: Record<string, any> = {
+    isActive: true,
+    serviceActive: false,
+    monthlySupplementApplied: false,
+    monthlySupplementNis: pricing.monthlyNis,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdByAdminUid: adminUid,
+    createdByAdminAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+
+  const doc = buildMemberFirestoreDoc({ uid: clientUid, body: body || {}, defaults });
+
+  // Mode overrides
+  if (mode === 'conjoint_free') {
+    doc['Family Member Status'] = 'conjoint';
+  }
+
+  const status = pickString(doc['Family Member Status']);
+  const age = typeof (doc as any).age === 'number' ? Number((doc as any).age) : null;
+  const isAdult = age != null && Number.isFinite(age) && age >= 18;
+
+  // Validation âge selon la route
+  if (mode === 'adult_free' || mode === 'adult_paid') {
+    if (!isAdult) throw new HttpError(400, 'Le membre doit être majeur (>= 18 ans) pour cette route.');
+  }
+  if (mode === 'child') {
+    if (isAdult) throw new HttpError(400, 'Le membre doit être mineur (< 18 ans) pour cette route.');
+    (doc as any).isChild = true;
+  }
+
+  let salePaymeId: string | null = null;
+
+  // Paid adult: one-shot + recompute mensuel (logique identique à la route client)
+  if (mode === 'adult_paid' && isAdult && !isConjoint(status)) {
+    if (!cardIdFromPayload) {
+      throw new HttpError(400, 'payment.cardId requis pour ajouter un membre majeur (paid).');
+    }
+    if ((doc as any).livesAtHome !== true) (doc as any).livesAtHome = true;
+
+    const cardSnap = await db.collection('Clients').doc(clientUid).collection('Payment credentials').doc(cardIdFromPayload).get();
+    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+    const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+
+    const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
+    if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
+      throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+    }
+
+    const sale = await paymeGenerateSale({
+      priceInCents: ponctuallyPriceInCents,
+      description: `Ajout membre famille (admin, majeur) - ${pickString(doc['First Name'])} ${pickString(doc['Last Name'])}`.trim(),
+      buyerKey
+    });
+    salePaymeId = sale.salePaymeId;
+
+    (doc as any).serviceActive = true;
+    (doc as any).serviceActivationPaymentId = sale.salePaymeId;
+    (doc as any).selectedCardId = cardIdFromPayload;
+    (doc as any).serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+    (doc as any).billingExempt = false;
+  }
+
+  // Free adult / conjoint: pas de sale, pas d'impact mensuel (billingExempt)
+  if (mode === 'adult_free') {
+    (doc as any).billingExempt = true;
+    (doc as any).billingExemptReason = 'admin_free_adult';
+    // On active le service gratuitement
+    (doc as any).serviceActive = true;
+    (doc as any).serviceActivationPaymentId = null;
+    (doc as any).serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+  if (mode === 'conjoint_free') {
+    (doc as any).billingExempt = true;
+    (doc as any).billingExemptReason = 'admin_free_conjoint';
+    (doc as any).serviceActive = true;
+    (doc as any).serviceActivationPaymentId = null;
+    (doc as any).serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
+  const ref = await db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
+
+  // Recompute: safe (billingExempt/conjoint/enfant => eligible false)
+  const shouldRecompute = !isConjoint(status);
+  let monthly: { attempted: boolean; paymeUpdated: boolean; eligibleAdultsCount?: number; targetPriceInCents?: number | null } = {
+    attempted: false,
+    paymeUpdated: false
+  };
+  if (shouldRecompute) {
+    monthly.attempted = true;
+    const result = await recomputeAndApplyFamilyMonthlySupplement(clientUid);
+    monthly.paymeUpdated = result.paymeUpdated;
+    monthly.eligibleAdultsCount = result.eligibleAdultsCount;
+    monthly.targetPriceInCents = result.targetPriceInCents;
+  }
+
+  return {
+    memberId: ref.id,
+    doc,
+    billing: {
+      mode,
+      sale: { attempted: mode === 'adult_paid' && isAdult && !isConjoint(status), salePaymeId },
+      monthly
+    }
+  };
+}
+
+export async function v1AdminCreateFamilyMemberAdultFree(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const adminUid = req.uid!;
+  const result = await adminCreateFamilyMember({ clientUid, adminUid, body: req.body || {}, mode: 'adult_free' });
+  res.status(201).json({ clientUid, memberId: result.memberId, ...result.doc, billing: result.billing });
+}
+
+export async function v1AdminCreateFamilyMemberAdultPaid(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const adminUid = req.uid!;
+  const result = await adminCreateFamilyMember({ clientUid, adminUid, body: req.body || {}, mode: 'adult_paid' });
+  res.status(201).json({ clientUid, memberId: result.memberId, ...result.doc, billing: result.billing });
+}
+
+export async function v1AdminCreateFamilyMemberChild(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const adminUid = req.uid!;
+  const result = await adminCreateFamilyMember({ clientUid, adminUid, body: req.body || {}, mode: 'child' });
+  res.status(201).json({ clientUid, memberId: result.memberId, ...result.doc, billing: result.billing });
+}
+
+export async function v1AdminCreateFamilyMemberConjointFree(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const adminUid = req.uid!;
+  const result = await adminCreateFamilyMember({ clientUid, adminUid, body: req.body || {}, mode: 'conjoint_free' });
+  res.status(201).json({ clientUid, memberId: result.memberId, ...result.doc, billing: result.billing });
+}
+
+export async function v1AdminDeactivateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const memberId = pickString(req.params.id);
+  if (!memberId) throw new HttpError(400, 'Id manquant.');
+
+  const db = getFirestore();
+  const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+
+  await ref.set(
+    {
+      isActive: false,
+      deactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedByAdminUid: req.uid!,
+      updatedByAdminAt: admin.firestore.FieldValue.serverTimestamp()
+    },
+    { merge: true }
+  );
+
+  await recomputeAndApplyFamilyMonthlySupplement(clientUid);
+  res.json({ ok: true, clientUid, memberId });
+}
+
+async function adminActivateFamilyMember(params: {
+  clientUid: string;
+  memberId: string;
+  adminUid: string;
+  body: any;
+  mode: 'free' | 'paid';
+}): Promise<{ salePaymeId: string | null; attemptedSale: boolean; alreadyActive: boolean }> {
+  const { clientUid, memberId, adminUid, body, mode } = params;
+  const db = getFirestore();
+  const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+
+  const data = (snap.data() || {}) as Record<string, any>;
+  if (data.isActive === true) {
+    return { salePaymeId: null, attemptedSale: false, alreadyActive: true };
+  }
+
+  // S'assurer que les champs minimaux existent (ou les compléter depuis le payload)
+  const ident = ensureRequiredIdentityFields({ existing: data, body });
+  const status = pickString(data['Family Member Status']) || ident.status;
+  const isAdult = ident.age != null && Number.isFinite(ident.age) && ident.age >= 18;
+
+  const normalized = normalizePayload(body || {});
+  const cardIdFromPayload = pickString(
+    pickFromMany(
+      normalized.payment?.cardId,
+      (body as any)?.payment?.cardId,
+      (body as any)?.cardId,
+      (body as any)?.selectedCardId
+    )
+  );
+
+  const updates: Record<string, any> = {
+    reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedByAdminUid: adminUid,
+    updatedByAdminAt: admin.firestore.FieldValue.serverTimestamp(),
+    isActive: true
+  };
+
+  // Compléter uniquement si manquant
+  if (!pickString(data['First Name'])) updates['First Name'] = ident.firstName;
+  if (!pickString(data['Family Member Status'])) updates['Family Member Status'] = ident.status;
+  if (!pickString(data.Birthday)) updates.Birthday = ident.birthdayStr;
+  if (typeof (data as any).age !== 'number' && typeof ident.age === 'number' && Number.isFinite(ident.age)) updates.age = ident.age;
+
+  let salePaymeId: string | null = null;
+  let attemptedSale = false;
+
+  if (mode === 'paid') {
+    // Paid activation: same rule as client route (adult + non conjoint)
+    if (isAdult && !isConjoint(status)) {
+      attemptedSale = true;
+      const cardId = cardIdFromPayload;
+      if (!cardId) throw new HttpError(400, 'cardId requis pour activer (paid) un membre majeur.');
+
+      const cardSnap = await db.collection('Clients').doc(clientUid).collection('Payment credentials').doc(cardId).get();
+      if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+      const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+      if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+
+      const pricing = await getFamilyMemberPricingNis();
+      const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
+      if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
+        throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+      }
+
+      const sale = await paymeGenerateSale({
+        priceInCents: ponctuallyPriceInCents,
+        description: `Réactivation membre famille (admin, majeur) - ${ident.firstName}`.trim(),
+        buyerKey
+      });
+      salePaymeId = sale.salePaymeId;
+
+      updates.serviceActive = true;
+      updates.serviceActivationPaymentId = sale.salePaymeId;
+      updates.selectedCardId = cardId;
+      updates.serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+      updates.billingExempt = false;
+      if (data.livesAtHome !== true) updates.livesAtHome = true;
+    }
+  } else {
+    // Free activation: no sale, no monthly impact
+    updates.billingExempt = true;
+    updates.billingExemptReason = 'admin_free_activation';
+    updates.serviceActive = true;
+    updates.serviceActivationPaymentId = null;
+    updates.serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+  }
+
+  await ref.set(stripUndefinedDeep(updates), { merge: true });
+  await recomputeAndApplyFamilyMonthlySupplement(clientUid);
+  return { salePaymeId, attemptedSale, alreadyActive: false };
+}
+
+export async function v1AdminActivateFamilyMemberFree(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const memberId = pickString(req.params.id);
+  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  const result = await adminActivateFamilyMember({
+    clientUid,
+    memberId,
+    adminUid: req.uid!,
+    body: req.body || {},
+    mode: 'free'
+  });
+  res.json({
+    ok: true,
+    clientUid,
+    memberId,
+    alreadyActive: result.alreadyActive,
+    billing: { sale: { attempted: result.attemptedSale, salePaymeId: result.salePaymeId } }
+  });
+}
+
+export async function v1AdminActivateFamilyMemberPaid(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const memberId = pickString(req.params.id);
+  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  const result = await adminActivateFamilyMember({
+    clientUid,
+    memberId,
+    adminUid: req.uid!,
+    body: req.body || {},
+    mode: 'paid'
+  });
+  res.json({
+    ok: true,
+    clientUid,
+    memberId,
+    alreadyActive: result.alreadyActive,
+    billing: { sale: { attempted: result.attemptedSale, salePaymeId: result.salePaymeId } }
+  });
 }
 
 

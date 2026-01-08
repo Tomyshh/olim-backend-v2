@@ -101,6 +101,8 @@ function memberLivesAtHome(data: Record<string, any>): boolean {
 
 export function memberIsEligibleAdultSupplement(docId: string, data: Record<string, any>): boolean {
   if (isAccountOwnerMember(docId, data)) return false; // le titulaire est inclus dans l'abonnement de base
+  // Override admin: permet d'ajouter/activer un membre majeur sans impacter la facturation (ni supplément mensuel)
+  if (data.billingExempt === true) return false;
   if (!memberIsActive(data)) return false;
   if (!memberLivesAtHome(data)) return false;
   const status = getMemberStatus(data);
