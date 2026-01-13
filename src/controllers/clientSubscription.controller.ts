@@ -102,8 +102,13 @@ function extractPaymeIdentifiers(params: { client: Record<string, any>; subscrip
   subCode: number | string | null;
   subId: string | null;
 } {
+  // IMPORTANT: priorité au doc Clients/{uid}/subscription/current (source of truth backend).
   const subCode =
+    params.subscription?.subCode ??
+    params.subscription?.sub_payme_code ??
     params.subscription?.payme?.subCode ??
+    params.subscription?.payme?.sub_payme_code ??
+    // Fallback legacy
     params.client.israCard_subCode ??
     params.client.subCode ??
     params.client.paymeSubCode ??
@@ -111,6 +116,8 @@ function extractPaymeIdentifiers(params: { client: Record<string, any>; subscrip
 
   const subIdRaw =
     params.subscription?.payme?.subID ??
+    params.subscription?.payme?.subId ??
+    // Fallback legacy
     params.client.paymeSubID ??
     params.client['IsraCard Sub ID'] ??
     params.client.subID ??
@@ -125,6 +132,16 @@ function extractPaymeIdentifiers(params: { client: Record<string, any>; subscrip
         : null;
 
   return { subCode: normalizedSubCode, subId };
+}
+
+function extractMembershipFromSubscriptionCurrent(s: Record<string, any> | null): string {
+  if (!s) return '';
+  return (
+    pickString(s?.plan?.membership) ||
+    pickString(s?.plan?.Membership) ||
+    pickString(s?.membership) ||
+    ''
+  );
 }
 
 function buildSubscriptionCurrentDoc(params: {
@@ -201,10 +218,21 @@ export async function getClientSubscriptionState(req: AuthenticatedRequest, res:
   if (!clientId) throw new HttpError(400, 'clientId manquant.');
 
   const { client, subscription } = await loadClientAndSubscription({ clientId });
-  const { subCode } = extractPaymeIdentifiers({ client, subscription });
-  const paymeStatus = subCode != null ? await paymeGetSubscriptionStatus(subCode) : null;
 
-  res.status(200).json({ success: true, paymeStatus, payme_status: paymeStatus, status: paymeStatus });
+  // Règle: on "vérifie" d'abord le membership du doc subscription/current (source of truth).
+  const membership = extractMembershipFromSubscriptionCurrent(subscription);
+
+  // Si pas de doc subscription/current ou pas de membership, on considère qu'il n'y a pas d'abonnement PayMe à checker.
+  const { subCode } = extractPaymeIdentifiers({ client, subscription });
+  const paymeStatus = membership && subCode != null ? await paymeGetSubscriptionStatus(subCode) : null;
+
+  res.status(200).json({
+    success: true,
+    membership: membership || null,
+    paymeStatus,
+    payme_status: paymeStatus,
+    status: paymeStatus
+  });
 }
 
 type CreateOrReplaceBody = {
