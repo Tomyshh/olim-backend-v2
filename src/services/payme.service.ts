@@ -482,6 +482,59 @@ export async function paymeSetSubscriptionPrice(params: { subId: string; priceIn
   return { ok: true };
 }
 
+async function paymePatchSubscriptionAction(params: {
+  subId: string;
+  action: 'pause' | 'resume' | 'cancel';
+}): Promise<{ ok: true; raw?: any }> {
+  const seller_payme_id = requirePaymeSellerKey();
+  const debug = process.env.PAYME_DEBUG === 'true';
+
+  const subId = (params.subId || '').trim();
+  if (!subId) throw new HttpError(400, `PayMe ${params.action}: subId manquant.`);
+
+  // PayMe REST: pattern identique à set-price
+  const { ok, status, json } = await paymePatchJson(
+    `subscriptions/${encodeURIComponent(subId)}/${params.action}`,
+    { seller_payme_id },
+    20000
+  );
+
+  if (debug) {
+    console.log(`[PayMe] Réponse subscriptions/{subId}/${params.action}:`, {
+      ok,
+      status,
+      errorCode: json?.status_error_code,
+      statusCode: paymeStatusCode(json),
+      keys: Object.keys(json || {})
+    });
+  }
+
+  if (!ok || json?.status_error_code) {
+    const err = new HttpError(400, `PayMe ${params.action}: ${safePaymeErrorMessage(json)}`);
+    (err as any).statusCode = status;
+    (err as any).errorCode = json?.status_error_code;
+    throw err;
+  }
+
+  assertPaymeStatusCodeOk(json, `PayMe ${params.action}`);
+  return { ok: true, raw: json };
+}
+
+export async function paymePauseSubscription(params: { subId: string }): Promise<{ ok: true }> {
+  await paymePatchSubscriptionAction({ subId: params.subId, action: 'pause' });
+  return { ok: true };
+}
+
+export async function paymeResumeSubscription(params: { subId: string }): Promise<{ ok: true }> {
+  await paymePatchSubscriptionAction({ subId: params.subId, action: 'resume' });
+  return { ok: true };
+}
+
+export async function paymeCancelSubscription(params: { subId: string }): Promise<{ ok: true }> {
+  await paymePatchSubscriptionAction({ subId: params.subId, action: 'cancel' });
+  return { ok: true };
+}
+
 export function formatDdMmYyyy(date: Date): string {
   const dd = String(date.getDate()).padStart(2, '0');
   const mm = String(date.getMonth() + 1).padStart(2, '0');
