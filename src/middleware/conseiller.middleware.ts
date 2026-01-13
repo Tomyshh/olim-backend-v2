@@ -65,4 +65,39 @@ export async function requireAdmin(
   }
 }
 
+/**
+ * Autorise uniquement les superAdmin : doc Firestore Conseillers2/{uid}.superAdmin === true.
+ * (Spéc: reset password conseiller via Firebase Auth)
+ */
+export async function requireSuperAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const uid = req.uid;
+    if (!uid) {
+      res.status(401).json({ message: 'Vous devez être connecté.', error: 'Vous devez être connecté.' });
+      return;
+    }
+
+    const db = getFirestore();
+    const snap = await db.collection('Conseillers2').doc(uid).get();
+    if (!snap.exists) {
+      res.status(403).json({ message: "Accès refusé : vous n'êtes pas superAdmin.", error: "Accès refusé : vous n'êtes pas superAdmin." });
+      return;
+    }
+
+    const data = snap.data() || {};
+    if (data.superAdmin !== true) {
+      res.status(403).json({ message: "Accès refusé : vous n'êtes pas superAdmin.", error: "Accès refusé : vous n'êtes pas superAdmin." });
+      return;
+    }
+
+    next();
+  } catch (err) {
+    next(err);
+  }
+}
+
 

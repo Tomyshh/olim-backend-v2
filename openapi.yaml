@@ -163,6 +163,87 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
+  /v1/admin/conseillers/password/by-email:
+    post:
+      tags: [Admin]
+      summary: Reset password Firebase Auth d’un conseiller (par email)
+      description: >
+        Permet à un **superAdmin** (doc Firestore `Conseillers2/{callerUid}` avec `superAdmin === true`)
+        de changer le mot de passe Firebase Auth d’un conseiller en le ciblant par email.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, newPassword]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: conseiller@domaine.com
+                newPassword:
+                  type: string
+                  minLength: 6
+                  example: NouveauMotDePasse123
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, uid]
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  uid:
+                    type: string
+                    description: UID Firebase Auth du conseiller cible
+        '400':
+          description: email ou newPassword invalide
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '401':
+          description: Non authentifié / token invalide
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '403':
+          description: caller non superAdmin
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  error:
+                    type: string
+        '404':
+          description: Aucun user Firebase Auth pour cet email
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '500':
+          $ref: '#/components/responses/Error'
+
   /api/auth/verify-login-phone-otp:
     post:
       tags: [Auth]

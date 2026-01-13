@@ -39,6 +39,7 @@ import v1NotificationsRoutes from './routes/v1/notifications.routes.js';
 import v1MeMembershipRoutes from './routes/v1/me.membership.routes.js';
 import v1FamilyMembersRoutes from './routes/v1/family.members.routes.js';
 import v1AdminFamilyMembersRoutes from './routes/v1/admin.family.members.routes.js';
+import v1AdminConseillersRoutes from './routes/v1/admin.conseillers.routes.js';
 import v1AiAudioRoutes from './routes/v1/ai.audio.routes.js';
 import v1JobsRoutes from './routes/v1/jobs.routes.js';
 import { startQueueWorker } from './services/queue.service.js';
@@ -154,6 +155,7 @@ app.use('/v1', v1NotificationsRoutes);
 app.use('/v1', v1MeMembershipRoutes);
 app.use('/v1', v1FamilyMembersRoutes);
 app.use('/v1', v1AdminFamilyMembersRoutes);
+app.use('/v1', v1AdminConseillersRoutes);
 app.use('/v1', v1AiAudioRoutes);
 app.use('/v1', v1JobsRoutes);
 
