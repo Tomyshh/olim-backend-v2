@@ -77,6 +77,25 @@ async function writeAdminAuditLog(params: {
   }
 }
 
+function isNonFatalPaymeCancelError(err: any): boolean {
+  // PayMe peut refuser un cancel selon le statut côté PayMe (déjà annulé, non actif, etc.).
+  // Dans ces cas, on veut quand même permettre un réabonnement (sale + subscription).
+  const errorCode = (err as any)?.errorCode;
+  const statusCode = Number((err as any)?.statusCode || 0);
+  const message = String((err as any)?.message || '');
+
+  // Observé en prod: errorCode 305 + message hébreu => on continue.
+  if (errorCode === 305) return true;
+
+  // Si PayMe renvoie 404 sur l'action (endpoint ou subId inexistant), on continue aussi.
+  if (statusCode === 404) return true;
+
+  // Heuristique: message explicite indiquant que l'action n'est pas possible selon le statut
+  if (message.includes('סטטוס') || message.toLowerCase().includes('statut')) return true;
+
+  return false;
+}
+
 async function loadClientAndSubscription(params: { clientId: string }): Promise<{
   clientRef: FirebaseFirestore.DocumentReference;
   client: Record<string, any>;
@@ -279,9 +298,27 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
 
   // Si remplacement demandé: on annule d'abord l'abonnement mensuel existant (si présent)
   const existing = extractPaymeIdentifiers({ client, subscription });
+  let cancelAttempted = false;
+  let cancelSkippedAsNonFatal = false;
   if (isReplacement && existing.subId) {
     // Sécurité: bloquant => évite double abonnement actif
-    await paymeCancelSubscription({ subId: existing.subId });
+    cancelAttempted = true;
+    try {
+      await paymeCancelSubscription({ subId: existing.subId });
+    } catch (e: any) {
+      if (isNonFatalPaymeCancelError(e)) {
+        cancelSkippedAsNonFatal = true;
+        console.warn('[subscription] PayMe cancel non-bloquant (on continue le réabonnement)', {
+          clientId,
+          subId: existing.subId,
+          statusCode: (e as any)?.statusCode,
+          errorCode: (e as any)?.errorCode,
+          message: String(e?.message || e)
+        });
+      } else {
+        throw e;
+      }
+    }
   }
 
   // Charger buyerKey depuis Payment credentials/{paymentCredentialId}
@@ -376,7 +413,13 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
     clientId,
     payload: { membership, plan, paymentCredentialId, priceInCents, installments, promoCode, isReplacement, useCustomPrice: body.useCustomPrice === true },
     req,
-    extra: { salePaymeId, subCode: subCode ?? null, subID: subID ?? null }
+    extra: {
+      salePaymeId,
+      subCode: subCode ?? null,
+      subID: subID ?? null,
+      cancelAttempted,
+      cancelSkippedAsNonFatal
+    }
   });
 
   res.status(200).json({
