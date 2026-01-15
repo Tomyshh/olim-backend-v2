@@ -42,8 +42,17 @@ function parseDdMmYyyy(value: string): Date | null {
 }
 
 function stripUndefinedDeep<T>(value: T): T {
+  // IMPORTANT: ne jamais "cloner" certains objets Firestore (FieldValue, Timestamp, etc.)
+  // sinon ils deviennent des maps vides ({}) dans Firestore.
+  if (!value) return value;
+  if (value instanceof Date) return value;
+  if (value instanceof (admin.firestore as any).Timestamp) return value;
+  // FieldValue (serverTimestamp, delete, increment, arrayUnion, etc.)
+  if (typeof value === 'object' && typeof (value as any)._methodName === 'string') return value;
+
   if (Array.isArray(value)) return value.map((v) => stripUndefinedDeep(v)) as any;
-  if (!value || typeof value !== 'object') return value;
+  if (typeof value !== 'object') return value;
+
   const out: any = {};
   for (const [k, v] of Object.entries(value as any)) {
     if (v === undefined) continue;
@@ -173,6 +182,7 @@ function buildSubscriptionCurrentDoc(params: {
   createdByUid?: string | null;
   nextPaymentDate?: Date | null;
   previousMembership?: string | null;
+  previousPlan?: string | null;
 }): Record<string, any> {
   const now = new Date();
   const isAnnual = params.planNumber === 4;
@@ -219,6 +229,7 @@ function buildSubscriptionCurrentDoc(params: {
     },
     history: {
       previousMembership: params.previousMembership ?? null,
+      previousPlan: params.previousPlan ?? null,
       lastModified: now,
       modifiedBy: params.createdByUid || 'system'
     },
@@ -391,6 +402,7 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
 
   const previousMembership =
     pickString(subscription?.plan?.membership) || pickString(subscription?.plan?.membershipType) || pickString(client.Membership) || null;
+  const previousPlan = pickString(subscription?.plan?.type) || null;
 
   const subscriptionDoc = buildSubscriptionCurrentDoc({
     planNumber,
@@ -401,7 +413,8 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
     promoCode,
     createdByUid: callerUid,
     nextPaymentDate,
-    previousMembership
+    previousMembership,
+    previousPlan
   });
   batch.set(subscriptionRef, subscriptionDoc, { merge: true });
 
@@ -488,7 +501,7 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
       {
         plan: { price: requestedPrice },
         updatedAt: now,
-        history: { lastModified: new Date(), modifiedBy: callerUid || 'system' }
+        history: { lastModified: now, modifiedBy: callerUid || 'system' }
       },
       { merge: true }
     );
@@ -556,6 +569,7 @@ export async function pauseClientSubscription(req: AuthenticatedRequest, res: Re
     patch: {
       states: { isPaused: true },
       dates: { pausedDate: new Date() },
+      history: { lastModified: admin.firestore.FieldValue.serverTimestamp(), modifiedBy: callerUid || 'system' },
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }
   });
@@ -579,6 +593,7 @@ export async function resumeClientSubscription(req: AuthenticatedRequest, res: R
     patch: {
       states: { isPaused: false },
       dates: { resumedDate: new Date() },
+      history: { lastModified: admin.firestore.FieldValue.serverTimestamp(), modifiedBy: callerUid || 'system' },
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }
   });
@@ -602,6 +617,7 @@ export async function cancelClientSubscription(req: AuthenticatedRequest, res: R
     patch: {
       states: { willExpire: true, isActive: false },
       dates: { cancelledDate: new Date() },
+      history: { lastModified: admin.firestore.FieldValue.serverTimestamp(), modifiedBy: callerUid || 'system' },
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }
   });
