@@ -482,56 +482,86 @@ export async function paymeSetSubscriptionPrice(params: { subId: string; priceIn
   return { ok: true };
 }
 
-async function paymePatchSubscriptionAction(params: {
+async function paymeSubscriptionAction(params: {
   subId: string;
   action: 'pause' | 'resume' | 'cancel';
-}): Promise<{ ok: true; raw?: any }> {
+}): Promise<{ ok: true; raw?: any; used: { method: 'POST' | 'PATCH'; path: string } }> {
   const seller_payme_id = requirePaymeSellerKey();
   const debug = process.env.PAYME_DEBUG === 'true';
 
   const subId = (params.subId || '').trim();
   if (!subId) throw new HttpError(400, `PayMe ${params.action}: subId manquant.`);
 
-  // PayMe REST: pattern identique à set-price
-  const { ok, status, json } = await paymePatchJson(
-    `subscriptions/${encodeURIComponent(subId)}/${params.action}`,
-    { seller_payme_id },
-    20000
-  );
+  // PayMe n'est pas cohérent entre endpoints:
+  // - set-price est REST (PATCH /subscriptions/{id}/set-price)
+  // - pause/resume/cancel peuvent être REST ou via endpoints /api/{action}-subscription
+  const attempts: Array<{ method: 'PATCH' | 'POST'; path: string; body: any }> = [
+    // Tentative REST (PATCH) - comme set-price
+    { method: 'PATCH', path: `subscriptions/${encodeURIComponent(subId)}/${params.action}`, body: { seller_payme_id } },
+    // Certaines implémentations utilisent POST pour les actions
+    { method: 'POST', path: `subscriptions/${encodeURIComponent(subId)}/${params.action}`, body: { seller_payme_id } },
+    // Fallback "API style" (cohérent avec generate-subscription / get-subscriptions)
+    // NB: on passe sub_payme_id car c'est l'identifiant retourné par PayMe (subID)
+    { method: 'POST', path: `${params.action}-subscription`, body: { seller_payme_id, sub_payme_id: subId } },
+    { method: 'POST', path: `${params.action}-subscription`, body: { seller_payme_id, sub_payme_id: subId, subId } }
+  ];
 
-  if (debug) {
-    console.log(`[PayMe] Réponse subscriptions/{subId}/${params.action}:`, {
-      ok,
-      status,
-      errorCode: json?.status_error_code,
-      statusCode: paymeStatusCode(json),
-      keys: Object.keys(json || {})
-    });
+  let lastErr: any = null;
+
+  for (const a of attempts) {
+    try {
+      const reqFn = a.method === 'PATCH' ? paymePatchJson : paymePostJson;
+      const { ok, status, json } = await reqFn(a.path, a.body, 20000);
+
+      if (debug) {
+        console.log(`[PayMe] Réponse ${a.method} ${a.path}:`, {
+          ok,
+          status,
+          errorCode: json?.status_error_code,
+          statusCode: paymeStatusCode(json),
+          keys: Object.keys(json || {})
+        });
+      }
+
+      if (!ok || json?.status_error_code) {
+        const err = new HttpError(400, `PayMe ${params.action}: ${safePaymeErrorMessage(json)}`);
+        (err as any).statusCode = status;
+        (err as any).errorCode = json?.status_error_code;
+        throw err;
+      }
+
+      // Réponse attendue typique: { status_code: 0 }
+      assertPaymeStatusCodeOk(json, `PayMe ${params.action}`);
+      return { ok: true, raw: json, used: { method: a.method, path: a.path } };
+    } catch (e: any) {
+      lastErr = e;
+
+      // Si 404 => endpoint non trouvé => on tente l'alternative suivante
+      const statusCode = Number((e as any)?.statusCode || 0);
+      if (statusCode === 404) continue;
+
+      // Si c'est une erreur PayMe "logique" (400/401/403 etc), inutile de tenter d'autres endpoints
+      throw e;
+    }
   }
 
-  if (!ok || json?.status_error_code) {
-    const err = new HttpError(400, `PayMe ${params.action}: ${safePaymeErrorMessage(json)}`);
-    (err as any).statusCode = status;
-    (err as any).errorCode = json?.status_error_code;
-    throw err;
-  }
-
-  assertPaymeStatusCodeOk(json, `PayMe ${params.action}`);
-  return { ok: true, raw: json };
+  // Aucun endpoint n'a matché (404 partout)
+  if (lastErr) throw lastErr;
+  throw new HttpError(400, `PayMe ${params.action}: endpoint introuvable.`);
 }
 
 export async function paymePauseSubscription(params: { subId: string }): Promise<{ ok: true }> {
-  await paymePatchSubscriptionAction({ subId: params.subId, action: 'pause' });
+  await paymeSubscriptionAction({ subId: params.subId, action: 'pause' });
   return { ok: true };
 }
 
 export async function paymeResumeSubscription(params: { subId: string }): Promise<{ ok: true }> {
-  await paymePatchSubscriptionAction({ subId: params.subId, action: 'resume' });
+  await paymeSubscriptionAction({ subId: params.subId, action: 'resume' });
   return { ok: true };
 }
 
 export async function paymeCancelSubscription(params: { subId: string }): Promise<{ ok: true }> {
-  await paymePatchSubscriptionAction({ subId: params.subId, action: 'cancel' });
+  await paymeSubscriptionAction({ subId: params.subId, action: 'cancel' });
   return { ok: true };
 }
 
