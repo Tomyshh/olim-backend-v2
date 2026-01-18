@@ -27,6 +27,22 @@ router.post(
     : []),
   subscriptionController.addCard
 );
+
+// Créer / (re)abonner un client existant (app mobile)
+router.post(
+  '/subscribe',
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:subscription:subscribe',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  subscriptionController.subscribe
+);
 router.patch('/cards/:cardId', subscriptionController.updateCard);
 router.delete('/cards/:cardId', subscriptionController.deleteCard);
 router.patch('/cards/:cardId/set-default', subscriptionController.setDefaultCard);

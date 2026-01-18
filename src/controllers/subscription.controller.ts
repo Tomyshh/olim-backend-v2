@@ -2,6 +2,8 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { admin, getFirestore } from '../config/firebase.js';
 import { paymeCaptureBuyerToken } from '../services/payme.service.js';
+import { isRevolutBin6 } from '../services/revolutCardBins.service.js';
+import { calculateSubscriptionStartDate, paymeGenerateSale, paymeGenerateSubscription } from '../services/payme.service.js';
 import {
   createSecurdenCreditCardAccountInFolder,
   normalizeCardNumberDigitsOnly,
@@ -64,6 +66,93 @@ function mapPaymentCredentialToCard(docId: string, data: Record<string, any>): R
   };
 }
 
+function parseDdMmYyyy(value: string): Date | null {
+  const m = String(value || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return null;
+  return new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
+}
+
+function buildSubscriptionCurrentDoc(params: {
+  planNumber: 3 | 4;
+  membership: string;
+  priceInCents: number;
+  payme: { buyerKey: string; subCode?: number | string | null; subID?: string | null } | null;
+  nextPaymentDate?: Date | null;
+  createdByUid?: string | null;
+}): Record<string, any> {
+  const now = new Date();
+  const isAnnual = params.planNumber === 4;
+  const planType = isAnnual ? 'annual' : 'monthly';
+
+  const endDate = new Date(now);
+  if (isAnnual) endDate.setFullYear(endDate.getFullYear() + 1);
+  else endDate.setMonth(endDate.getMonth() + 1);
+
+  const nextPaymentDate = params.nextPaymentDate || new Date(endDate);
+
+  return {
+    plan: {
+      type: planType,
+      membership: params.membership,
+      price: params.priceInCents,
+      currency: 'ILS',
+      basePriceInCents: params.priceInCents
+    },
+    payment: {
+      method: 'credit-card',
+      installments: 1,
+      nextPaymentDate,
+      lastPaymentDate: now
+    },
+    payme: {
+      subCode: params.payme?.subCode ?? null,
+      subID: params.payme?.subID ?? null,
+      buyerKey: params.payme?.buyerKey ?? null,
+      status: params.payme ? 1 : null
+    },
+    dates: {
+      startDate: now,
+      endDate,
+      pausedDate: null,
+      cancelledDate: null,
+      resumedDate: null
+    },
+    states: {
+      isActive: true,
+      isPaused: false,
+      willExpire: false,
+      isAnnual
+    },
+    history: {
+      lastModified: now,
+      modifiedBy: params.createdByUid || 'system'
+    },
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function parsePlanToPlanNumber(planRaw: unknown): 3 | 4 | null {
+  // On accepte plusieurs formats pour éviter les frictions côté app.
+  // - "monthly" / "annual"
+  // - 3 / 4 (legacy interne)
+  // - 1 / 12 (mois) => 1 => monthly, 12 => annual
+  const s = typeof planRaw === 'string' ? planRaw.trim().toLowerCase() : '';
+  const n = typeof planRaw === 'number' ? planRaw : typeof planRaw === 'string' ? Number(planRaw.trim()) : NaN;
+
+  if (s === 'monthly' || s === 'mensuel' || s === 'month' || s === 'mois') return 3;
+  if (s === 'annual' || s === 'annuel' || s === 'yearly' || s === 'an' || s === 'année') return 4;
+  if (Number.isFinite(n)) {
+    if (n === 3 || n === 1) return 3;
+    if (n === 4 || n === 12) return 4;
+  }
+  return null;
+}
+
 export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
@@ -123,6 +212,156 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
   }
 }
 
+export async function subscribe(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const uid = req.uid!;
+    const db = getFirestore();
+
+    const body = (req.body || {}) as {
+      membershipType?: unknown;
+      membership?: unknown;
+      plan?: unknown; // "monthly"|"annual" (ou 1/12, ou 3/4 legacy)
+      cardId?: unknown;
+      paymentCredentialId?: unknown;
+      priceInCents?: unknown;
+    };
+
+    const membership = pickString(body.membershipType) || pickString(body.membership);
+    if (!membership) {
+      res.status(400).json({ error: 'membershipType requis.', code: 'MEMBERSHIP_REQUIRED' });
+      return;
+    }
+
+    const planNumber = parsePlanToPlanNumber(body.plan);
+    if (!planNumber) {
+      res.status(400).json({ error: 'plan invalide (monthly|annual).', code: 'PLAN_INVALID' });
+      return;
+    }
+
+    const paymentCredentialId = pickString(body.cardId) || pickString(body.paymentCredentialId);
+    if (!paymentCredentialId) {
+      res.status(400).json({ error: 'cardId requis.', code: 'CARD_REQUIRED' });
+      return;
+    }
+
+    const rawPrice = pickString(body.priceInCents);
+    const priceInCentsParsed = rawPrice ? Number(rawPrice) : NaN;
+    const priceInCents =
+      Number.isFinite(priceInCentsParsed) && priceInCentsParsed > 0
+        ? Math.floor(priceInCentsParsed)
+        : planNumber === 4
+          ? 249000
+          : 24900;
+
+    const clientRef = db.collection('Clients').doc(uid);
+    const [clientSnap, subSnap] = await Promise.all([
+      clientRef.get(),
+      clientRef.collection('subscription').doc('current').get()
+    ]);
+
+    if (!clientSnap.exists) {
+      res.status(404).json({ error: 'Client introuvable.' });
+      return;
+    }
+
+    const existingSub = (subSnap.data() || {}) as Record<string, any>;
+    if (existingSub?.states?.isActive === true && existingSub?.states?.willExpire !== true) {
+      res.status(409).json({ error: 'Déjà abonné.', code: 'ALREADY_SUBSCRIBED' });
+      return;
+    }
+
+    const clientData = (clientSnap.data() || {}) as Record<string, any>;
+    const email = pickString(clientData.Email);
+    if (!email) {
+      res.status(400).json({ error: 'Email requis pour PayMe.', code: 'EMAIL_REQUIRED' });
+      return;
+    }
+
+    const paymentSnap = await clientRef.collection('Payment credentials').doc(paymentCredentialId).get();
+    if (!paymentSnap.exists) {
+      res.status(404).json({ error: 'Payment credential introuvable.', code: 'CARD_NOT_FOUND' });
+      return;
+    }
+    const buyerKey = pickString((paymentSnap.data() || {})['Isracard Key']);
+    if (!buyerKey) {
+      res.status(400).json({ error: 'Carte invalide (buyerKey manquant).', code: 'CARD_INVALID' });
+      return;
+    }
+
+    // PayMe: annual => sale unique ; monthly => sale + subscription future
+    let salePaymeId: string | null = null;
+    let subCode: number | string | null = null;
+    let subID: string | null = null;
+    let nextPaymentDate: Date | null = null;
+
+    if (planNumber === 4) {
+      const sale = await paymeGenerateSale({ priceInCents, description: membership, buyerKey });
+      salePaymeId = sale.salePaymeId;
+    } else {
+      const sale = await paymeGenerateSale({ priceInCents, description: `${membership} - Premier mois`, buyerKey });
+      salePaymeId = sale.salePaymeId;
+
+      const startDateDdMmYyyy = calculateSubscriptionStartDate(3);
+      nextPaymentDate = parseDdMmYyyy(startDateDdMmYyyy);
+      const sub = await paymeGenerateSubscription({
+        priceInCents,
+        description: membership,
+        email,
+        buyerKey,
+        planIterationType: 3,
+        startDateDdMmYyyy
+      });
+      subCode = sub.subCode;
+      subID = sub.subID;
+    }
+
+    const batch = db.batch();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    // Marquer la carte choisie comme "subscription card" (aligné CRM)
+    const credsSnap = await clientRef.collection('Payment credentials').get();
+    credsSnap.docs.forEach((d) => {
+      batch.set(d.ref, { isSubscriptionCard: d.id === paymentCredentialId }, { merge: true });
+    });
+
+    batch.set(
+      clientRef,
+      {
+        Membership: membership,
+        subPlan: planNumber,
+        isUnpaid: false,
+        sale_payme_id: salePaymeId,
+        ...(subID ? { paymeSubID: subID, 'IsraCard Sub ID': subID } : {}),
+        ...(subCode != null ? { israCard_subCode: subCode } : {}),
+        updatedAt: now
+      },
+      { merge: true }
+    );
+
+    const subscriptionDoc = buildSubscriptionCurrentDoc({
+      planNumber,
+      membership,
+      priceInCents,
+      payme: planNumber === 3 ? { buyerKey, subCode, subID } : null,
+      nextPaymentDate,
+      createdByUid: uid
+    });
+    batch.set(clientRef.collection('subscription').doc('current'), subscriptionDoc, { merge: true });
+
+    await batch.commit();
+
+    res.status(200).json({
+      success: true,
+      salePaymeId,
+      subCode,
+      subID,
+      subscription: subscriptionDoc
+    });
+  } catch (error: any) {
+    res.status(error?.status || 500).json({ error: error.message || String(error), code: error?.code });
+  }
+}
+
 export async function getCards(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
@@ -166,6 +405,10 @@ export async function addCard(req: AuthenticatedRequest, res: Response): Promise
       cardName?: unknown;
       isSubscriptionCard?: unknown;
       isDefault?: unknown;
+      // Champs optionnels envoyés par l'app (UX) - ne pas faire confiance.
+      buyerZipCode?: unknown;
+      cardBin6?: unknown;
+      isRevolutCandidate?: unknown;
     };
 
     // Validation minimale
@@ -183,6 +426,14 @@ export async function addCard(req: AuthenticatedRequest, res: Response): Promise
     }
     if (!cvv) {
       res.status(400).json({ error: 'cvv requis.' });
+      return;
+    }
+
+    const buyerZipCode = pickString(body.buyerZipCode);
+    const bin6 = norm.digitsOnly.length >= 6 ? norm.digitsOnly.slice(0, 6) : '';
+    const isRevolut = await isRevolutBin6(bin6);
+    if (isRevolut && !buyerZipCode) {
+      res.status(400).json({ error: 'Code postal requis pour une carte Revolut.', code: 'BUYER_ZIP_CODE_REQUIRED' });
       return;
     }
 
@@ -211,7 +462,8 @@ export async function addCard(req: AuthenticatedRequest, res: Response): Promise
       cardHolder,
       cardNumber: norm.digitsOnly,
       expirationDate,
-      cvv
+      cvv,
+      ...(isRevolut ? { buyerZipCode } : {})
     });
 
     // 2) Securden: best effort (ne doit pas bloquer l’app)
