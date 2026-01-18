@@ -9,6 +9,9 @@ const ALLOWED_REMOTE_CONFIG_KEYS = [
   'pack_start_mensually',
   'pack_essential_mensually',
   'pack_vip_mensually',
+  // Typo historique côté app (à supporter)
+  'pack_elite_mensualy',
+  // Variante "corrigée" (historique backend)
   'pack_elite_mensually',
   'pack_start_annually',
   'pack_essential_annually',

@@ -15,6 +15,7 @@ import {
   paymeGenerateSubscription
 } from '../services/payme.service.js';
 import { isRevolutBin6 } from '../services/revolutCardBins.service.js';
+import { computeMembershipPricing } from '../services/membershipPricing.service.js';
 
 type CreateClientBody = {
   email?: unknown;
@@ -375,8 +376,23 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
 
       // Prix (centimes) - fallback sur valeurs connues si non fourni
       const priceFromPayload = Number((clientData as any).membershipPrice || 0);
-      priceInCentsFinal = Number.isFinite(priceFromPayload) && priceFromPayload > 0 ? priceFromPayload : planNumber === 4 ? 249000 : 24900;
       membershipTypeFinal = pickString(clientData.membershipType) || 'Pack Start';
+
+      if (Number.isFinite(priceFromPayload) && priceFromPayload > 0) {
+        // Backward compatible: si le CRM fournit un prix, on le garde.
+        priceInCentsFinal = Math.floor(priceFromPayload);
+      } else {
+        // Sinon: calcul déterministe côté serveur (Remote Config -> fallback), pour éviter les erreurs de pack.
+        const pricing = await computeMembershipPricing({
+          membershipType: membershipTypeFinal,
+          plan: planNumber === 4 ? 'annual' : 'monthly'
+        });
+        if (!pricing.ok) {
+          const code = pricing.code === 'PLAN_INVALID' ? 'PLAN_INVALID' : 'MEMBERSHIP_INVALID';
+          throw new HttpError(400, `${code}.`, code);
+        }
+        priceInCentsFinal = pricing.chargedPriceInCents;
+      }
       const fullName = `${firstName} ${lastName}`.trim();
       const cardHolder = pickString((clientData as any).cardHolder) || fullName;
       const cardDigits = digitsOnly(cardNumberRaw);

@@ -4,6 +4,7 @@ import { admin, getFirestore } from '../config/firebase.js';
 import { paymeCaptureBuyerToken } from '../services/payme.service.js';
 import { isRevolutBin6 } from '../services/revolutCardBins.service.js';
 import { calculateSubscriptionStartDate, paymeGenerateSale, paymeGenerateSubscription } from '../services/payme.service.js';
+import { computeMembershipPricing } from '../services/membershipPricing.service.js';
 import {
   createSecurdenCreditCardAccountInFolder,
   normalizeCardNumberDigitsOnly,
@@ -226,15 +227,9 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
       priceInCents?: unknown;
     };
 
-    const membership = pickString(body.membershipType) || pickString(body.membership);
-    if (!membership) {
+    const membershipRaw = pickString(body.membershipType) || pickString(body.membership);
+    if (!membershipRaw) {
       res.status(400).json({ error: 'membershipType requis.', code: 'MEMBERSHIP_REQUIRED' });
-      return;
-    }
-
-    const planNumber = parsePlanToPlanNumber(body.plan);
-    if (!planNumber) {
-      res.status(400).json({ error: 'plan invalide (monthly|annual).', code: 'PLAN_INVALID' });
       return;
     }
 
@@ -244,14 +239,42 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    const rawPrice = pickString(body.priceInCents);
-    const priceInCentsParsed = rawPrice ? Number(rawPrice) : NaN;
-    const priceInCents =
-      Number.isFinite(priceInCentsParsed) && priceInCentsParsed > 0
-        ? Math.floor(priceInCentsParsed)
-        : planNumber === 4
-          ? 249000
-          : 24900;
+    const pricing = await computeMembershipPricing({
+      membershipType: membershipRaw,
+      plan: body.plan,
+      clientPriceInCents: body.priceInCents
+    });
+    if (!pricing.ok) {
+      if (pricing.code === 'MEMBERSHIP_INVALID') {
+        res.status(400).json({ error: 'membershipType invalide.', code: 'MEMBERSHIP_INVALID' });
+        return;
+      }
+      if (pricing.code === 'PLAN_INVALID') {
+        res.status(400).json({ error: 'plan invalide (monthly|annual).', code: 'PLAN_INVALID' });
+        return;
+      }
+      if (pricing.code === 'PRICE_MISMATCH') {
+        res.status(409).json({
+          error: 'Prix incohérent.',
+          code: 'PRICE_MISMATCH',
+          serverPriceInCents: pricing.serverPriceInCents,
+          clientPriceInCents: pricing.clientPriceInCents,
+          membershipTypeNormalized: pricing.membershipTypeNormalized,
+          planNormalized: pricing.planNormalized,
+          remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
+          remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed
+        });
+        return;
+      }
+
+      // Safety net (ne devrait pas arriver)
+      res.status(400).json({ error: 'Requête invalide.', code: pricing.code });
+      return;
+    }
+
+    const membership = pricing.membershipTypeNormalized;
+    const planNumber = pricing.planNormalized === 'annual' ? 4 : 3;
+    const priceInCents = pricing.chargedPriceInCents;
 
     const clientRef = db.collection('Clients').doc(uid);
     const [clientSnap, subSnap] = await Promise.all([
@@ -346,6 +369,17 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
       nextPaymentDate,
       createdByUid: uid
     });
+    // Audit pricing / debug (source de vérité)
+    (subscriptionDoc as any).pricing = {
+      chargedPriceInCents: pricing.chargedPriceInCents,
+      serverPriceInCents: pricing.serverPriceInCents,
+      pricingSource: pricing.pricingSource,
+      remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
+      remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed,
+      clientPriceInCents: pricing.clientPriceInCents,
+      membershipTypeNormalized: pricing.membershipTypeNormalized,
+      planNormalized: pricing.planNormalized
+    };
     batch.set(clientRef.collection('subscription').doc('current'), subscriptionDoc, { merge: true });
 
     await batch.commit();
@@ -355,6 +389,12 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
       salePaymeId,
       subCode,
       subID,
+      chargedPriceInCents: pricing.chargedPriceInCents,
+      pricingSource: pricing.pricingSource,
+      remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
+      remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed,
+      membershipTypeNormalized: pricing.membershipTypeNormalized,
+      planNormalized: pricing.planNormalized,
       subscription: subscriptionDoc
     });
   } catch (error: any) {
