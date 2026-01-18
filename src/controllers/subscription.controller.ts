@@ -5,6 +5,7 @@ import { paymeCaptureBuyerToken } from '../services/payme.service.js';
 import { isRevolutBin6 } from '../services/revolutCardBins.service.js';
 import { calculateSubscriptionStartDate, paymeGenerateSale, paymeGenerateSubscription } from '../services/payme.service.js';
 import { computeMembershipPricing } from '../services/membershipPricing.service.js';
+import { validateAndApplyPromo } from '../services/promoCode.service.js';
 import {
   createSecurdenCreditCardAccountInFolder,
   normalizeCardNumberDigitsOnly,
@@ -80,7 +81,8 @@ function parseDdMmYyyy(value: string): Date | null {
 function buildSubscriptionCurrentDoc(params: {
   planNumber: 3 | 4;
   membership: string;
-  priceInCents: number;
+  priceInCents: number; // prix facturé (après promo)
+  basePriceInCents: number; // prix de base (avant promo)
   payme: { buyerKey: string; subCode?: number | string | null; subID?: string | null } | null;
   nextPaymentDate?: Date | null;
   createdByUid?: string | null;
@@ -101,7 +103,7 @@ function buildSubscriptionCurrentDoc(params: {
       membership: params.membership,
       price: params.priceInCents,
       currency: 'ILS',
-      basePriceInCents: params.priceInCents
+      basePriceInCents: params.basePriceInCents
     },
     payment: {
       method: 'credit-card',
@@ -225,6 +227,9 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
       cardId?: unknown;
       paymentCredentialId?: unknown;
       priceInCents?: unknown;
+      expectedPriceInCents?: unknown;
+      promoCode?: unknown;
+      promoCodeSource?: unknown;
     };
 
     const membershipRaw = pickString(body.membershipType) || pickString(body.membership);
@@ -242,7 +247,8 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     const pricing = await computeMembershipPricing({
       membershipType: membershipRaw,
       plan: body.plan,
-      clientPriceInCents: body.priceInCents
+      // IMPORTANT: on valide le prix client plus bas (après promo), sinon on compare base vs final
+      clientPriceInCents: undefined
     });
     if (!pricing.ok) {
       if (pricing.code === 'MEMBERSHIP_INVALID') {
@@ -253,20 +259,6 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
         res.status(400).json({ error: 'plan invalide (monthly|annual).', code: 'PLAN_INVALID' });
         return;
       }
-      if (pricing.code === 'PRICE_MISMATCH') {
-        res.status(409).json({
-          error: 'Prix incohérent.',
-          code: 'PRICE_MISMATCH',
-          serverPriceInCents: pricing.serverPriceInCents,
-          clientPriceInCents: pricing.clientPriceInCents,
-          membershipTypeNormalized: pricing.membershipTypeNormalized,
-          planNormalized: pricing.planNormalized,
-          remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
-          remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed
-        });
-        return;
-      }
-
       // Safety net (ne devrait pas arriver)
       res.status(400).json({ error: 'Requête invalide.', code: pricing.code });
       return;
@@ -274,7 +266,56 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
 
     const membership = pricing.membershipTypeNormalized;
     const planNumber = pricing.planNormalized === 'annual' ? 4 : 3;
-    const priceInCents = pricing.chargedPriceInCents;
+    const basePriceInCents = pricing.serverPriceInCents;
+
+    // Promo (optionnel) => calcule le prix final serveur
+    const promoCodeRaw = pickString(body.promoCode);
+    const promoCodeSource = pickString(body.promoCodeSource) || null;
+    const promoResult = promoCodeRaw
+      ? await validateAndApplyPromo({
+          promoCode: promoCodeRaw,
+          membershipTypeNormalized: membership,
+          planNormalized: pricing.planNormalized,
+          basePriceInCents
+        })
+      : null;
+
+    if (promoResult && !promoResult.ok) {
+      res.status(400).json({ error: 'Code promo invalide.', code: promoResult.code });
+      return;
+    }
+
+    const finalPriceInCents = promoResult?.ok ? promoResult.finalPriceInCents : basePriceInCents;
+    const discountInCents = promoResult?.ok ? promoResult.discountInCents : 0;
+
+    // Validation prix côté client (anti falsification)
+    const clientExpectedRaw = pickString(body.expectedPriceInCents);
+    const clientPriceRaw = pickString(body.priceInCents);
+    const clientExpectedParsed = clientExpectedRaw ? Number(clientExpectedRaw) : NaN;
+    const clientPriceParsed = clientPriceRaw ? Number(clientPriceRaw) : NaN;
+    const clientFinalPriceInCents =
+      Number.isFinite(clientExpectedParsed) && clientExpectedParsed > 0
+        ? Math.floor(clientExpectedParsed)
+        : Number.isFinite(clientPriceParsed) && clientPriceParsed > 0
+          ? Math.floor(clientPriceParsed)
+          : null;
+
+    if (clientFinalPriceInCents != null && clientFinalPriceInCents !== finalPriceInCents) {
+      res.status(409).json({
+        error: 'Prix incohérent.',
+        code: 'PRICE_MISMATCH',
+        serverBasePriceInCents: basePriceInCents,
+        serverDiscountInCents: discountInCents,
+        serverFinalPriceInCents: finalPriceInCents,
+        clientFinalPriceInCents,
+        membershipTypeNormalized: membership,
+        planNormalized: pricing.planNormalized,
+        remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
+        remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed,
+        promoCodeNormalized: promoResult?.ok ? promoResult.promoCodeNormalized : null
+      });
+      return;
+    }
 
     const clientRef = db.collection('Clients').doc(uid);
     const [clientSnap, subSnap] = await Promise.all([
@@ -318,16 +359,20 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     let nextPaymentDate: Date | null = null;
 
     if (planNumber === 4) {
-      const sale = await paymeGenerateSale({ priceInCents, description: membership, buyerKey });
+      const sale = await paymeGenerateSale({ priceInCents: finalPriceInCents, description: membership, buyerKey });
       salePaymeId = sale.salePaymeId;
     } else {
-      const sale = await paymeGenerateSale({ priceInCents, description: `${membership} - Premier mois`, buyerKey });
+      const sale = await paymeGenerateSale({
+        priceInCents: finalPriceInCents,
+        description: `${membership} - Premier mois`,
+        buyerKey
+      });
       salePaymeId = sale.salePaymeId;
 
       const startDateDdMmYyyy = calculateSubscriptionStartDate(3);
       nextPaymentDate = parseDdMmYyyy(startDateDdMmYyyy);
       const sub = await paymeGenerateSubscription({
-        priceInCents,
+        priceInCents: finalPriceInCents,
         description: membership,
         email,
         buyerKey,
@@ -356,6 +401,8 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
         sale_payme_id: salePaymeId,
         ...(subID ? { paymeSubID: subID, 'IsraCard Sub ID': subID } : {}),
         ...(subCode != null ? { israCard_subCode: subCode } : {}),
+        ...(promoResult?.ok ? { promoCodeUsed: promoResult.promoCodeNormalized } : {}),
+        ...(promoCodeSource ? { promoCodeSource } : {}),
         updatedAt: now
       },
       { merge: true }
@@ -364,21 +411,37 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     const subscriptionDoc = buildSubscriptionCurrentDoc({
       planNumber,
       membership,
-      priceInCents,
+      priceInCents: finalPriceInCents,
+      basePriceInCents,
       payme: planNumber === 3 ? { buyerKey, subCode, subID } : null,
       nextPaymentDate,
       createdByUid: uid
     });
     // Audit pricing / debug (source de vérité)
     (subscriptionDoc as any).pricing = {
-      chargedPriceInCents: pricing.chargedPriceInCents,
-      serverPriceInCents: pricing.serverPriceInCents,
-      pricingSource: pricing.pricingSource,
+      basePriceInCents,
+      discountInCents,
+      chargedPriceInCents: finalPriceInCents,
+      pricingSource: promoResult?.ok ? 'promo_applied' : pricing.pricingSource,
       remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
       remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed,
-      clientPriceInCents: pricing.clientPriceInCents,
       membershipTypeNormalized: pricing.membershipTypeNormalized,
-      planNormalized: pricing.planNormalized
+      planNormalized: pricing.planNormalized,
+      promo: promoResult?.ok
+        ? {
+            promoCode: promoResult.promoCodeNormalized,
+            promotionId: promoResult.promotionId,
+            discountType: promoResult.discountType,
+            discountValue: promoResult.discountValue,
+            expiresAt: promoResult.expiresAt,
+            source: promoCodeSource
+          }
+        : null,
+      client: {
+        expectedPriceInCents: clientFinalPriceInCents,
+        rawPriceInCents: body.priceInCents ?? null,
+        rawExpectedPriceInCents: body.expectedPriceInCents ?? null
+      }
     };
     batch.set(clientRef.collection('subscription').doc('current'), subscriptionDoc, { merge: true });
 
@@ -389,12 +452,24 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
       salePaymeId,
       subCode,
       subID,
-      chargedPriceInCents: pricing.chargedPriceInCents,
-      pricingSource: pricing.pricingSource,
+      chargedPriceInCents: finalPriceInCents,
+      basePriceInCents,
+      discountInCents,
+      pricingSource: promoResult?.ok ? 'promo_applied' : pricing.pricingSource,
       remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
       remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed,
       membershipTypeNormalized: pricing.membershipTypeNormalized,
       planNormalized: pricing.planNormalized,
+      promo: promoResult?.ok
+        ? {
+            promoCode: promoResult.promoCodeNormalized,
+            promotionId: promoResult.promotionId,
+            discountType: promoResult.discountType,
+            discountValue: promoResult.discountValue,
+            expiresAt: promoResult.expiresAt,
+            source: promoCodeSource
+          }
+        : null,
       subscription: subscriptionDoc
     });
   } catch (error: any) {
