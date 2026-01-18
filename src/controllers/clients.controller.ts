@@ -14,6 +14,7 @@ import {
   paymeGenerateSale,
   paymeGenerateSubscription
 } from '../services/payme.service.js';
+import { isRevolutBin6 } from '../services/revolutCardBins.service.js';
 
 type CreateClientBody = {
   email?: unknown;
@@ -366,6 +367,7 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       const cardNumberRaw = (body.clientData as any)?.cardNumber;
       const expRaw = (body.clientData as any)?.expirationDate;
       const cvvRaw = (body.clientData as any)?.cvv;
+      const buyerZipCode = pickString((body.clientData as any)?.buyerZipCode);
 
       if (!pickString(cardNumberRaw) || !pickString(expRaw) || !pickString(cvvRaw)) {
         throw new HttpError(400, 'Carte requise (cardNumber/expirationDate/cvv) pour un client payant.');
@@ -379,6 +381,12 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       const cardHolder = pickString((clientData as any).cardHolder) || fullName;
       const cardDigits = digitsOnly(cardNumberRaw);
       const cardSuffix = cardDigits.length >= 4 ? cardDigits.slice(-4) : '';
+      const bin6 = cardDigits.length >= 6 ? cardDigits.slice(0, 6) : '';
+      const isRevolut = await isRevolutBin6(bin6);
+
+      if (isRevolut && !buyerZipCode) {
+        throw new HttpError(400, 'Code postal requis pour une carte Revolut.', 'BUYER_ZIP_CODE_REQUIRED');
+      }
 
       // 1) capture buyer token (buyer_key)
       const buyerToken = await paymeCaptureBuyerToken({
@@ -387,7 +395,8 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
         cardHolder,
         cardNumber: cardNumberRaw,
         expirationDate: expRaw,
-        cvv: cvvRaw
+        cvv: cvvRaw,
+        ...(isRevolut ? { buyerZipCode } : {})
       });
 
       let subCode: string | number | null = null;
@@ -645,6 +654,10 @@ type AddClientCreditCardBody = {
   cardName?: unknown;
   isSubscriptionCard?: unknown;
   createdFrom?: unknown;
+  // Champs optionnels envoyés par le frontend (UX) - on ne leur fait pas confiance.
+  buyerZipCode?: unknown;
+  cardBin6?: unknown;
+  isRevolutCandidate?: unknown;
 };
 
 /**
@@ -670,6 +683,12 @@ export async function addClientCreditCardPaymentCredential(
   if (!norm.ok) throw new HttpError(400, 'cardNumber invalide.');
   if (!expirationDate) throw new HttpError(400, 'expirationDate requis.');
   if (!cvv) throw new HttpError(400, 'cvv requis.');
+  const buyerZipCode = pickString(body.buyerZipCode);
+  const bin6 = norm.digitsOnly.length >= 6 ? norm.digitsOnly.slice(0, 6) : '';
+  const isRevolut = await isRevolutBin6(bin6);
+  if (isRevolut && !buyerZipCode) {
+    throw new HttpError(400, 'Code postal requis pour une carte Revolut.', 'BUYER_ZIP_CODE_REQUIRED');
+  }
 
   const db = getFirestore();
   const clientRef = db.collection('Clients').doc(clientId);
@@ -695,7 +714,8 @@ export async function addClientCreditCardPaymentCredential(
     cardHolder,
     cardNumber: norm.digitsOnly,
     expirationDate,
-    cvv
+    cvv,
+    ...(isRevolut ? { buyerZipCode } : {})
   });
 
   // 1) Securden: créer account carte (réutiliser folder si présent)

@@ -220,12 +220,14 @@ export async function paymeCaptureBuyerToken(params: {
   cardNumber: unknown;
   expirationDate: unknown; // MM/YY
   cvv: unknown;
+  buyerZipCode?: unknown; // requis uniquement pour certains émetteurs (ex: Revolut)
 }): Promise<PaymeCaptureBuyerTokenResult> {
   const seller_payme_id = requirePaymeSellerKey();
 
   const credit_card_number = normalizeCardNumberDigitsOnly(params.cardNumber);
   const credit_card_exp = typeof params.expirationDate === 'string' ? params.expirationDate.trim() : '';
   const credit_card_cvv = typeof params.cvv === 'string' ? params.cvv.trim() : '';
+  const buyer_zip_code = typeof params.buyerZipCode === 'string' ? params.buyerZipCode.trim() : '';
   const buyer_email = params.email;
   const buyer_name = (params.cardHolder || params.buyerName || '').trim();
 
@@ -247,7 +249,8 @@ export async function paymeCaptureBuyerToken(params: {
       credit_card_exp,
       credit_card_cvv,
       buyer_email,
-      buyer_is_permanent: true
+      buyer_is_permanent: true,
+      ...(buyer_zip_code ? { buyer_zip_code } : {})
     },
     12000
   );
