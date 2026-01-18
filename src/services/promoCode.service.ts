@@ -54,6 +54,8 @@ function isPromoActive(doc: Record<string, any>): boolean {
 
 function promoApplicableToMembership(doc: Record<string, any>, membership: string): boolean {
   const m = membership.trim();
+  // Structure existante: forEveryone=true => applicable à tous les packs
+  if (doc.forEveryone === true) return true;
   // Champs possibles: membershipType, membership, applicableMemberships, membershipTypes
   const single = pickString(doc.membershipType || doc.membership);
   if (single) {
@@ -97,6 +99,8 @@ function extractDiscount(doc: Record<string, any>): { type: 'percent'; value: nu
     doc.percentOff,
     doc.discountPercent,
     doc.reductionPercent,
+    // Structure existante: "reduction" (ex: 20) => % de réduction
+    doc.reduction,
     doc.percent,
     doc.pct
   ];
@@ -115,6 +119,14 @@ function extractDiscount(doc: Record<string, any>): { type: 'percent'; value: nu
   for (const v of amountNisCandidates) {
     const n = typeof v === 'string' ? Number(v.trim()) : typeof v === 'number' ? v : NaN;
     if (Number.isFinite(n) && n > 0) return { type: 'amount', valueInCents: Math.round(n * 100) };
+  }
+
+  // Heuristique: parfois "reduction" peut être un montant (NIS) au lieu d'un %.
+  // Si réduction > 100, on l'interprète comme un montant NIS.
+  const red = doc.reduction;
+  const redN = typeof red === 'string' ? Number(red.trim()) : typeof red === 'number' ? red : NaN;
+  if (Number.isFinite(redN) && redN > 100) {
+    return { type: 'amount', valueInCents: Math.round(redN * 100) };
   }
 
   return null;
