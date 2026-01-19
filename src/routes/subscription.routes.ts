@@ -43,6 +43,22 @@ router.post(
     : []),
   subscriptionController.subscribe
 );
+
+// Quote de changement d'abonnement (prorata) - app mobile
+router.post(
+  '/change/quote',
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:subscription:change:quote',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  subscriptionController.quoteSubscriptionChange
+);
 router.patch('/cards/:cardId', subscriptionController.updateCard);
 router.delete('/cards/:cardId', subscriptionController.deleteCard);
 router.patch('/cards/:cardId/set-default', subscriptionController.setDefaultCard);

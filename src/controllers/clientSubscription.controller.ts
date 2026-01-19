@@ -612,11 +612,20 @@ export async function cancelClientSubscription(req: AuthenticatedRequest, res: R
   if (!subId) throw new HttpError(400, 'Aucun abonnement PayMe actif (subId manquant).');
 
   await paymeCancelSubscription({ subId });
+
+  // IMPORTANT: "cancel" PayMe = sub_status=5 => l'accès reste actif jusqu'à la fin de période.
+  // On ne doit pas basculer le client en Visitor immédiatement.
+  const accessUntil =
+    (subscription?.payment?.nextPaymentDate as any) ??
+    (subscription?.dates?.endDate as any) ??
+    null;
+
   await updateSubscriptionStateDoc({
     clientId,
     patch: {
-      states: { willExpire: true, isActive: false },
-      dates: { cancelledDate: new Date() },
+      states: { willExpire: true, isActive: true },
+      dates: { cancelledDate: new Date(), ...(accessUntil ? { endDate: accessUntil } : {}) },
+      payme: { sub_status: 5, ...(accessUntil ? { nextPaymentDate: accessUntil } : {}) },
       history: { lastModified: admin.firestore.FieldValue.serverTimestamp(), modifiedBy: callerUid || 'system' },
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }

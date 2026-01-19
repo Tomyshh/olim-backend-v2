@@ -16,6 +16,13 @@ type PaymeSubscriptionResult = {
 export type PaymeSubscriptionDetails = {
   subCode: number | string;
   subStatus: number | null;
+  /**
+   * Date de prochain prélèvement / fin de période renvoyée par PayMe (normalisée).
+   * - nextPaymentDate: Date (timezone locale, 12:00 pour éviter DST)
+   * - nextPaymentDateYmd: string "YYYY-MM-DD" (format stable pour front)
+   */
+  nextPaymentDate: Date | null;
+  nextPaymentDateYmd: string | null;
   raw?: any;
 };
 
@@ -158,6 +165,80 @@ function pickSubStatusFromGetSubscriptionsResponse(json: any, subCode: number | 
   return Number.isFinite(n) ? n : null;
 }
 
+function pickSubNextDateFromGetSubscriptionsResponse(json: any, subCode: number | string): unknown {
+  const items = Array.isArray(json?.items) ? (json.items as any[]) : null;
+  const first = items && items.length > 0 ? items[0] : null;
+  const match =
+    items?.find((it) => {
+      const code = it?.sub_payme_code ?? it?.subCode ?? it?.sub_code;
+      const coerced = coerceSubCode(code);
+      return coerced != null && String(coerced) === String(subCode);
+    }) ?? first;
+
+  // Clés observées / probables
+  return (
+    match?.sub_next_date ??
+    match?.subNextDate ??
+    match?.next_payment_date ??
+    match?.nextPaymentDate ??
+    json?.sub_next_date ??
+    json?.subNextDate ??
+    json?.next_payment_date ??
+    json?.nextPaymentDate ??
+    null
+  );
+}
+
+function parseDdMmYyyyToDate(value: string): Date | null {
+  const m = String(value || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  const dd = Number(m[1]);
+  const mm = Number(m[2]);
+  const yyyy = Number(m[3]);
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return null;
+  // Noon local time to avoid DST edge cases
+  return new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
+}
+
+function parseYyyyMmDdToDate(value: string): Date | null {
+  const m = String(value || '').trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const yyyy = Number(m[1]);
+  const mm = Number(m[2]);
+  const dd = Number(m[3]);
+  if (!Number.isFinite(dd) || !Number.isFinite(mm) || !Number.isFinite(yyyy)) return null;
+  return new Date(yyyy, mm - 1, dd, 12, 0, 0, 0);
+}
+
+function formatYyyyMmDd(d: Date): string {
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function normalizePaymeNextPaymentDate(value: unknown): { date: Date | null; ymd: string | null } {
+  if (!value) return { date: null, ymd: null };
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return { date: value, ymd: formatYyyyMmDd(value) };
+  if (typeof value === 'string') {
+    const s = value.trim();
+    if (!s) return { date: null, ymd: null };
+    const d1 = parseYyyyMmDdToDate(s);
+    if (d1) return { date: d1, ymd: formatYyyyMmDd(d1) };
+    const d2 = parseDdMmYyyyToDate(s);
+    if (d2) return { date: d2, ymd: formatYyyyMmDd(d2) };
+    const d3 = new Date(s);
+    if (!Number.isNaN(d3.getTime())) return { date: d3, ymd: formatYyyyMmDd(d3) };
+  }
+  // Support timestamp-like
+  const n = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  if (Number.isFinite(n) && n > 0) {
+    const d = new Date(n);
+    if (!Number.isNaN(d.getTime())) return { date: d, ymd: formatYyyyMmDd(d) };
+  }
+  return { date: null, ymd: null };
+}
+
 /**
  * PayMe: POST /api/get-subscriptions
  * Body: { seller_payme_id, sub_payme_code }
@@ -205,7 +286,15 @@ export async function paymeGetSubscriptionDetails(params: {
   if (!value?.ok) return null;
 
   const subStatus = pickSubStatusFromGetSubscriptionsResponse(value.json, subCode);
-  return { subCode, subStatus, raw: value.json };
+  const nextRaw = pickSubNextDateFromGetSubscriptionsResponse(value.json, subCode);
+  const normalizedNext = normalizePaymeNextPaymentDate(nextRaw);
+  return {
+    subCode,
+    subStatus,
+    nextPaymentDate: normalizedNext.date,
+    nextPaymentDateYmd: normalizedNext.ymd,
+    raw: value.json
+  };
 }
 
 export async function paymeGetSubscriptionStatus(subCode: number | string): Promise<number | null> {

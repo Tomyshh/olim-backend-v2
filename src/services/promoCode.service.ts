@@ -9,6 +9,7 @@ export type PromoValidationOk = {
   discountInCents: number; // calculé par rapport à basePriceInCents si percent
   basePriceInCents: number;
   finalPriceInCents: number;
+  durationCycles: number | null;
   // audit
   membershipTypeNormalized: string;
   planNormalized: 'monthly' | 'annual';
@@ -132,6 +133,16 @@ function extractDiscount(doc: Record<string, any>): { type: 'percent'; value: nu
   return null;
 }
 
+function extractPromoDurationCycles(doc: Record<string, any>): number | null {
+  const v = doc.promo_duration ?? doc.promoDuration ?? doc.durationCycles ?? doc.duration;
+  const n = typeof v === 'string' ? Number(v.trim()) : typeof v === 'number' ? v : NaN;
+  if (!Number.isFinite(n)) return null;
+  const k = Math.floor(n);
+  if (k <= 0) return null;
+  // Sécurité: limiter une promo à 24 cycles max par défaut
+  return Math.min(k, 24);
+}
+
 async function loadPromotionByCode(promoCodeNormalized: string): Promise<{ id: string; data: Record<string, any> } | null> {
   const db = getFirestore();
 
@@ -189,6 +200,7 @@ export async function validateAndApplyPromo(params: {
   const discountInCents =
     discount.type === 'percent' ? Math.round((basePriceInCents * discount.value) / 100) : discount.valueInCents;
   const finalPriceInCents = Math.max(0, basePriceInCents - discountInCents);
+  const durationCycles = extractPromoDurationCycles(doc);
 
   return {
     ok: true,
@@ -199,6 +211,7 @@ export async function validateAndApplyPromo(params: {
     discountInCents,
     basePriceInCents,
     finalPriceInCents,
+    durationCycles,
     membershipTypeNormalized: params.membershipTypeNormalized,
     planNormalized: params.planNormalized,
     expiresAt: expiresAt || null
