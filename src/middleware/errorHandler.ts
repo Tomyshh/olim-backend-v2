@@ -36,6 +36,9 @@ export function errorHandler(
     ...(Number.isFinite(Number(err?.errorCode)) ? { paymeErrorCode: Number(err.errorCode) } : {}),
     ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.twilio && { details: { provider: 'twilio', ...err.twilio } }),
     ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.sms && { details: { provider: 'sms', ...err.sms } }),
+    ...(process.env.EXPOSE_ERROR_DETAILS === 'true' &&
+      err?.payme &&
+      typeof err.payme === 'object' && { details: { provider: 'payme', ...err.payme } }),
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
   });
 }

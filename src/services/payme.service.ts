@@ -53,6 +53,14 @@ function safePaymeErrorMessage(json: any): string {
   return details || 'Erreur PayMe.';
 }
 
+function attachPaymeDetails(err: any, details: Record<string, any>): void {
+  // Ne jamais inclure de données carte ici.
+  (err as any).payme = {
+    ...(typeof (err as any).payme === 'object' && (err as any).payme ? (err as any).payme : {}),
+    ...details
+  };
+}
+
 function paymeStatusCode(json: any): number | null {
   const v = json?.status_code ?? json?.statusCode ?? json?.status;
   const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN;
@@ -95,8 +103,6 @@ async function paymeRequestJson(
   const url = new URL(path.replace(/^\/+/, ''), baseUrl).toString();
   assertHttps(url, 'PayMe URL');
 
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const limit = Number(process.env.PAYME_CONCURRENCY || 5);
     const waitTimeoutMs = Number(process.env.PAYME_WAIT_TIMEOUT_MS || 5000);
@@ -105,16 +111,26 @@ async function paymeRequestJson(
       key: 'payme',
       limit: Number.isFinite(limit) && limit > 0 ? limit : 5,
       waitTimeoutMs: Number.isFinite(waitTimeoutMs) && waitTimeoutMs > 0 ? waitTimeoutMs : 5000,
-      fn: async () =>
-        await fetch(url, {
-          method,
-          headers: {
-            Accept: 'application/json',
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(body),
-          signal: ctrl.signal
-        })
+      // IMPORTANT:
+      // Le timeout doit démarrer quand la requête réseau démarre réellement, pas avant.
+      // Sinon on “mange” du timeout pendant l’attente de concurrence (queue), et on obtient des faux timeouts.
+      fn: async () => {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), timeoutMs);
+        try {
+          return await fetch(url, {
+            method,
+            headers: {
+              Accept: 'application/json',
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(body),
+            signal: ctrl.signal
+          });
+        } finally {
+          clearTimeout(t);
+        }
+      }
     });
     const status = res.status;
     const text = await res.text();
@@ -130,10 +146,13 @@ async function paymeRequestJson(
     if (e?.name === 'ConcurrencyLimitError') {
       throw new HttpError(503, 'Service paiement surchargé. Veuillez réessayer.', 'PAYME_OVERLOADED');
     }
-    if (e?.name === 'AbortError') throw new HttpError(400, 'Timeout PayMe.');
-    throw new HttpError(400, 'Erreur PayMe.');
-  } finally {
-    clearTimeout(t);
+    if (e?.name === 'AbortError') {
+      console.warn('[PayMe] Timeout', { path, timeoutMs });
+      throw new HttpError(504, 'Le service de paiement ne répond pas. Veuillez réessayer dans quelques instants.', 'PAYME_TIMEOUT');
+    }
+    const err = new HttpError(502, 'Le service de paiement est indisponible. Veuillez réessayer.', 'PAYME_UPSTREAM_ERROR');
+    attachPaymeDetails(err, { path, method });
+    throw err;
   }
 }
 
@@ -341,7 +360,10 @@ export async function paymeCaptureBuyerToken(params: {
       buyer_is_permanent: true,
       ...(buyer_zip_code ? { buyer_zip_code } : {})
     },
-    12000
+    (() => {
+      const raw = Number(process.env.PAYME_CAPTURE_BUYER_TOKEN_TIMEOUT_MS || 20000);
+      return Number.isFinite(raw) && raw > 0 ? raw : 20000;
+    })()
   );
 
   if (debug) {
@@ -354,9 +376,20 @@ export async function paymeCaptureBuyerToken(params: {
   }
 
   if (!ok || json?.status_error_code) {
-    const err = new HttpError(400, `PayMe capture-buyer-token: ${safePaymeErrorMessage(json)}`);
+    const err = new HttpError(
+      400,
+      "Impossible d'enregistrer la carte. Vérifiez le numéro, la date d'expiration et le CVV, puis réessayez.",
+      'PAYME_CARD_INVALID_OR_DECLINED'
+    );
     (err as any).statusCode = status;
     (err as any).errorCode = json?.status_error_code;
+    attachPaymeDetails(err, {
+      endpoint: 'capture-buyer-token',
+      httpStatus: status,
+      paymeStatusCode: paymeStatusCode(json),
+      paymeErrorCode: json?.status_error_code,
+      paymeErrorMessage: safePaymeErrorMessage(json)
+    });
     throw err;
   }
 
@@ -518,9 +551,20 @@ export async function paymeGenerateSubscription(params: {
   }
 
   if (!ok || json?.status_error_code) {
-    const err = new HttpError(400, `PayMe generate-subscription: ${safePaymeErrorMessage(json)}`);
+    const err = new HttpError(
+      400,
+      "Impossible de créer l'abonnement pour le moment. Veuillez réessayer.",
+      'PAYME_SUBSCRIPTION_FAILED'
+    );
     (err as any).statusCode = status;
     (err as any).errorCode = json?.status_error_code;
+    attachPaymeDetails(err, {
+      endpoint: 'generate-subscription',
+      httpStatus: status,
+      paymeStatusCode: paymeStatusCode(json),
+      paymeErrorCode: json?.status_error_code,
+      paymeErrorMessage: safePaymeErrorMessage(json)
+    });
     throw err;
   }
 
