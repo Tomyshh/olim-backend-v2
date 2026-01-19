@@ -68,7 +68,11 @@ app.use(helmet());
 const DEFAULT_ALLOWED_ORIGINS = [
   'https://olimservice-7dbee.web.app',
   'https://olimservice-7dbee.firebaseapp.com',
-  'http://localhost:3000'
+  'http://localhost:3000',
+  // CRM (prod) – IMPORTANT: permet au navigateur de lire les réponses d'erreur JSON
+  // Si vous avez plusieurs domaines CRM, ajoutez-les via ALLOWED_ORIGINS (env) sur Render.
+  'https://olimcrm.web.app',
+  'https://olimcrm.firebaseapp.com'
 ];
 
 function normalizeOrigin(value: string): string {

@@ -31,6 +31,8 @@ export function errorHandler(
     // compat legacy (certaines routes existantes renvoient encore {error})
     error: message,
     ...(typeof err?.code === 'string' && err.code.trim() ? { code: err.code } : {}),
+    // Expose un identifiant PayMe non sensible, utile au CRM pour mapper un message propre.
+    ...(Number.isFinite(Number(err?.errorCode)) ? { paymeErrorCode: Number(err.errorCode) } : {}),
     ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.twilio && { details: { provider: 'twilio', ...err.twilio } }),
     ...(process.env.EXPOSE_ERROR_DETAILS === 'true' && err?.sms && { details: { provider: 'sms', ...err.sms } }),
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })

@@ -563,7 +563,7 @@ export async function paymeSetSubscriptionPrice(params: { subId: string; priceIn
   }
 
   if (!ok || json?.status_error_code) {
-    const err = new HttpError(400, `PayMe set-price: ${safePaymeErrorMessage(json)}`);
+    const err = new HttpError(400, `PayMe set-price: ${safePaymeErrorMessage(json)}`, 'PAYME_SET_PRICE_FAILED');
     (err as any).statusCode = status;
     (err as any).errorCode = json?.status_error_code;
     throw err;
