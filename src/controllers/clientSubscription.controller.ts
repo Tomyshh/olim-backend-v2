@@ -484,51 +484,101 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
   const installments = coerceOptionalPositiveInt(body.installments);
   const promoCode = pickString(body.promoCode) || null;
 
-  const { subId } = extractPaymeIdentifiers({ client, subscription });
+  const { subId, subCode } = extractPaymeIdentifiers({ client, subscription });
 
   const planChanged = requestedPlan !== currentPlanType;
   const membershipChanged = requestedMembership !== currentMembership;
 
   // Cas simple: abonnement mensuel existant + changement de prix uniquement => set-price
-  if (!planChanged && !membershipChanged && requestedPlan === 'monthly' && subId && body.newPriceInCents != null) {
-    await paymeSetSubscriptionPrice({ subId, priceInCents: requestedPrice });
+  // IMPORTANT: si l'abonnement est annulé (PayMe sub_status=5), PayMe peut refuser set-price (ex: errorCode 377).
+  // Dans ce cas, on doit réabonner (replacement: sale + subscription).
+  const localSubStatusRaw =
+    (subscription as any)?.payme?.sub_status ??
+    (subscription as any)?.payme?.subStatus ??
+    (subscription as any)?.payme?.status ??
+    (subscription as any)?.sub_status ??
+    (subscription as any)?.subStatus ??
+    null;
+  const localSubStatus =
+    typeof localSubStatusRaw === 'string'
+      ? Number(localSubStatusRaw)
+      : typeof localSubStatusRaw === 'number'
+        ? localSubStatusRaw
+        : NaN;
+  const isLocallyCancelled = Number.isFinite(localSubStatus) && localSubStatus === 5;
 
-    const db = getFirestore();
-    const batch = db.batch();
-    const now = admin.firestore.FieldValue.serverTimestamp();
-    batch.set(
-      subscriptionRef,
-      {
-        plan: { price: requestedPrice },
-        updatedAt: now,
-        history: { lastModified: now, modifiedBy: callerUid || 'system' }
-      },
-      { merge: true }
-    );
-    batch.set(
-      clientRef,
-      stripUndefinedDeep({
-        updatedAt: now,
-        updatedByAdminUid: callerUid,
-        updatedByAdminAt: now,
-        ...(promoCode ? { promoCodeUsed: promoCode } : {}),
-        ...(body.useCustomPrice === true ? { useCustomPrice: true } : {})
-      }),
-      { merge: true }
-    );
-    await batch.commit();
+  const eligibleForSetPrice =
+    !planChanged && !membershipChanged && requestedPlan === 'monthly' && subId && body.newPriceInCents != null;
 
-    await writeAdminAuditLog({
-      action: 'CLIENT_SUBSCRIPTION_SET_PRICE',
-      callerUid,
-      clientId,
-      payload: { newPriceInCents: requestedPrice, paymentCredentialId, promoCode, useCustomPrice: body.useCustomPrice === true },
-      req,
-      extra: { subId }
-    });
+  let remoteStatus: number | null = null;
+  if (eligibleForSetPrice && !isLocallyCancelled && subCode != null) {
+    try {
+      remoteStatus = await paymeGetSubscriptionStatus(subCode);
+    } catch {
+      // Best effort: si PayMe est indispo ici, on tentera set-price puis fallback si refus.
+      remoteStatus = null;
+    }
+  }
+  const isRemotelyCancelled = remoteStatus === 5;
 
-    res.status(200).json({ success: true });
-    return;
+  if (eligibleForSetPrice && !isLocallyCancelled && !isRemotelyCancelled) {
+    try {
+      await paymeSetSubscriptionPrice({ subId, priceInCents: requestedPrice });
+
+      const db = getFirestore();
+      const batch = db.batch();
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      batch.set(
+        subscriptionRef,
+        {
+          plan: { price: requestedPrice },
+          updatedAt: now,
+          history: { lastModified: now, modifiedBy: callerUid || 'system' }
+        },
+        { merge: true }
+      );
+      batch.set(
+        clientRef,
+        stripUndefinedDeep({
+          updatedAt: now,
+          updatedByAdminUid: callerUid,
+          updatedByAdminAt: now,
+          ...(promoCode ? { promoCodeUsed: promoCode } : {}),
+          ...(body.useCustomPrice === true ? { useCustomPrice: true } : {})
+        }),
+        { merge: true }
+      );
+      await batch.commit();
+
+      await writeAdminAuditLog({
+        action: 'CLIENT_SUBSCRIPTION_SET_PRICE',
+        callerUid,
+        clientId,
+        payload: { newPriceInCents: requestedPrice, paymentCredentialId, promoCode, useCustomPrice: body.useCustomPrice === true },
+        req,
+        extra: {
+          subId,
+          subCode: subCode ?? null,
+          localSubStatus: Number.isFinite(localSubStatus) ? localSubStatus : null,
+          remoteStatus
+        }
+      });
+
+      res.status(200).json({ success: true });
+      return;
+    } catch (e: any) {
+      console.warn('[subscription] set-price failed -> fallback to replacement', {
+        clientId,
+        subId,
+        subCode: subCode ?? null,
+        localSubStatus: Number.isFinite(localSubStatus) ? localSubStatus : null,
+        remoteStatus,
+        statusCode: e?.statusCode ?? e?.status ?? null,
+        errorCode: e?.errorCode ?? null,
+        message: String(e?.message || e)
+      });
+      // Fallback vers replacement ci-dessous
+    }
   }
 
   // Sinon: replacement (crée un nouveau sale + (sub si monthly))
