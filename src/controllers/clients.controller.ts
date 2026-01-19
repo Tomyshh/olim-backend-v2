@@ -5,6 +5,7 @@ import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { HttpError } from '../utils/errors.js';
 import {
   createSecurdenCreditCardAccountInFolder,
+  deleteSecurdenAccounts,
   normalizeCardNumberDigitsOnly,
   tryCreateSecurdenFolderAndCard
 } from '../services/securden.service.js';
@@ -810,6 +811,48 @@ export async function addClientCreditCardPaymentCredential(
       warnings: securdenWarnings
     }
   });
+}
+
+/**
+ * DELETE /api/clients/:clientId/payment-credentials/credit-card/:paymentCredentialId
+ * Supprime une carte de crédit sur Securden (si `Securden ID` présent) et dans Firestore.
+ */
+export async function deleteClientCreditCardPaymentCredential(
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> {
+  if (req.method !== 'DELETE') throw new HttpError(405, 'Method Not Allowed');
+
+  const clientId = pickString((req.params as any)?.clientId);
+  const paymentCredentialId = pickString((req.params as any)?.paymentCredentialId);
+  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  if (!paymentCredentialId) throw new HttpError(400, 'paymentCredentialId manquant.');
+
+  const db = getFirestore();
+  const clientRef = db.collection('Clients').doc(clientId);
+  const paymentRef = clientRef.collection('Payment credentials').doc(paymentCredentialId);
+
+  const snap = await paymentRef.get();
+  if (!snap.exists) throw new HttpError(404, 'Payment credential introuvable.');
+  const data = (snap.data() || {}) as Record<string, any>;
+
+  const securdenId = typeof data['Securden ID'] === 'string' ? String(data['Securden ID']).trim() : '';
+  if (securdenId) {
+    const s = await deleteSecurdenAccounts({
+      accountIds: [securdenId],
+      deletePermanently: false,
+      reason: `CRM delete card ${paymentCredentialId}`
+    });
+    if (!s.ok) {
+      throw new HttpError(502, `Securden: suppression impossible. ${s.warnings[0] || ''}`.trim());
+    }
+  }
+
+  // Firestore: supprimer principal + fallback legacy (best-effort)
+  await paymentRef.delete().catch(() => {});
+  await clientRef.collection('cards').doc(paymentCredentialId).delete().catch(() => {});
+
+  res.status(200).json({ success: true, paymentCredentialId, securdenId: securdenId || null });
 }
 
 

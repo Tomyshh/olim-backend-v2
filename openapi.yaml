@@ -2768,18 +2768,113 @@ paths:
                 cardholderName:
                   type: string
       responses:
-        '201':
+        '200':
           description: Carte ajoutée
           content:
             application/json:
               schema:
                 type: object
-                required: [message]
+                required: [success, paymentCredentialId]
                 properties:
-                  message:
+                  success:
+                    type: boolean
+                  paymentCredentialId:
                     type: string
+                  payme:
+                    type: object
+                    properties:
+                      buyerKey:
+                        type: string
+                      buyerCard:
+                        type: string
+                  securden:
+                    type: object
+                    properties:
+                      folderId:
+                        type: string
+                        nullable: true
+                      accountId:
+                        type: string
+                        nullable: true
+                      warnings:
+                        type: array
+                        items:
+                          type: string
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Client introuvable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Erreur Securden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/clients/{clientId}/payment-credentials/credit-card/{paymentCredentialId}:
+    delete:
+      tags: [Clients]
+      summary: Supprimer une carte de crédit pour un client (conseiller uniquement)
+      description: >
+        Supprime la carte côté Securden (si le champ `Securden ID` est présent) puis supprime le document
+        Firestore `Clients/{clientId}/Payment credentials/{paymentCredentialId}` (et le fallback legacy si présent).
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+        - name: paymentCredentialId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Carte supprimée
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, paymentCredentialId]
+                properties:
+                  success:
+                    type: boolean
+                  paymentCredentialId:
+                    type: string
+                  securdenId:
+                    type: string
+                    nullable: true
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Payment credential introuvable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Erreur Securden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/Error'
 

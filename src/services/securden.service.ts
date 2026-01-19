@@ -71,6 +71,12 @@ export function normalizeCardNumberDigitsOnly(value: unknown): { digitsOnly: str
   return { digitsOnly, ok };
 }
 
+function parseSecurdenAccountId(value: unknown): string {
+  // Les IDs Securden semblent tenir dans Number.MAX_SAFE_INTEGER, mais on reste string côté app.
+  const s = typeof value === 'string' ? value.trim() : typeof value === 'number' && Number.isFinite(value) ? String(value) : '';
+  return s;
+}
+
 function logSecurden(endpoint: string, message: string, extra?: Record<string, unknown>): void {
   if (isDebug()) {
     console.log(`[Securden] ${endpoint}: ${message}`, extra ? JSON.stringify(extra) : '');
@@ -238,6 +244,121 @@ async function addCreditCardAccount(params: {
 
   logSecurdenError('add_account', status, data);
   return { ok: false, status, error: data?.message || data?.error || `HTTP ${status}` };
+}
+
+/**
+ * DELETE /api/delete_accounts
+ * Headers: authtoken, Content-Type: application/x-www-form-urlencoded
+ * Body (form): account_ids (JSON array string), delete_permanently (True/False), reason (optional)
+ */
+async function deleteAccounts(
+  params: { accountIds: string[]; deletePermanently: boolean; reason?: string },
+  signal: AbortSignal
+): Promise<{ ok: boolean; status: number; error?: string }> {
+  const baseUrl = getSecurdenBaseUrl();
+  const token = getSecurdenToken();
+
+  const url = baseUrl + 'delete_accounts';
+  const body = new URLSearchParams();
+
+  const ids = (params.accountIds || [])
+    .map((x) => parseSecurdenAccountId(x))
+    .filter(Boolean)
+    .map((x) => Number(x))
+    .filter((n) => Number.isFinite(n));
+
+  body.set('account_ids', JSON.stringify(ids));
+  body.set('delete_permanently', params.deletePermanently ? 'True' : 'False');
+  if (typeof params.reason === 'string' && params.reason.trim()) {
+    body.set('reason', params.reason.trim());
+  }
+
+  logSecurden('delete_accounts', `Deleting accounts: ${ids.join(',') || '(none)'}`);
+
+  const res = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      authtoken: token
+    },
+    body: body.toString(),
+    signal
+  });
+
+  const status = res.status;
+  const text = await res.text().catch(() => '');
+  let data: any;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+
+  if (res.ok) {
+    logSecurden('delete_accounts', `Accounts supprimés OK`);
+    return { ok: true, status };
+  }
+
+  logSecurdenError('delete_accounts', status, data);
+  return { ok: false, status, error: data?.message || data?.error || `HTTP ${status}` };
+}
+
+export async function deleteSecurdenAccounts(input: {
+  accountIds: unknown;
+  deletePermanently?: unknown;
+  reason?: unknown;
+}): Promise<{ ok: boolean; warnings: string[]; status?: number }> {
+  const warnings: string[] = [];
+  const token = getSecurdenToken();
+
+  if (!token) {
+    warnings.push('SECURDEN_AUTH_TOKEN manquant: suppression Securden impossible.');
+    return { ok: false, warnings };
+  }
+
+  const baseUrl = getSecurdenBaseUrl();
+  if (!baseUrl.toLowerCase().startsWith('https://')) {
+    warnings.push('Securden: SECURDEN_BASE_URL doit être en HTTPS (TLS obligatoire).');
+    return { ok: false, warnings };
+  }
+
+  const rawIds = Array.isArray(input.accountIds) ? input.accountIds : [];
+  const accountIds = rawIds.map(parseSecurdenAccountId).filter(Boolean);
+  if (accountIds.length === 0) {
+    warnings.push('Securden: accountIds manquant.');
+    return { ok: false, warnings };
+  }
+
+  const deletePermanently = input.deletePermanently === true;
+  const reason = typeof input.reason === 'string' ? input.reason : '';
+
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 15000);
+
+  try {
+    const result = await deleteAccounts(
+      {
+        accountIds,
+        deletePermanently,
+        reason
+      },
+      ctrl.signal
+    );
+
+    if (result.ok) return { ok: true, warnings, status: result.status };
+    warnings.push(`Securden: échec suppression account (${result.error || 'status ' + result.status}).`);
+    return { ok: false, warnings, status: result.status };
+  } catch (e: any) {
+    if (e?.name === 'AbortError') {
+      warnings.push('Securden: timeout (opération trop longue).');
+    } else {
+      console.error('[Securden] Exception:', e?.message || e);
+      warnings.push('Securden: erreur inattendue.');
+    }
+    return { ok: false, warnings };
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /**

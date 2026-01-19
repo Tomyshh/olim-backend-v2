@@ -44,6 +44,14 @@ router.post(
   asyncHandler(clientsController.addClientCreditCardPaymentCredential as any)
 );
 
+// DELETE /api/clients/:clientId/payment-credentials/credit-card/:paymentCredentialId
+router.delete(
+  '/:clientId/payment-credentials/credit-card/:paymentCredentialId',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(clientsController.deleteClientCreditCardPaymentCredential as any)
+);
+
 // ---------------------------------------------------------------------------
 // Gestion abonnement pour un client existant (backoffice)
 // Auth Firebase obligatoire + conseiller requis

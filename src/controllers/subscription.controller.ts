@@ -15,6 +15,7 @@ import { computeMembershipPricing } from '../services/membershipPricing.service.
 import { validateAndApplyPromo } from '../services/promoCode.service.js';
 import {
   createSecurdenCreditCardAccountInFolder,
+  deleteSecurdenAccounts,
   normalizeCardNumberDigitsOnly,
   tryCreateSecurdenFolderAndCard
 } from '../services/securden.service.js';
@@ -1448,10 +1449,32 @@ export async function deleteCard(req: AuthenticatedRequest, res: Response): Prom
     const { cardId } = req.params;
     const db = getFirestore();
 
+    const clientRef = db.collection('Clients').doc(uid);
+    const paymentRef = clientRef.collection('Payment credentials').doc(cardId);
+
+    // Lire d'abord pour récupérer l'ID Securden (si présent), afin d'assurer la suppression des deux côtés.
+    const snap = await paymentRef.get().catch(() => null as any);
+    const data = snap?.exists ? (snap.data() as any) : null;
+    const securdenId = typeof data?.['Securden ID'] === 'string' ? String(data['Securden ID']).trim() : '';
+
+    if (securdenId) {
+      const s = await deleteSecurdenAccounts({
+        accountIds: [securdenId],
+        deletePermanently: false,
+        reason: `Delete card ${cardId}`
+      });
+      if (!s.ok) {
+        res
+          .status(502)
+          .json({ error: `Securden: suppression impossible. ${s.warnings[0] || ''}`.trim(), warnings: s.warnings });
+        return;
+      }
+    }
+
     // Supprimer dans Payment credentials (principal)
-    await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).delete().catch(() => {});
+    await paymentRef.delete().catch(() => {});
     // Supprimer fallback legacy
-    await db.collection('Clients').doc(uid).collection('cards').doc(cardId).delete().catch(() => {});
+    await clientRef.collection('cards').doc(cardId).delete().catch(() => {});
 
     res.json({ message: 'Card deleted', cardId });
   } catch (error: any) {
