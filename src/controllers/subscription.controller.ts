@@ -214,47 +214,30 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
   try {
     const uid = req.uid!;
     const db = getFirestore();
-    const clientDoc = await db.collection('Clients').doc(uid).get();
-
-    if (!clientDoc.exists) {
-      res.status(404).json({ error: 'Client not found' });
-      return;
-    }
-
-    const clientData = clientDoc.data()!;
-
-    // Priorité: freeAccess > membership (nouveau) > Membership (legacy)
-    let subscription = null;
-
-    if (clientData.freeAccess?.isEnabled) {
-      subscription = {
-        type: 'freeAccess',
-        status: 'active',
-        expiresAt: clientData.freeAccess.expiresAt,
-        membership: clientData.freeAccess.membership
-      };
-    } else if (clientData.membership) {
-      subscription = {
-        type: 'membership',
-        ...clientData.membership
-      };
-    } else if (clientData.Membership) {
-      // Legacy
-      subscription = {
-        type: 'membership',
-        status: clientData.isUnpaid ? 'unpaid' : 'active',
-        plan: clientData['Membership Plan'],
-        legacy: true
-      };
-    }
-
-    // Récupérer abonnement actuel (nouvelle structure)
+    // IMPORTANT (2026-01): l'entitlement doit se baser UNIQUEMENT sur
+    // Clients/{uid}/subscription/current (le doc principal Clients/{uid} est legacy/déprécié pour le statut d'abonnement).
     const clientRef = db.collection('Clients').doc(uid);
     const currentSubscriptionRef = clientRef.collection('subscription').doc('current');
     const currentSubscriptionDoc = await currentSubscriptionRef.get();
 
+    // Si aucun doc subscription/current => on considère "non abonné" (Visitor)
+    if (!currentSubscriptionDoc.exists) {
+      res.status(200).json({
+        success: true,
+        subscription: {
+          uid,
+          payme: { sub_status: null, next_payment_date: null },
+          entitlement: { isEntitled: false, state: 'expired', accessUntil: null },
+          updatedAt: new Date().toISOString()
+        }
+      });
+      return;
+    }
+
+    let subscription = (currentSubscriptionDoc.data() || {}) as Record<string, any>;
+
     if (currentSubscriptionDoc.exists) {
-      const subData = (currentSubscriptionDoc.data() || {}) as Record<string, any>;
+      const subData = subscription;
 
       // Hook "sans cron": réversion automatique promo multi-cycles (mensuel) si revertAt dépassé
       const promo = subData?.pricing?.promo as any;
@@ -289,11 +272,6 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
           // best effort: ne pas bloquer la route status si PayMe est indisponible
         }
       }
-
-      subscription = {
-        ...subscription,
-        ...subData
-      };
     }
 
     const now = new Date();
@@ -308,15 +286,11 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     const storedEndDate = toDate(subObj?.dates?.endDate);
     const storedPaymentNext = toDate(subObj?.payment?.nextPaymentDate);
 
-    const membership =
-      pickString(subObj?.plan?.membership) ||
-      pickString(subObj?.membership) ||
-      pickString(clientData?.membership?.type) ||
-      pickString(clientData?.Membership) ||
-      '';
+    const membership = pickString(subObj?.plan?.membership) || pickString(subObj?.membership) || '';
     const isVisitor = membership.trim().toLowerCase() === 'visitor';
 
-    const subCode = paymeObj.subCode ?? subObj.subCode ?? clientData?.israCard_subCode ?? clientData?.subCode ?? null;
+    // Source-of-truth: subscription/current.payme.subCode uniquement
+    const subCode = paymeObj.subCode ?? null;
     const details = !isVisitor && subCode != null ? await paymeGetSubscriptionDetails({ subCode }) : null;
     const paymeSubStatus = storedSubStatus ?? details?.subStatus ?? null;
 
@@ -329,13 +303,12 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     let entitlementState: EntitlementState = 'expired';
     let isEntitled = false;
 
-    // Free access (prioritaire)
-    if (clientData.freeAccess?.isEnabled) {
-      const freeUntil = toDate(clientData.freeAccess.expiresAt);
-      const ok = !!freeUntil && now.getTime() < freeUntil.getTime();
-      entitlementState = ok ? 'active' : 'expired';
-      isEntitled = ok;
-    } else if (clientData.isUnpaid === true) {
+    // IMPORTANT: ne pas utiliser Clients/{uid}.isUnpaid (legacy). On se base uniquement sur subscription/current.
+    // Si vous avez un signal d'impayé dans subscription/current, l'ajouter ici.
+    const isUnpaidFromCurrent =
+      subObj?.states?.isUnpaid === true || pickString(subObj?.status).toLowerCase() === 'unpaid' || subObj?.payment?.status === 'unpaid';
+
+    if (isUnpaidFromCurrent) {
       entitlementState = 'unpaid';
       isEntitled = false;
     } else if (accessUntil) {
@@ -404,28 +377,19 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     }
 
     // ---- Conversion Visitor when truly expired (recommended) ----
+    // IMPORTANT: ne pas modifier Clients/{uid} (legacy). Conversion Visitor = uniquement subscription/current.
     if (paymeSubStatus === 5 && accessUntil && now.getTime() >= accessUntil.getTime() && !isVisitor) {
-      const batch = db.batch();
-      batch.set(
-        clientRef,
-        {
-          Membership: 'Visitor',
-          subPlan: 0,
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        },
-        { merge: true }
-      );
-      batch.set(
-        currentSubscriptionRef,
-        {
-          plan: { membership: 'Visitor' },
-          states: { isActive: false, willExpire: false },
-          dates: { endDate: accessUntil },
-          updatedAt: admin.firestore.FieldValue.serverTimestamp()
-        },
-        { merge: true }
-      );
-      await batch.commit().catch(() => {});
+      await currentSubscriptionRef
+        .set(
+          {
+            plan: { membership: 'Visitor' },
+            states: { isActive: false, willExpire: false },
+            dates: { endDate: accessUntil },
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          },
+          { merge: true }
+        )
+        .catch(() => {});
     }
 
     const entitlement = {
