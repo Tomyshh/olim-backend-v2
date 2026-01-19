@@ -335,24 +335,41 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       const ok = !!freeUntil && now.getTime() < freeUntil.getTime();
       entitlementState = ok ? 'active' : 'expired';
       isEntitled = ok;
-    } else if (paymeSubStatus === 5 && accessUntil) {
-      // Règle métier obligatoire
-      if (now.getTime() < accessUntil.getTime()) {
-        entitlementState = 'cancelled_pending';
-        isEntitled = true;
-      } else {
-        entitlementState = 'expired';
-        isEntitled = false;
-      }
     } else if (clientData.isUnpaid === true) {
       entitlementState = 'unpaid';
       isEntitled = false;
+    } else if (accessUntil) {
+      // CRITIQUE: accessUntil est la source de vérité principale
+      // Si accessUntil existe, on l'utilise pour déterminer l'état, indépendamment de states.isActive
+      const isBeforeAccessUntil = now.getTime() < accessUntil.getTime();
+      if (paymeSubStatus === 5) {
+        // Règle métier obligatoire pour sub_status=5
+        if (isBeforeAccessUntil) {
+          entitlementState = 'cancelled_pending';
+          isEntitled = true;
+        } else {
+          entitlementState = 'expired';
+          isEntitled = false;
+        }
+      } else {
+        // Autres statuts PayMe: actif si accessUntil dans le futur
+        const statesIsActive = subObj?.states?.isActive !== false;
+        const willExpire = subObj?.states?.willExpire === true;
+        if (isBeforeAccessUntil) {
+          entitlementState = willExpire ? 'cancelled_pending' : 'active';
+          isEntitled = true;
+        } else {
+          entitlementState = 'expired';
+          isEntitled = false;
+        }
+      }
     } else {
+      // Fallback: pas d'accessUntil → on se base sur states.isActive
       const statesIsActive = subObj?.states?.isActive !== false;
       const willExpire = subObj?.states?.willExpire === true;
       if (statesIsActive) {
         entitlementState = willExpire ? 'cancelled_pending' : 'active';
-        isEntitled = accessUntil ? now.getTime() < accessUntil.getTime() : true;
+        isEntitled = true;
       } else {
         entitlementState = 'expired';
         isEntitled = false;
@@ -373,10 +390,14 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       }
       if (accessUntil) {
         patch.dates = { endDate: accessUntil };
-      }
-      if (paymeSubStatus === 5 && accessUntil) {
+        // CRITIQUE: maintenir states.isActive cohérent avec accessUntil (source de vérité)
         const stillActive = now.getTime() < accessUntil.getTime();
-        patch.states = { isActive: stillActive, willExpire: stillActive };
+        if (paymeSubStatus === 5) {
+          patch.states = { isActive: stillActive, willExpire: stillActive };
+        } else {
+          // Pour les autres statuts, on met à jour isActive si accessUntil existe
+          patch.states = { isActive: stillActive };
+        }
       }
 
       await currentSubscriptionRef.set(patch, { merge: true }).catch(() => {});
