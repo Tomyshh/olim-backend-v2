@@ -27,6 +27,7 @@ export function errorHandler(
   const message = err.message || 'Internal server error';
 
   res.status(status).json({
+    requestId: (req as any).requestId || null,
     message,
     // compat legacy (certaines routes existantes renvoient encore {error})
     error: message,

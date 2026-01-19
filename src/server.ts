@@ -109,6 +109,8 @@ const corsOptions: NonNullable<Parameters<typeof cors>[0]> = {
   // Important pour Flutter Web (préflight avec Authorization)
   methods: ['GET', 'PUT', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'Accept'],
+  // Permet au CRM de lire l'identifiant de requête pour corrélation avec Render
+  exposedHeaders: ['X-Request-Id'],
   credentials: true,
   optionsSuccessStatus: 204
 };

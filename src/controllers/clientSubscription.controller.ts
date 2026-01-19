@@ -311,7 +311,24 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
   const existing = extractPaymeIdentifiers({ client, subscription });
   let cancelAttempted = false;
   let cancelSkippedAsNonFatal = false;
-  if (isReplacement && existing.subId) {
+  // IMPORTANT: si on sait déjà (Firestore) que l'abonnement est annulé (sub_status=5),
+  // ne pas appeler PayMe cancel: ça peut renvoyer un 500/305 ("sale status not suitable") et ralentir inutilement la requête.
+  const localSubStatusRaw =
+    (subscription as any)?.payme?.sub_status ??
+    (subscription as any)?.payme?.subStatus ??
+    (subscription as any)?.payme?.status ??
+    (subscription as any)?.sub_status ??
+    (subscription as any)?.subStatus ??
+    null;
+  const localSubStatus =
+    typeof localSubStatusRaw === 'string'
+      ? Number(localSubStatusRaw)
+      : typeof localSubStatusRaw === 'number'
+        ? localSubStatusRaw
+        : NaN;
+  const isLocallyCancelled = Number.isFinite(localSubStatus) && localSubStatus === 5;
+
+  if (isReplacement && existing.subId && !isLocallyCancelled) {
     // Sécurité: bloquant => évite double abonnement actif
     cancelAttempted = true;
     try {
@@ -330,6 +347,13 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
         throw e;
       }
     }
+  } else if (isReplacement && existing.subId && isLocallyCancelled) {
+    cancelSkippedAsNonFatal = true;
+    console.warn('[subscription] PayMe cancel skip (déjà annulé en DB)', {
+      clientId,
+      subId: existing.subId,
+      localSubStatus
+    });
   }
 
   // Charger buyerKey depuis Payment credentials/{paymentCredentialId}
