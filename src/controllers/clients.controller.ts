@@ -850,7 +850,6 @@ export async function deleteClientCreditCardPaymentCredential(
 
   // Firestore: supprimer principal + fallback legacy (best-effort)
   await paymentRef.delete().catch(() => {});
-  await clientRef.collection('cards').doc(paymentCredentialId).delete().catch(() => {});
 
   res.status(200).json({ success: true, paymentCredentialId, securdenId: securdenId || null });
 }

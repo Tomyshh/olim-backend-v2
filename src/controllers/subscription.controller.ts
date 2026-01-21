@@ -1041,61 +1041,49 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
 
     // Si on a créé une carte "inline", on la persiste maintenant (APRÈS succès PayMe uniquement)
     if (createdCard) {
-      // Securden best-effort (après PayMe)
+      // Securden STRICT (après PayMe) : on n'écrit rien dans Firestore si Securden échoue.
       const s = (createdCard as any)._securden as any;
       let accountId: string | undefined;
       let folderId = pickString(s?.folderId);
       const securdenWarnings: string[] = [];
-      try {
+      if (folderId) {
+        const result = await createSecurdenCreditCardAccountInFolder({
+          folderId,
+          clientName: pickString(s?.clientName) || clientName,
+          cardNumber: pickString(s?.cardNumberDigits),
+          expirationDate: pickString(s?.expirationDate),
+          cvv: pickString(s?.cvv),
+          isRegistration: true
+        });
+        accountId = result.accountId;
+        securdenWarnings.push(...(result.warnings || []));
+      } else if (pickString(s?.firstName) && pickString(s?.lastName)) {
+        const securden = await tryCreateSecurdenFolderAndCard({
+          firstName: pickString(s?.firstName),
+          lastName: pickString(s?.lastName),
+          isPayingClient: true,
+          cardNumber: pickString(s?.cardNumberDigits),
+          expirationDate: pickString(s?.expirationDate),
+          cvv: pickString(s?.cvv)
+        });
+        folderId = securden.folderId || '';
+        accountId = securden.accountId;
+        securdenWarnings.push(...(securden.warnings || []));
         if (folderId) {
-          const result = await createSecurdenCreditCardAccountInFolder({
-            folderId,
-            clientName: pickString(s?.clientName) || clientName,
-            cardNumber: pickString(s?.cardNumberDigits),
-            expirationDate: pickString(s?.expirationDate),
-            cvv: pickString(s?.cvv),
-            isRegistration: true
-          });
-          accountId = result.accountId;
-          securdenWarnings.push(...(result.warnings || []));
-        } else if (pickString(s?.firstName) && pickString(s?.lastName)) {
-          const securden = await tryCreateSecurdenFolderAndCard({
-            firstName: pickString(s?.firstName),
-            lastName: pickString(s?.lastName),
-            isPayingClient: true,
-            cardNumber: pickString(s?.cardNumberDigits),
-            expirationDate: pickString(s?.expirationDate),
-            cvv: pickString(s?.cvv)
-          });
-          folderId = securden.folderId || '';
-          accountId = securden.accountId;
-          securdenWarnings.push(...(securden.warnings || []));
-          if (folderId) {
-            batch.set(clientRef, { securden_Folder: folderId }, { merge: true });
-          }
+          batch.set(clientRef, { securden_Folder: folderId }, { merge: true });
         }
-      } catch (e: any) {
-        securdenWarnings.push('Securden: erreur inattendue (ignorée).');
       }
 
-      createdCard.paymentDoc['Securden ID'] = accountId || null;
+      if (!accountId) {
+        res.status(502).json({ error: `Securden: échec création de la carte. ${securdenWarnings[0] || ''}`.trim() });
+        return;
+      }
+
+      createdCard.paymentDoc['Securden ID'] = accountId;
       createdCard.paymentDoc.securden = { folderId: folderId || null, warnings: securdenWarnings };
 
       const payRef = clientRef.collection('Payment credentials').doc(createdCard.id);
       batch.set(payRef, createdCard.paymentDoc, { merge: true });
-      // Legacy minimal
-      batch.set(
-        clientRef.collection('cards').doc(createdCard.id),
-        {
-          last4: createdCard.paymentDoc.last4,
-          brand: createdCard.paymentDoc.brand,
-          expiryMonth: createdCard.paymentDoc.expiryMonth,
-          expiryYear: createdCard.paymentDoc.expiryYear,
-          isDefault: createdCard.paymentDoc.isDefault,
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        },
-        { merge: true }
-      );
     }
 
     // Marquer la carte choisie comme "subscription card" (aligné CRM)
@@ -1205,25 +1193,14 @@ export async function getCards(req: AuthenticatedRequest, res: Response): Promis
     const uid = req.uid!;
     const db = getFirestore();
 
-    // Source principale: Payment credentials (aligné CRM / PayMe tokenisation)
+    // Source: Payment credentials (aligné CRM / PayMe tokenisation)
     const paymentSnapshot = await db
       .collection('Clients')
       .doc(uid)
       .collection('Payment credentials')
       .get();
 
-    if (paymentSnapshot.size > 0) {
-      const cards = paymentSnapshot.docs.map((d) => mapPaymentCredentialToCard(d.id, d.data() as any));
-      res.json({ cards });
-      return;
-    }
-
-    // Fallback legacy: Clients/{uid}/cards (si existe dans d’anciens environnements)
-    const legacySnapshot = await db.collection('Clients').doc(uid).collection('cards').get();
-    const cards = legacySnapshot.docs.map((doc) => ({
-      cardId: doc.id,
-      ...doc.data()
-    }));
+    const cards = paymentSnapshot.docs.map((d) => mapPaymentCredentialToCard(d.id, d.data() as any));
     res.json({ cards });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1304,41 +1281,45 @@ export async function addCard(req: AuthenticatedRequest, res: Response): Promise
       ...(isRevolut ? { buyerZipCode } : {})
     });
 
-    // 2) Securden: best effort (ne doit pas bloquer l’app)
+    // 2) Securden: STRICT (si PayMe OK, on crée obligatoirement sur Securden avant d'écrire Firestore)
     let folderId = pickString(clientData.securden_Folder);
     let accountId: string | undefined;
     const securdenWarnings: string[] = [];
 
-    try {
+    if (folderId) {
+      const result = await createSecurdenCreditCardAccountInFolder({
+        folderId,
+        clientName,
+        cardNumber: norm.digitsOnly,
+        expirationDate,
+        cvv,
+        isRegistration: false
+      });
+      accountId = result.accountId;
+      securdenWarnings.push(...(result.warnings || []));
+    } else if (firstName && lastName) {
+      const securden = await tryCreateSecurdenFolderAndCard({
+        firstName,
+        lastName,
+        isPayingClient: true,
+        cardNumber: norm.digitsOnly,
+        expirationDate,
+        cvv
+      });
+      folderId = securden.folderId || '';
+      accountId = securden.accountId;
+      securdenWarnings.push(...(securden.warnings || []));
       if (folderId) {
-        const result = await createSecurdenCreditCardAccountInFolder({
-          folderId,
-          clientName,
-          cardNumber: norm.digitsOnly,
-          expirationDate,
-          cvv,
-          isRegistration: false
-        });
-        accountId = result.accountId;
-        securdenWarnings.push(...(result.warnings || []));
-      } else if (firstName && lastName) {
-        const securden = await tryCreateSecurdenFolderAndCard({
-          firstName,
-          lastName,
-          isPayingClient: true,
-          cardNumber: norm.digitsOnly,
-          expirationDate,
-          cvv
-        });
-        folderId = securden.folderId || '';
-        accountId = securden.accountId;
-        securdenWarnings.push(...(securden.warnings || []));
-        if (folderId) {
-          await clientRef.set({ securden_Folder: folderId }, { merge: true }).catch(() => {});
-        }
+        await clientRef.set({ securden_Folder: folderId }, { merge: true }).catch(() => {});
       }
-    } catch (e: any) {
-      securdenWarnings.push('Securden: erreur inattendue (ignorée).');
+    } else {
+      res.status(400).json({ error: 'Client: First Name / Last Name requis pour créer le folder Securden.' });
+      return;
+    }
+
+    if (!accountId) {
+      res.status(502).json({ error: `Securden: échec création de la carte. ${securdenWarnings[0] || ''}`.trim() });
+      return;
     }
 
     // 3) Firestore: Payment credentials (sans carte en clair)
@@ -1374,23 +1355,6 @@ export async function addCard(req: AuthenticatedRequest, res: Response): Promise
 
     const paymentRef = await clientRef.collection('Payment credentials').add(paymentDoc as any);
 
-    // Compat legacy (optionnel): garder un doc minimal dans Clients/{uid}/cards
-    await clientRef
-      .collection('cards')
-      .doc(paymentRef.id)
-      .set(
-        {
-          last4: paymentDoc.last4,
-          brand: paymentDoc.brand,
-          expiryMonth: paymentDoc.expiryMonth,
-          expiryYear: paymentDoc.expiryYear,
-          isDefault: paymentDoc.isDefault,
-          createdAt: admin.firestore.FieldValue.serverTimestamp()
-        },
-        { merge: true }
-      )
-      .catch(() => {});
-
     res.status(201).json(mapPaymentCredentialToCard(paymentRef.id, paymentDoc));
   } catch (error: any) {
     res.status(error?.status || 500).json({ error: error.message });
@@ -1425,19 +1389,7 @@ export async function updateCard(req: AuthenticatedRequest, res: Response): Prom
       res.json({ message: 'Card updated', cardId });
       return;
     }
-
-    // fallback legacy
-    await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('cards')
-      .doc(cardId)
-      .update({
-        ...updates,
-        updatedAt: new Date()
-      });
-
-    res.json({ message: 'Card updated', cardId });
+    res.status(404).json({ error: 'Card not found' });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1473,8 +1425,6 @@ export async function deleteCard(req: AuthenticatedRequest, res: Response): Prom
 
     // Supprimer dans Payment credentials (principal)
     await paymentRef.delete().catch(() => {});
-    // Supprimer fallback legacy
-    await clientRef.collection('cards').doc(cardId).delete().catch(() => {});
 
     res.json({ message: 'Card deleted', cardId });
   } catch (error: any) {
@@ -1492,11 +1442,8 @@ export async function setDefaultCard(req: AuthenticatedRequest, res: Response): 
     const batch = db.batch();
 
     // Ne pas créer un doc vide par accident si cardId est invalide
-    const [credDoc, legacyDoc] = await Promise.all([
-      clientRef.collection('Payment credentials').doc(cardId).get(),
-      clientRef.collection('cards').doc(cardId).get()
-    ]);
-    if (!credDoc.exists && !legacyDoc.exists) {
+    const credDoc = await clientRef.collection('Payment credentials').doc(cardId).get();
+    if (!credDoc.exists) {
       res.status(404).json({ error: 'Card not found' });
       return;
     }
@@ -1505,11 +1452,6 @@ export async function setDefaultCard(req: AuthenticatedRequest, res: Response): 
     const credsSnap = await clientRef.collection('Payment credentials').get();
     credsSnap.docs.forEach((d) => batch.set(d.ref, { isDefault: false }, { merge: true }));
     batch.set(clientRef.collection('Payment credentials').doc(cardId), { isDefault: true }, { merge: true });
-
-    // Legacy cards (fallback)
-    const legacySnap = await clientRef.collection('cards').get();
-    legacySnap.docs.forEach((d) => batch.set(d.ref, { isDefault: false }, { merge: true }));
-    batch.set(clientRef.collection('cards').doc(cardId), { isDefault: true }, { merge: true });
 
     await batch.commit();
 

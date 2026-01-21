@@ -197,15 +197,18 @@ async function addCreditCardAccount(params: {
   expirationDate: string;
   cvv: string;
   isRegistration: boolean;
+  attempt?: number;
 }, signal: AbortSignal): Promise<{ ok: boolean; accountId?: string; status: number; error?: string }> {
   const baseUrl = getSecurdenBaseUrl();
   const token = getSecurdenToken();
 
   const maskedCard = maskCard(params.cardNumber);
-  const accountTitle = `${params.clientName} - ${maskedCard}`;
+  const attempt = Number.isFinite(Number(params.attempt)) ? Number(params.attempt) : 0;
+  const suffix = attempt > 0 ? ` (${attempt + 1})` : '';
+  const accountTitle = `${params.clientName} - ${maskedCard}${suffix}`;
   const accountName = params.isRegistration
-    ? `${params.clientName} - Registration Card`
-    : `${params.clientName} - New card - ${maskedCard}`;
+    ? `${params.clientName} - Registration Card${suffix}`
+    : `${params.clientName} - New card - ${maskedCard}${suffix}`;
 
   const url = new URL(baseUrl + 'add_account');
   url.searchParams.set('account_type', 'Credit Card 2');
@@ -406,24 +409,46 @@ export async function createSecurdenCreditCardAccountInFolder(
   const timeout = setTimeout(() => ctrl.abort(), 15000);
 
   try {
-    const accountResult = await addCreditCardAccount(
-      {
-        folderId,
-        clientName,
-        cardNumber: norm.digitsOnly,
-        expirationDate,
-        cvv,
-        isRegistration: input.isRegistration === true
-      },
-      ctrl.signal
-    );
+    const maxAttempts = 10;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const accountResult = await addCreditCardAccount(
+        {
+          folderId,
+          clientName,
+          cardNumber: norm.digitsOnly,
+          expirationDate,
+          cvv,
+          isRegistration: input.isRegistration === true,
+          attempt
+        },
+        ctrl.signal
+      );
 
-    if (accountResult.ok && accountResult.accountId) {
-      return { accountId: accountResult.accountId, warnings, status: accountResult.status };
+      if (accountResult.ok && accountResult.accountId) {
+        if (attempt > 0) {
+          warnings.push(`Securden: collision de nom détectée, création réussie après retry x${attempt}.`);
+        }
+        return { accountId: accountResult.accountId, warnings, status: accountResult.status };
+      }
+
+      const errMsg = String(accountResult.error || '');
+      const isDuplicate =
+        /already\s*exist|exists|duplicate|same\s*name|name\s*already/i.test(errMsg);
+
+      if (!isDuplicate) {
+        warnings.push(`Securden: échec création account (${accountResult.error || 'status ' + accountResult.status}).`);
+        return { warnings, status: accountResult.status };
+      }
+
+      // Conflit de nom: on retente avec un suffix différent (account_title/account_name)
+      if (attempt === maxAttempts - 1) {
+        warnings.push(`Securden: échec création account (conflit de nom persistant après ${maxAttempts} tentatives).`);
+        return { warnings, status: accountResult.status };
+      }
     }
 
-    warnings.push(`Securden: échec création account (${accountResult.error || 'status ' + accountResult.status}).`);
-    return { warnings, status: accountResult.status };
+    warnings.push('Securden: échec création account (retry épuisé).');
+    return { warnings };
   } catch (e: any) {
     if (e?.name === 'AbortError') {
       warnings.push('Securden: timeout (opération trop longue).');
