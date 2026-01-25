@@ -1726,13 +1726,13 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [subscription]
+                required: [success, subscription]
                 properties:
+                  success:
+                    type: boolean
+                    example: true
                   subscription:
-                    nullable: true
-                    oneOf:
-                      - $ref: '#/components/schemas/SubscriptionStatus'
-                      - type: 'null'
+                    $ref: '#/components/schemas/SubscriptionStatus'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '404':
@@ -1781,9 +1781,205 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Card'
+                type: object
+                required: [paymentCredentialId, buyerKey, buyerCard]
+                properties:
+                  paymentCredentialId:
+                    type: string
+                    description: ID du doc Firestore `Payment credentials/{id}`
+                  buyerKey:
+                    type: string
+                    description: Identifiant tokenisé PayMe (à stocker côté backend)
+                  buyerCard:
+                    type: string
+                    description: Masque carte PayMe (ex: ****1234)
+                  card:
+                    $ref: '#/components/schemas/Card'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/change/quote:
+    post:
+      tags: [Subscription]
+      summary: Quote de changement d’abonnement (prorata)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [membershipType, plan]
+              properties:
+                membershipType:
+                  type: string
+                  example: PackVIP
+                plan:
+                  type: string
+                  enum: [monthly, annual]
+                cardId:
+                  type: string
+                  description: Optionnel (Payment credentials doc id)
+                promoCode:
+                  type: string
+                promoCodeSource:
+                  type: string
+                expectedPriceInCents:
+                  type: integer
+                  example: 9900
+      responses:
+        '200':
+          description: Quote
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, quoteId]
+                properties:
+                  success:
+                    type: boolean
+                  quoteId:
+                    type: string
+                  expiresAt:
+                    type: string
+                    format: date-time
+                  current:
+                    type: object
+                    additionalProperties: true
+                  target:
+                    type: object
+                    additionalProperties: true
+                  pricing:
+                    type: object
+                    additionalProperties: true
+                  proration:
+                    type: object
+                    additionalProperties: true
+                  oneShotChargeInCents:
+                    type: integer
+                  promo:
+                    nullable: true
+                    oneOf:
+                      - type: object
+                        additionalProperties: true
+                      - type: 'null'
+        '400':
+          description: Requête invalide (membership/plan/promo/…)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Conflit (ex: SAME_PLAN)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/subscription/subscribe:
+    post:
+      tags: [Subscription]
+      summary: Subscribe / Change (exécution)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [membershipType, plan]
+              properties:
+                operation:
+                  type: string
+                  enum: [subscribe, change]
+                  description: Par défaut subscribe si absent
+                quoteId:
+                  type: string
+                  description: Requis si operation=change
+                membershipType:
+                  type: string
+                  example: PackVIP
+                plan:
+                  type: string
+                  enum: [monthly, annual]
+                cardId:
+                  type: string
+                  description: Payment credentials doc id
+                promoCode:
+                  type: string
+                promoCodeSource:
+                  type: string
+                priceInCents:
+                  type: integer
+                  example: 9900
+                expectedPriceInCents:
+                  type: integer
+                  example: 9900
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success:
+                    type: boolean
+                  salePaymeId:
+                    type: string
+                    nullable: true
+                  subCode:
+                    oneOf:
+                      - type: integer
+                      - type: string
+                      - type: 'null'
+                  subID:
+                    type: string
+                    nullable: true
+                  cardId:
+                    type: string
+                  chargedPriceInCents:
+                    type: integer
+                  basePriceInCents:
+                    type: integer
+                  discountInCents:
+                    type: integer
+                  membershipTypeNormalized:
+                    type: string
+                  planNormalized:
+                    type: string
+                  promo:
+                    nullable: true
+                    oneOf:
+                      - type: object
+                        additionalProperties: true
+                      - type: 'null'
+                  subscription:
+                    type: object
+                    additionalProperties: true
+        '400':
+          description: Requête invalide (membership/card/quote/…)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Conflit (ex: PRICE_MISMATCH)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '500':
           $ref: '#/components/responses/Error'
 

@@ -106,6 +106,8 @@ function buildSubscriptionCurrentDoc(params: {
   const nextPaymentDate = params.nextPaymentDate || new Date(endDate);
 
   return {
+    // Canonique (mobile): le read-model d'impayé est ici (pas dans Clients/{uid})
+    isUnpaid: false,
     plan: {
       type: planType,
       membership: params.membership,
@@ -227,7 +229,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
         success: true,
         subscription: {
           uid,
-          payme: { sub_status: null, next_payment_date: null },
+          payme: { subCode: null, subId: null, sub_status: null, next_payment_date: null },
           entitlement: { isEntitled: false, state: 'expired', accessUntil: null },
           updatedAt: new Date().toISOString()
         }
@@ -304,10 +306,13 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     let entitlementState: EntitlementState = 'expired';
     let isEntitled = false;
 
-    // IMPORTANT: ne pas utiliser Clients/{uid}.isUnpaid (legacy). On se base uniquement sur subscription/current.
-    // Si vous avez un signal d'impayé dans subscription/current, l'ajouter ici.
+    // IMPORTANT: ne pas utiliser Clients/{uid}.isUnpaid (legacy).
+    // Le mobile lit d'abord subscription/current.isUnpaid (canonique), puis fallback possible.
     const isUnpaidFromCurrent =
-      subObj?.states?.isUnpaid === true || pickString(subObj?.status).toLowerCase() === 'unpaid' || subObj?.payment?.status === 'unpaid';
+      subObj?.isUnpaid === true ||
+      subObj?.states?.isUnpaid === true ||
+      pickString(subObj?.status).toLowerCase() === 'unpaid' ||
+      subObj?.payment?.status === 'unpaid';
 
     if (isUnpaidFromCurrent) {
       entitlementState = 'unpaid';
@@ -399,12 +404,20 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       accessUntil: accessUntil ? accessUntil.toISOString() : null
     };
 
+    const subIdAlias =
+      typeof (paymeObj as any)?.subId === 'string' && String((paymeObj as any).subId).trim()
+        ? String((paymeObj as any).subId).trim()
+        : typeof (paymeObj as any)?.subID === 'string' && String((paymeObj as any).subID).trim()
+          ? String((paymeObj as any).subID).trim()
+          : null;
+
     res.json({
       success: true,
       subscription: {
         ...subObj,
         payme: {
           ...(paymeObj || {}),
+          ...(subIdAlias && !(paymeObj as any)?.subId ? { subId: subIdAlias } : {}),
           ...(paymeSubStatus != null ? { sub_status: paymeSubStatus } : {}),
           ...(nextPaymentDateYmd ? { next_payment_date: nextPaymentDateYmd } : {})
         },
@@ -1355,7 +1368,14 @@ export async function addCard(req: AuthenticatedRequest, res: Response): Promise
 
     const paymentRef = await clientRef.collection('Payment credentials').add(paymentDoc as any);
 
-    res.status(201).json(mapPaymentCredentialToCard(paymentRef.id, paymentDoc));
+    // Contrat mobile: retourner les identifiants PayMe + l'id Firestore créé.
+    // Compat: inclure aussi une vue "card" (ancien format).
+    res.status(201).json({
+      paymentCredentialId: paymentRef.id,
+      buyerKey: buyerToken.buyerKey,
+      buyerCard: buyerToken.buyerCard,
+      card: mapPaymentCredentialToCard(paymentRef.id, paymentDoc)
+    });
   } catch (error: any) {
     res.status(error?.status || 500).json({ error: error.message });
   }
