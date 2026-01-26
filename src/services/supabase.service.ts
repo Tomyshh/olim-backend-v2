@@ -1,14 +1,18 @@
 import 'dotenv/config';
 import { createClient } from '@supabase/supabase-js';
 
-// Si .env.local n'est pas chargé par défaut, on peut forcer le chargement
+// Dev local: on charge .env.local (Render/Prod utilise des env vars)
 import dotenv from 'dotenv';
 import path from 'path';
-dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config({ path: path.resolve(process.cwd(), '.env.local') });
+}
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
 // Backend: préférer une clé service-role (pas de contraintes RLS), fallback anon si besoin
 const supabaseKey =
+  // Render (prod) - variable demandée côté infra
+  process.env.SUPABASE_SECRET_KEY ||
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
   process.env.SUPABASE_ANON_KEY ||

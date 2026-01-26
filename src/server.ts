@@ -42,6 +42,8 @@ import v1AdminFamilyMembersRoutes from './routes/v1/admin.family.members.routes.
 import v1AdminConseillersRoutes from './routes/v1/admin.conseillers.routes.js';
 import v1AiAudioRoutes from './routes/v1/ai.audio.routes.js';
 import v1JobsRoutes from './routes/v1/jobs.routes.js';
+import v1RequestsRoutes from './routes/v1/requests.routes.js';
+import v1AnalyticsRoutes from './routes/v1/analytics.routes.js';
 import { startQueueWorker } from './services/queue.service.js';
 import { sendTwilioMessage } from './services/twilio.service.js';
 import { startDailyClientActivityScheduler } from './services/clientActivity.service.js';
@@ -108,7 +110,7 @@ const corsOptions: NonNullable<Parameters<typeof cors>[0]> = {
   },
   // Important pour Flutter Web (préflight avec Authorization)
   methods: ['GET', 'PUT', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Authorization', 'Content-Type', 'Accept'],
+  allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'Idempotency-Key'],
   // Permet au CRM de lire l'identifiant de requête pour corrélation avec Render
   exposedHeaders: ['X-Request-Id'],
   credentials: true,
@@ -164,6 +166,8 @@ app.use('/v1', v1AdminFamilyMembersRoutes);
 app.use('/v1', v1AdminConseillersRoutes);
 app.use('/v1', v1AiAudioRoutes);
 app.use('/v1', v1JobsRoutes);
+app.use('/v1', v1RequestsRoutes);
+app.use('/v1', v1AnalyticsRoutes);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);

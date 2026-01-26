@@ -4,8 +4,9 @@ info:
   version: 0.1.0
   description: >
     Spécification OpenAPI (Swagger) générée à partir des routes/contrôleurs présents dans `src/`.
-    Certaines routes sont volontairement **stubées** et répondent `501 Not implemented`.
 servers:
+  - url: https://olim-backend.onrender.com
+    description: Production (Render)
   - url: http://localhost:3000
     description: Local (par défaut)
 tags:
@@ -13,6 +14,7 @@ tags:
   - name: Auth
   - name: Profile
   - name: Requests
+  - name: Analytics
   - name: Appointments
   - name: Documents
   - name: Chat
@@ -89,10 +91,160 @@ paths:
                     type: string
                     format: date-time
 
-  /api/auth/send-phone-otp:
+  /v1/requests:
     post:
-      tags: [Auth]
-      summary: (STUB) Envoi OTP pour lier/remplacer un téléphone (utilisateur connecté)
+      tags: [Requests]
+      summary: Créer une demande (backend-first)
+      description: >
+        Crée une demande dans Firestore (`Clients/{uid}/Requests/{requestId}`) puis tente un upsert dans Supabase
+        (`public.requests`) avec une clé idempotente. Les dates ISO dans `request` sont acceptées et converties
+        côté serveur si possible.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: >
+            Clé d’idempotence (recommandée). Alternative acceptée: `idempotencyKey` dans le body.
+          schema:
+            type: string
+            maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source, idempotencyKey, request]
+              properties:
+                source:
+                  type: string
+                  enum: [APP, VOICE, SHARE, SYSTEM]
+                idempotencyKey:
+                  type: string
+                  maxLength: 128
+                request:
+                  type: object
+                  description: Payload legacy Firestore (sans FieldValue, dates en ISO).
+                  additionalProperties: true
+      responses:
+        '201':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [requestId]
+                properties:
+                  requestId:
+                    type: string
+                    description: ID du document Firestore créé (docId)
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Requête déjà en cours (idempotency lock)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/analytics/registration/session/start:
+    post:
+      tags: [Analytics]
+      summary: Tracking inscription - début de session
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '204':
+          description: OK
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/analytics/registration/step:
+    post:
+      tags: [Analytics]
+      summary: Tracking inscription - étape
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '204':
+          description: OK
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/analytics/registration/error:
+    post:
+      tags: [Analytics]
+      summary: Tracking inscription - erreur
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '204':
+          description: OK
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/analytics/registration/session/complete:
+    post:
+      tags: [Analytics]
+      summary: Tracking inscription - fin de session
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '204':
+          description: OK
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/analytics/voice-requests:
+    post:
+      tags: [Analytics]
+      summary: Tracking voice requests (Supabase)
       security:
         - bearerAuth: []
       requestBody:
@@ -101,65 +253,29 @@ paths:
           application/json:
             schema:
               type: object
-              required: [phoneNumber]
               properties:
-                phoneNumber:
+                subgroupId:
                   type: string
-                  example: "+972501234567"
+                transcription:
+                  type: string
+                matchedGroupName:
+                  type: string
+                matchedSubGroupName:
+                  type: string
+                createdAt:
+                  type: string
+                  format: date-time
       responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
+        '204':
+          description: OK
+        '400':
+          description: Body invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/auth/verify-phone-otp-and-link:
-    post:
-      tags: [Auth]
-      summary: (STUB) Vérification OTP + liaison téléphone au compte
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [phoneNumber, otpCode]
-              properties:
-                phoneNumber:
-                  type: string
-                  example: "+972501234567"
-                otpCode:
-                  type: string
-                  example: "123456"
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/auth/send-login-phone-otp:
-    post:
-      tags: [Auth]
-      summary: (STUB) Envoi OTP pour login/inscription (sans auth)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [phoneNumber]
-              properties:
-                phoneNumber:
-                  type: string
-                  example: "+972501234567"
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
         '500':
           $ref: '#/components/responses/Error'
 
@@ -241,80 +357,6 @@ paths:
                 properties:
                   message:
                     type: string
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/auth/verify-login-phone-otp:
-    post:
-      tags: [Auth]
-      summary: (STUB) Vérification OTP login (retour attendu: customToken)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [phoneNumber, otpCode]
-              properties:
-                phoneNumber:
-                  type: string
-                  example: "+972501234567"
-                otpCode:
-                  type: string
-                  example: "123456"
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/auth/create-visitor-account:
-    post:
-      tags: [Auth]
-      summary: (STUB) Création d’un compte Visitor
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                email:
-                  type: string
-                  format: email
-                phoneNumber:
-                  type: string
-                firstName:
-                  type: string
-                lastName:
-                  type: string
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/auth/login-email:
-    post:
-      tags: [Auth]
-      summary: (STUB) Login email/password
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [email, password]
-              properties:
-                email:
-                  type: string
-                  format: email
-                password:
-                  type: string
-                  format: password
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
         '500':
           $ref: '#/components/responses/Error'
 
@@ -768,30 +810,6 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
-  /api/requests/{requestId}/files:
-    post:
-      tags: [Requests]
-      summary: (STUB) Upload de fichiers pour une demande
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/RequestId'
-      requestBody:
-        description: À implémenter (Firebase Storage)
-        required: false
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              additionalProperties: true
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Error'
-
   /api/requests/{requestId}/assign:
     patch:
       tags: [Requests]
@@ -1215,96 +1233,6 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
-  /api/documents/personal/upload:
-    post:
-      tags: [Documents]
-      summary: (STUB) Upload d’un document personnel
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [type, typeKey, fileName]
-              properties:
-                type:
-                  type: string
-                typeKey:
-                  type: string
-                fileName:
-                  type: string
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/documents/family-member/{memberId}/upload:
-    post:
-      tags: [Documents]
-      summary: (STUB) Upload d’un document pour un membre
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/MemberId'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [type, typeKey, fileName]
-              properties:
-                type:
-                  type: string
-                typeKey:
-                  type: string
-                fileName:
-                  type: string
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/documents/{documentId}/download:
-    get:
-      tags: [Documents]
-      summary: (STUB) Télécharger un document
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/DocumentId'
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/documents/{documentId}:
-    delete:
-      tags: [Documents]
-      summary: (STUB) Supprimer un document
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/DocumentId'
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Error'
-
   /api/chat/conversations:
     get:
       tags: [Chat]
@@ -1455,29 +1383,6 @@ paths:
                     example: Messages marked as read
                   count:
                     type: integer
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '500':
-          $ref: '#/components/responses/Error'
-
-  /api/chat/conversations/{conversationId}/files:
-    post:
-      tags: [Chat]
-      summary: (STUB) Upload fichier dans le chat
-      security:
-        - bearerAuth: []
-      parameters:
-        - $ref: '#/components/parameters/ConversationId'
-      requestBody:
-        required: false
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              additionalProperties: true
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
@@ -1792,7 +1697,7 @@ paths:
                     description: Identifiant tokenisé PayMe (à stocker côté backend)
                   buyerCard:
                     type: string
-                    description: Masque carte PayMe (ex: ****1234)
+                    description: "Masque carte PayMe (ex: ****1234)"
                   card:
                     $ref: '#/components/schemas/Card'
         '401':
@@ -1861,11 +1766,9 @@ paths:
                   oneShotChargeInCents:
                     type: integer
                   promo:
+                    type: object
                     nullable: true
-                    oneOf:
-                      - type: object
-                        additionalProperties: true
-                      - type: 'null'
+                    additionalProperties: true
         '400':
           description: Requête invalide (membership/plan/promo/…)
           content:
@@ -1875,7 +1778,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
-          description: Conflit (ex: SAME_PLAN)
+          description: "Conflit (ex: SAME_PLAN)"
           content:
             application/json:
               schema:
@@ -1938,10 +1841,10 @@ paths:
                     type: string
                     nullable: true
                   subCode:
+                    nullable: true
                     oneOf:
                       - type: integer
                       - type: string
-                      - type: 'null'
                   subID:
                     type: string
                     nullable: true
@@ -1958,11 +1861,9 @@ paths:
                   planNormalized:
                     type: string
                   promo:
+                    type: object
                     nullable: true
-                    oneOf:
-                      - type: object
-                        additionalProperties: true
-                      - type: 'null'
+                    additionalProperties: true
                   subscription:
                     type: object
                     additionalProperties: true
@@ -1975,7 +1876,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '409':
-          description: Conflit (ex: PRICE_MISMATCH)
+          description: "Conflit (ex: PRICE_MISMATCH)"
           content:
             application/json:
               schema:
@@ -2633,10 +2534,8 @@ paths:
                 required: [cinema]
                 properties:
                   cinema:
+                    $ref: '#/components/schemas/Cinema'
                     nullable: true
-                    oneOf:
-                      - $ref: '#/components/schemas/Cinema'
-                      - type: 'null'
         '500':
           $ref: '#/components/responses/Error'
 
@@ -2658,7 +2557,9 @@ paths:
                 properties:
                   movies:
                     type: array
-                    items: {}
+                    items:
+                      type: object
+                      additionalProperties: true
         '500':
           $ref: '#/components/responses/Error'
 
@@ -2829,30 +2730,6 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/Error'
-
-  /api/admin/sync-supabase:
-    post:
-      tags: [Admin]
-      summary: (STUB) Sync Firestore -> Supabase (manuel)
-      security:
-        - bearerAuth: []
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-
-  /api/admin/fcm/generate-token:
-    post:
-      tags: [Admin]
-      summary: (STUB) Générer un token OAuth FCM
-      security:
-        - bearerAuth: []
-      responses:
-        '501':
-          $ref: '#/components/responses/NotImplemented'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
 
   /api/qa/stats:
     get:
@@ -3629,10 +3506,8 @@ components:
         updatedAt:
           nullable: true
         lastMessage:
+          $ref: '#/components/schemas/ChatMessage'
           nullable: true
-          oneOf:
-            - $ref: '#/components/schemas/ChatMessage'
-            - type: 'null'
         unreadCount:
           type: integer
       additionalProperties: true
