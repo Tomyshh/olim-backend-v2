@@ -31,8 +31,12 @@ export type PaymeSubscriptionListItem = {
   subStatus: number | null;
   email: string | null;
   description: string | null;
+  subId: string | null;
+  iterationType: number | null;
   nextPaymentDate: Date | null;
   nextPaymentDateYmd: string | null;
+  lastPaymentDate: Date | null;
+  lastPaymentDateYmd: string | null;
   startDate: Date | null;
   startDateYmd: string | null;
   raw: any;
@@ -474,18 +478,33 @@ export async function paymeListSubscriptions(params?: { sellerPaymeId?: string }
       null;
     const next = normalizePaymeNextPaymentDate(nextRaw);
 
+    // Dernier paiement: PayMe renvoie souvent sub_payment_date (ou sub_prev_date selon contextes).
+    const lastRaw = it?.sub_payment_date ?? it?.subPaymentDate ?? it?.sub_prev_date ?? it?.subPrevDate ?? null;
+    const last = normalizePaymeNextPaymentDate(lastRaw);
+
     const start = normalizePaymeNextPaymentDate(pickSubscriptionStartDateRaw(it));
 
     const email = pickSubscriptionEmail(it) || null;
     const description = pickSubscriptionDescription(it) || null;
+
+    const subIdRaw = it?.sub_payme_id ?? it?.subscription_id ?? it?.subID ?? it?.subId ?? null;
+    const subId = typeof subIdRaw === 'string' && subIdRaw.trim() ? subIdRaw.trim() : null;
+
+    const itRaw = it?.sub_iteration_type ?? it?.subIterationType ?? null;
+    const iterationType =
+      typeof itRaw === 'string' ? Number(itRaw.trim()) : typeof itRaw === 'number' ? itRaw : NaN;
 
     return {
       subCode,
       subStatus: Number.isFinite(subStatus) ? subStatus : null,
       email,
       description,
+      subId,
+      iterationType: Number.isFinite(iterationType) ? iterationType : null,
       nextPaymentDate: next.date,
       nextPaymentDateYmd: next.ymd,
+      lastPaymentDate: last.date,
+      lastPaymentDateYmd: last.ymd,
       startDate: start.date,
       startDateYmd: start.ymd,
       raw: it

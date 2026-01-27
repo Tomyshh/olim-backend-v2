@@ -702,6 +702,19 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
 
   // Idempotence: si déjà actif, on répond OK
   if (memberData.serviceActive === true) {
+    // Cas réel observé: serviceActive=true mais isActive=false (incohérent).
+    // Contrat: si le service est actif, le membre doit être actif.
+    if (memberData.isActive !== true) {
+      await memberRef.set(
+        {
+          isActive: true,
+          reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        },
+        { merge: true }
+      );
+      await recomputeAndApplyFamilyMonthlySupplement(uid);
+    }
     res.json({
       ok: true,
       memberId,
@@ -715,14 +728,17 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
   if (isConjoint(status)) {
     await memberRef.set(
       {
+        isActive: true,
         serviceActive: true,
         serviceActivationPaymentId: null,
         selectedCardId: cardId,
         serviceActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       },
       { merge: true }
     );
+    await recomputeAndApplyFamilyMonthlySupplement(uid);
     res.json({ ok: true, memberId, serviceActive: true, serviceActivationPaymentId: null });
     return;
   }
@@ -748,15 +764,18 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
 
   await memberRef.set(
     {
+      isActive: true,
       serviceActive: true,
       serviceActivationPaymentId: sale.salePaymeId,
       selectedCardId: cardId,
       serviceActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     },
     { merge: true }
   );
 
+  await recomputeAndApplyFamilyMonthlySupplement(uid);
   res.json({ ok: true, memberId, serviceActive: true, serviceActivationPaymentId: sale.salePaymeId });
 }
 

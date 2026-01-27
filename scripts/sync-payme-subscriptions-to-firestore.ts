@@ -80,6 +80,68 @@ function coerceSubCodeToComparable(value: unknown): string {
   return '';
 }
 
+function isPlainObject(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasOwnDeep(obj: any, path: string[]): boolean {
+  let cur: any = obj;
+  for (const k of path) {
+    if (!cur || typeof cur !== 'object') return false;
+    if (!Object.prototype.hasOwnProperty.call(cur, k)) return false;
+    cur = cur[k];
+  }
+  return true;
+}
+
+function setUpdateIfExists(updates: Record<string, any>, base: any, path: string[], value: any): void {
+  if (!hasOwnDeep(base, path)) return;
+  updates[path.join('.')] = value;
+}
+
+function inferPlanTypeFromIterationType(iterationType: number | null): 'monthly' | 'annual' | null {
+  // PayMe docs: 3=Monthly, 4=Yearly
+  if (iterationType === 3) return 'monthly';
+  if (iterationType === 4) return 'annual';
+  return null;
+}
+
+function addMonths(date: Date, months: number): Date {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + months);
+  if (d.getDate() < day) d.setDate(0);
+  return d;
+}
+
+function addYears(date: Date, years: number): Date {
+  const d = new Date(date);
+  d.setFullYear(d.getFullYear() + years);
+  return d;
+}
+
+function toDateLike(value: any): Date | null {
+  if (!value) return null;
+  if (value instanceof Date && Number.isFinite(value.getTime())) return value;
+  if (typeof value?.toDate === 'function') {
+    try {
+      const d = value.toDate();
+      return d instanceof Date && Number.isFinite(d.getTime()) ? d : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const d = new Date(value.trim());
+    return Number.isFinite(d.getTime()) ? d : null;
+  }
+  return null;
+}
+
+function toIsoOrEmpty(d: Date | null): string {
+  return d ? d.toISOString() : '';
+}
+
 function chooseMostRecentActive(items: PaymeSubscriptionListItem[]): PaymeSubscriptionListItem | null {
   const active = items.filter((x) => x && x.subStatus === 2 && x.subCode != null && x.description);
   if (active.length === 0) return null;
@@ -152,6 +214,12 @@ function extractFirestoreCurrent(params: { client: Record<string, any>; subscrip
   membershipOnSubscriptionDoc: string;
   paymeSubCodeOnSubscriptionDoc: string;
   paymeStatusOnSubscriptionDoc: string;
+  paymeSubIdOnSubscriptionDoc: string;
+  planTypeOnSubscriptionDoc: string;
+  nextPaymentDateRootIso: string;
+  nextPaymentDatePaymentIso: string;
+  lastPaymentDatePaymentIso: string;
+  endDateIso: string;
 } {
   const membershipOnClientDoc = pickString(params.client?.Membership);
   const membershipOnSubscriptionDoc =
@@ -173,7 +241,30 @@ function extractFirestoreCurrent(params: { client: Record<string, any>; subscrip
     coerceSubCodeToComparable((params.subscription as any)?.payme?.sub_status) ||
     '';
 
-  return { membershipOnClientDoc, membershipOnSubscriptionDoc, paymeSubCodeOnSubscriptionDoc, paymeStatusOnSubscriptionDoc };
+  const paymeSubIdOnSubscriptionDoc =
+    pickString(params.subscription?.payme?.subID) ||
+    pickString((params.subscription as any)?.payme?.subId) ||
+    '';
+
+  const planTypeOnSubscriptionDoc = pickString(params.subscription?.plan?.type);
+
+  const nextPaymentDateRootIso = toIsoOrEmpty(toDateLike((params.subscription as any)?.nextPaymentDate));
+  const nextPaymentDatePaymentIso = toIsoOrEmpty(toDateLike(params.subscription?.payment?.nextPaymentDate));
+  const lastPaymentDatePaymentIso = toIsoOrEmpty(toDateLike(params.subscription?.payment?.lastPaymentDate));
+  const endDateIso = toIsoOrEmpty(toDateLike(params.subscription?.dates?.endDate));
+
+  return {
+    membershipOnClientDoc,
+    membershipOnSubscriptionDoc,
+    paymeSubCodeOnSubscriptionDoc,
+    paymeStatusOnSubscriptionDoc,
+    paymeSubIdOnSubscriptionDoc,
+    planTypeOnSubscriptionDoc,
+    nextPaymentDateRootIso,
+    nextPaymentDatePaymentIso,
+    lastPaymentDatePaymentIso,
+    endDateIso
+  };
 }
 
 async function syncOneClient(params: {
@@ -191,11 +282,22 @@ async function syncOneClient(params: {
       membershipOnSubscriptionDoc: string;
       paymeSubCodeOnSubscriptionDoc: string;
       paymeStatusOnSubscriptionDoc: string;
+      paymeSubIdOnSubscriptionDoc: string;
+      planTypeOnSubscriptionDoc: string;
+      nextPaymentDateRootIso: string;
+      nextPaymentDatePaymentIso: string;
+      lastPaymentDatePaymentIso: string;
+      endDateIso: string;
     };
     after: {
       membership: string;
       subCode: string;
       status: string;
+      planType: string;
+      nextPaymentDateIso: string;
+      endDateIso: string;
+      lastPaymentDateIso: string;
+      subId: string;
     };
   };
 }> {
@@ -227,6 +329,7 @@ async function syncOneClient(params: {
   if (!desiredMembership || !desiredSubCode) return { changed: false, reason: 'skip:invalid_payme_data' };
 
   const current = extractFirestoreCurrent({ client, subscription });
+  const isActive = best.subStatus === 2;
   const ok =
     current.membershipOnClientDoc === desiredMembership &&
     current.membershipOnSubscriptionDoc === desiredMembership &&
@@ -234,33 +337,92 @@ async function syncOneClient(params: {
     // Si PayMe fournit un status (2 actif / 5 annulé), on le synchronise aussi.
     (!desiredStatus || current.paymeStatusOnSubscriptionDoc === desiredStatus);
 
-  if (ok) return { changed: false, reason: 'ok:already_synced' };
+  // Enrichissement: on met à jour d'autres champs EXISTANTS du doc subscription/current sans casser le format.
+  // Règle: priorité à payment.nextPaymentDate si l'abonnement se renouvelle (actif + nextPaymentDate),
+  // sinon dates.endDate.
+  const subscriptionData = subscription && isPlainObject(subscription) ? subscription : null;
+  const subscriptionDocExists = Boolean(subscriptionData);
+
+  // On prépare des updates "dotted paths" seulement pour les champs déjà présents dans le doc.
+  const subscriptionUpdates: Record<string, any> = {};
+  if (subscriptionData) {
+    // Toujours: membership + PayMe ids
+    setUpdateIfExists(subscriptionUpdates, subscriptionData, ['plan', 'membership'], desiredMembership);
+    setUpdateIfExists(subscriptionUpdates, subscriptionData, ['payme', 'subCode'], best.subCode);
+    setUpdateIfExists(subscriptionUpdates, subscriptionData, ['payme', 'status'], best.subStatus ?? null);
+    if (best.subId) setUpdateIfExists(subscriptionUpdates, subscriptionData, ['payme', 'subID'], best.subId);
+
+    // Plan type (monthly/annual) si champ existe
+    const planType = inferPlanTypeFromIterationType(best.iterationType);
+    if (planType) setUpdateIfExists(subscriptionUpdates, subscriptionData, ['plan', 'type'], planType);
+
+    // States
+    setUpdateIfExists(subscriptionUpdates, subscriptionData, ['states', 'isActive'], Boolean(isActive));
+    // willExpire: si actif => false ; sinon true (si champ existe)
+    setUpdateIfExists(subscriptionUpdates, subscriptionData, ['states', 'willExpire'], isActive ? false : true);
+
+    // Payment dates
+    // Règle endDate (confirmée): si PayMe ne renvoie pas de date de renouvellement,
+    // alors endDate = startDate + 1 mois.
+    const start = best.startDate || null;
+    const computedEndDate = start ? addMonths(start, 1) : null;
+
+    // Actif => renouvellement => nextPaymentDate en priorité, sinon endDate
+    if (isActive) {
+      if (best.nextPaymentDate) {
+        // Certains schémas ont un champ root "nextPaymentDate" + un champ payment.nextPaymentDate
+        setUpdateIfExists(subscriptionUpdates, subscriptionData, ['nextPaymentDate'], best.nextPaymentDate);
+        setUpdateIfExists(subscriptionUpdates, subscriptionData, ['payment', 'nextPaymentDate'], best.nextPaymentDate);
+      } else if (computedEndDate) {
+        setUpdateIfExists(subscriptionUpdates, subscriptionData, ['dates', 'endDate'], computedEndDate);
+      }
+    } else {
+      // Pas de renouvellement => endDate
+      if (computedEndDate) setUpdateIfExists(subscriptionUpdates, subscriptionData, ['dates', 'endDate'], computedEndDate);
+    }
+
+    // lastPaymentDate si possible
+    if (best.lastPaymentDate) setUpdateIfExists(subscriptionUpdates, subscriptionData, ['payment', 'lastPaymentDate'], best.lastPaymentDate);
+
+    // method si champ existe: si actif => credit-card
+    if (isActive) setUpdateIfExists(subscriptionUpdates, subscriptionData, ['payment', 'method'], 'credit-card');
+  }
+
+  const needsSubscriptionEnrichment = Object.keys(subscriptionUpdates).length > 0;
+
+  if (ok && !needsSubscriptionEnrichment) return { changed: false, reason: 'ok:already_synced' };
+
+  const afterPlanType = inferPlanTypeFromIterationType(best.iterationType) || pickString(subscriptionData?.plan?.type);
+  const afterNext = isActive && best.nextPaymentDate ? toIsoOrEmpty(best.nextPaymentDate) : '';
+  const afterEnd = !best.nextPaymentDate && best.startDate ? toIsoOrEmpty(addMonths(best.startDate, 1)) : '';
 
   const change = {
     clientId: params.clientId,
     email,
     before: current,
-    after: { membership: desiredMembership, subCode: desiredSubCode, status: desiredStatus || '' }
+    after: {
+      membership: desiredMembership,
+      subCode: desiredSubCode,
+      status: desiredStatus || '',
+      planType: afterPlanType || '',
+      nextPaymentDateIso: afterNext,
+      endDateIso: afterEnd,
+      lastPaymentDateIso: toIsoOrEmpty(best.lastPaymentDate),
+      subId: best.subId || ''
+    }
   };
 
   const payloadClient = { Membership: desiredMembership };
-  const payloadSub = {
-    plan: { membership: desiredMembership },
-    payme: {
-      subCode: best.subCode,
-      status: best.subStatus ?? null,
-      // Nettoyage: l'ancien champ incorrect "subcode" ne doit plus exister.
-      ...(params.apply ? { subcode: admin.firestore.FieldValue.delete() } : {})
-    },
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
-  };
+  // IMPORTANT: ne rien supprimer, ne rien ajouter arbitrairement dans subscription/current.
+  // On ne fait que mettre à jour les champs déjà présents (via update dotted paths).
 
   if (!params.apply) {
     console.log('[DRY-RUN] Would update', {
       clientId: params.clientId,
       email,
       desired: { membership: desiredMembership, subCode: desiredSubCode },
-      current
+      current,
+      subscriptionUpdatesPreview: subscriptionUpdates
     });
     return { changed: false, reason: 'dry_run', change };
   }
@@ -268,14 +430,19 @@ async function syncOneClient(params: {
   const db = getFirestore();
   const batch = db.batch();
   batch.set(clientRef, payloadClient, { merge: true });
-  batch.set(subscriptionRef, payloadSub, { merge: true });
+  if (subscriptionDocExists && Object.keys(subscriptionUpdates).length > 0) {
+    batch.update(subscriptionRef, subscriptionUpdates);
+  } else if (!subscriptionDocExists) {
+    console.warn('[WARN] subscription/current manquant, enrichissement ignoré', { clientId: params.clientId });
+  }
   await batch.commit();
 
   console.log('[APPLY] Updated', {
     clientId: params.clientId,
     email,
     desired: { membership: desiredMembership, subCode: desiredSubCode },
-    before: current
+    before: current,
+    enrichedSubscription: Object.keys(subscriptionUpdates).length > 0
   });
   return { changed: true, reason: 'updated', change };
 }
@@ -304,8 +471,23 @@ function toMdReport(params: {
       membershipOnSubscriptionDoc: string;
       paymeSubCodeOnSubscriptionDoc: string;
       paymeStatusOnSubscriptionDoc: string;
+      paymeSubIdOnSubscriptionDoc: string;
+      planTypeOnSubscriptionDoc: string;
+      nextPaymentDateRootIso: string;
+      nextPaymentDatePaymentIso: string;
+      lastPaymentDatePaymentIso: string;
+      endDateIso: string;
     };
-    after: { membership: string; subCode: string; status: string };
+    after: {
+      membership: string;
+      subCode: string;
+      status: string;
+      planType: string;
+      nextPaymentDateIso: string;
+      endDateIso: string;
+      lastPaymentDateIso: string;
+      subId: string;
+    };
   }>;
 }): string {
   const lines: string[] = [];
@@ -339,11 +521,22 @@ function toMdReport(params: {
     lines.push(`  - plan.membership (subscription/current): ${c.before.membershipOnSubscriptionDoc || '(vide)'}`);
     lines.push(`  - payme.subCode (subscription/current): ${c.before.paymeSubCodeOnSubscriptionDoc || '(vide)'}`);
     lines.push(`  - payme.status (subscription/current): ${c.before.paymeStatusOnSubscriptionDoc || '(vide)'}`);
+    lines.push(`  - payme.subID (subscription/current): ${c.before.paymeSubIdOnSubscriptionDoc || '(vide)'}`);
+    lines.push(`  - plan.type (subscription/current): ${c.before.planTypeOnSubscriptionDoc || '(vide)'}`);
+    lines.push(`  - nextPaymentDate (root): ${c.before.nextPaymentDateRootIso || '(vide)'}`);
+    lines.push(`  - payment.nextPaymentDate: ${c.before.nextPaymentDatePaymentIso || '(vide)'}`);
+    lines.push(`  - payment.lastPaymentDate: ${c.before.lastPaymentDatePaymentIso || '(vide)'}`);
+    lines.push(`  - dates.endDate: ${c.before.endDateIso || '(vide)'}`);
     lines.push('- Après:');
     lines.push(`  - Membership (Clients/{id}): ${c.after.membership}`);
     lines.push(`  - plan.membership (subscription/current): ${c.after.membership}`);
     lines.push(`  - payme.subCode (subscription/current): ${c.after.subCode}`);
     lines.push(`  - payme.status (subscription/current): ${c.after.status || '(inchangé/indisponible)'}`);
+    lines.push(`  - payme.subID (subscription/current): ${c.after.subId || '(inchangé/indisponible)'}`);
+    lines.push(`  - plan.type (subscription/current): ${c.after.planType || '(inchangé/indisponible)'}`);
+    lines.push(`  - nextPaymentDate (actif): ${c.after.nextPaymentDateIso || '(inchangé/indisponible)'}`);
+    lines.push(`  - endDate (non-renouvelé): ${c.after.endDateIso || '(inchangé/indisponible)'}`);
+    lines.push(`  - lastPaymentDate (PayMe): ${c.after.lastPaymentDateIso || '(inchangé/indisponible)'}`);
     lines.push('');
   }
 
