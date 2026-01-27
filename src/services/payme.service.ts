@@ -26,6 +26,18 @@ export type PaymeSubscriptionDetails = {
   raw?: any;
 };
 
+export type PaymeSubscriptionListItem = {
+  subCode: number | string | null;
+  subStatus: number | null;
+  email: string | null;
+  description: string | null;
+  nextPaymentDate: Date | null;
+  nextPaymentDateYmd: string | null;
+  startDate: Date | null;
+  startDateYmd: string | null;
+  raw: any;
+};
+
 function getPaymeBaseUrl(): string {
   const raw = (process.env.PAYME_BASE_URL || 'https://live.payme.io/api/').trim();
   return raw.replace(/\/+$/, '') + '/';
@@ -179,7 +191,8 @@ function pickSubStatusFromGetSubscriptionsResponse(json: any, subCode: number | 
       return coerced != null && String(coerced) === String(subCode);
     }) ?? first;
 
-  const raw = match?.sub_status ?? match?.subStatus ?? json?.sub_status ?? json?.subStatus;
+  // PayMe peut renvoyer soit `status` soit `sub_status` selon endpoint/version.
+  const raw = match?.status ?? match?.sub_status ?? match?.subStatus ?? json?.status ?? json?.sub_status ?? json?.subStatus;
   const n = typeof raw === 'string' ? Number(raw) : typeof raw === 'number' ? raw : NaN;
   return Number.isFinite(n) ? n : null;
 }
@@ -258,6 +271,36 @@ function normalizePaymeNextPaymentDate(value: unknown): { date: Date | null; ymd
   return { date: null, ymd: null };
 }
 
+function pickArray(json: any, keys: string[]): any[] {
+  for (const k of keys) {
+    const v = json?.[k];
+    if (Array.isArray(v)) return v;
+  }
+  return [];
+}
+
+function pickSubscriptionEmail(item: any): string {
+  return (
+    pickFirstString(item, ['sale_email', 'buyer_email', 'email', 'customer_email', 'client_email']) ||
+    pickFirstString(item?.sale, ['email']) ||
+    pickFirstString(item?.buyer, ['email']) ||
+    pickFirstString(item?.sub_buyer_details, ['buyer_email', 'email', 'mail']) ||
+    ''
+  );
+}
+
+function pickSubscriptionDescription(item: any): string {
+  return (
+    pickFirstString(item, ['sub_description', 'description', 'product_name', 'plan_name', 'membership']) ||
+    pickFirstString(item?.sale, ['product_name', 'description']) ||
+    ''
+  );
+}
+
+function pickSubscriptionStartDateRaw(item: any): unknown {
+  return item?.sub_start_date ?? item?.subStartDate ?? item?.start_date ?? item?.startDate ?? null;
+}
+
 /**
  * PayMe: POST /api/get-subscriptions
  * Body: { seller_payme_id, sub_payme_code }
@@ -319,6 +362,135 @@ export async function paymeGetSubscriptionDetails(params: {
 export async function paymeGetSubscriptionStatus(subCode: number | string): Promise<number | null> {
   const details = await paymeGetSubscriptionDetails({ subCode });
   return details?.subStatus ?? null;
+}
+
+/**
+ * PayMe: liste des subscriptions du marchand
+ * Body minimal: { seller_payme_id }
+ *
+ * IMPORTANT:
+ * - PayMe n'est pas toujours stable côté schéma; on renvoie un mapping robuste + `raw`.
+ * - Si PayMe ne supporte pas le listing sans `sub_payme_code`, la fonction renverra [].
+ */
+export async function paymeListSubscriptions(params?: { sellerPaymeId?: string }): Promise<PaymeSubscriptionListItem[]> {
+  const seller_payme_id = (params?.sellerPaymeId || requirePaymeSellerKey()).trim();
+  if (!seller_payme_id) return [];
+
+  const timeoutMs = 20000;
+
+  async function fetchItems(extraBody: Record<string, unknown>): Promise<any[]> {
+    const { ok, status, json } = await paymePostJson(
+      'get-subscriptions',
+      {
+        seller_payme_id,
+        // NOTE: on N'ENVOIE PAS sub_payme_code pour tenter d'obtenir la liste complète
+        ...(extraBody || {})
+      },
+      timeoutMs
+    );
+    if (!ok || status < 200 || status >= 300) return [];
+    const items = pickArray(json, ['items']) || pickArray(json?.data, ['items']) || [];
+    return Array.isArray(items) ? items : [];
+  }
+
+  const first = await fetchItems({});
+  if (first.length === 0) return [];
+
+  const allRaw: any[] = [...first];
+  const seen = new Set<string>();
+  const uniqKey = (it: any): string =>
+    String(it?.sub_payme_id ?? it?.sub_payme_code ?? it?.subscription_id ?? JSON.stringify([it?.seller_id ?? '', it?.sub_created ?? '']));
+  for (const it of first) seen.add(uniqKey(it));
+
+  // Heuristique: PayMe semble renvoyer 500 items/page (observé en prod). Si on a exactement 500, on tente une pagination.
+  const pageSize = first.length;
+  const shouldTryPaging = pageSize >= 500;
+  const maxPagesRaw = Number(process.env.PAYME_LIST_SUBSCRIPTIONS_MAX_PAGES || 20);
+  const maxPages = Number.isFinite(maxPagesRaw) && maxPagesRaw > 0 ? Math.floor(maxPagesRaw) : 20;
+
+  type Pager = { name: string; make: (page: number) => Record<string, unknown> };
+  const pagers: Pager[] = [
+    { name: 'page/page_size', make: (page) => ({ page, page_size: pageSize }) },
+    { name: 'pageNumber/pageSize', make: (page) => ({ pageNumber: page, pageSize }) },
+    { name: 'page_number/page_size', make: (page) => ({ page_number: page, page_size: pageSize }) },
+    { name: 'offset/limit', make: (page) => ({ offset: (page - 1) * pageSize, limit: pageSize }) }
+  ];
+
+  if (shouldTryPaging) {
+    let chosen: Pager | null = null;
+
+    // Détecter un schéma de pagination qui marche (page 2 apporte de nouveaux items)
+    for (const p of pagers) {
+      const page2 = await fetchItems(p.make(2));
+      const hasNew = page2.some((it) => !seen.has(uniqKey(it)));
+      if (page2.length > 0 && hasNew) {
+        chosen = p;
+        // Ajouter page2
+        for (const it of page2) {
+          const k = uniqKey(it);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          allRaw.push(it);
+        }
+        break;
+      }
+    }
+
+    // Paginer avec le schéma trouvé
+    if (chosen) {
+      for (let page = 3; page <= maxPages; page++) {
+        const items = await fetchItems(chosen.make(page));
+        if (items.length === 0) break;
+        let added = 0;
+        for (const it of items) {
+          const k = uniqKey(it);
+          if (seen.has(k)) continue;
+          seen.add(k);
+          allRaw.push(it);
+          added++;
+        }
+        // Si une page n'apporte rien de nouveau, on stop (évite boucle infinie si PayMe ignore la pagination).
+        if (added === 0) break;
+        // Si PayMe renvoie moins qu'une page, c'est probablement la fin.
+        if (items.length < pageSize) break;
+      }
+    }
+  }
+
+  return allRaw.map((it) => {
+    const subCodeRaw = it?.sub_payme_code ?? it?.subCode ?? it?.sub_code ?? null;
+    const subCode = coerceSubCode(subCodeRaw);
+    // PayMe dashboard/export: `status` (2=actif, 5=annulé). API: parfois `sub_status`.
+    const rawStatus = it?.status ?? it?.sub_status ?? it?.subStatus ?? null;
+    const subStatus =
+      typeof rawStatus === 'string' ? Number(rawStatus) : typeof rawStatus === 'number' ? rawStatus : NaN;
+
+    const nextRaw =
+      it?.sub_next_date ??
+      it?.subNextDate ??
+      it?.next_payment_date ??
+      it?.nextPaymentDate ??
+      it?.next_date ??
+      null;
+    const next = normalizePaymeNextPaymentDate(nextRaw);
+
+    const start = normalizePaymeNextPaymentDate(pickSubscriptionStartDateRaw(it));
+
+    const email = pickSubscriptionEmail(it) || null;
+    const description = pickSubscriptionDescription(it) || null;
+
+    return {
+      subCode,
+      subStatus: Number.isFinite(subStatus) ? subStatus : null,
+      email,
+      description,
+      nextPaymentDate: next.date,
+      nextPaymentDateYmd: next.ymd,
+      startDate: start.date,
+      startDateYmd: start.ymd,
+      raw: it
+    };
+  });
 }
 
 export async function paymeCaptureBuyerToken(params: {

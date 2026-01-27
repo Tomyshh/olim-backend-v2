@@ -15,6 +15,7 @@ tags:
   - name: Profile
   - name: Requests
   - name: Analytics
+  - name: Uploads
   - name: Appointments
   - name: Documents
   - name: Chat
@@ -135,11 +136,31 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [requestId]
+                required: [requestId, assignedTo, priority, waitingTime, uploadedFiles, supabase]
                 properties:
                   requestId:
                     type: string
                     description: ID du document Firestore créé (docId)
+                  assignedTo:
+                    type: string
+                  priority:
+                    type: integer
+                  waitingTime:
+                    type: string
+                    nullable: true
+                  uploadedFiles:
+                    type: array
+                    items:
+                      type: string
+                  supabase:
+                    type: object
+                    required: [inserted, id]
+                    properties:
+                      inserted:
+                        type: boolean
+                      id:
+                        type: string
+                        nullable: true
         '400':
           description: Paramètres invalides
           content:
@@ -270,6 +291,64 @@ paths:
           description: OK
         '400':
           description: Body invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /v1/uploads/requests:
+    post:
+      tags: [Uploads]
+      summary: Upload de pièces jointes (Firebase Storage)
+      description: >
+        Upload des fichiers vers Firebase Storage (bucket `olimservice-7dbee`) avec un chemin
+        `requests/{uid}/{timestamp}_{cleanFilename}` et retourne des URLs de download compatibles Firebase.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [files]
+              properties:
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [files]
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: object
+                      required: [url, path, contentType, size, originalName]
+                      properties:
+                        url:
+                          type: string
+                        path:
+                          type: string
+                        contentType:
+                          type: string
+                        size:
+                          type: integer
+                        originalName:
+                          type: string
+        '400':
+          description: Aucun fichier
           content:
             application/json:
               schema:

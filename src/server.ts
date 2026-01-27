@@ -44,6 +44,7 @@ import v1AiAudioRoutes from './routes/v1/ai.audio.routes.js';
 import v1JobsRoutes from './routes/v1/jobs.routes.js';
 import v1RequestsRoutes from './routes/v1/requests.routes.js';
 import v1AnalyticsRoutes from './routes/v1/analytics.routes.js';
+import v1UploadsRoutes from './routes/v1/uploads.routes.js';
 import { startQueueWorker } from './services/queue.service.js';
 import { sendTwilioMessage } from './services/twilio.service.js';
 import { startDailyClientActivityScheduler } from './services/clientActivity.service.js';
@@ -168,6 +169,7 @@ app.use('/v1', v1AiAudioRoutes);
 app.use('/v1', v1JobsRoutes);
 app.use('/v1', v1RequestsRoutes);
 app.use('/v1', v1AnalyticsRoutes);
+app.use('/v1', v1UploadsRoutes);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
