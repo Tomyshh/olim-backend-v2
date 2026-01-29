@@ -3030,6 +3030,161 @@ paths:
         '500':
           $ref: '#/components/responses/Error'
 
+  /api/clients/{clientId}/subscription/admin/membership:
+    patch:
+      tags: [Clients]
+      summary: Admin - Modifier uniquement le membership dans Firestore (subscription/current)
+      description: >
+        Modifie uniquement `Clients/{clientId}/subscription/current.plan.membership`.
+        Ne touche pas PayMe. Ne crée jamais de sale ni de subscription.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [membership]
+              properties:
+                membership:
+                  type: string
+                  description: Nouveau pack (ex: "Pack Start", "Pack Essential", ...)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success:
+                    type: boolean
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: État incompatible (ex: subscription/current absent)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/clients/{clientId}/subscription/admin/payme/price:
+    patch:
+      tags: [Clients]
+      summary: Admin - Modifier uniquement le prix sur PayMe (set-price)
+      description: >
+        Modifie uniquement le prix de la subscription PayMe via `set-price`.
+        Ne touche pas Firestore. Ne crée jamais de sale ni de subscription.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [newPriceInCents]
+              properties:
+                newPriceInCents:
+                  type: integer
+                  minimum: 1
+                  description: Nouveau prix en centimes (agorot)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success:
+                    type: boolean
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: État incompatible (ex: subId manquant, abonnement annulé)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/clients/{clientId}/subscription/admin/membership-and-payme-price:
+    patch:
+      tags: [Clients]
+      summary: Admin - Modifier membership (Firestore) + prix PayMe (set-price)
+      description: >
+        Modifie `subscription/current.plan.membership` dans Firestore ET le prix PayMe (set-price).
+        Ne crée jamais de sale ni de subscription.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [membership, newPriceInCents]
+              properties:
+                membership:
+                  type: string
+                  description: Nouveau pack (ex: "Pack Start", "Pack Essential", ...)
+                newPriceInCents:
+                  type: integer
+                  minimum: 1
+                  description: Nouveau prix en centimes (agorot)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success:
+                    type: boolean
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: État incompatible (ex: subscription/current absent, subId manquant, abonnement annulé)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
   /v1/auth/phone/otp/send:
     post:
       tags: [Auth]

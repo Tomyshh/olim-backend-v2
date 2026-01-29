@@ -648,6 +648,13 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
   updates.isActive = true;
   await ref.set(stripUndefinedDeep(updates), { merge: true });
 
+  // Vérification de sécurité: garantir que isActive est bien défini
+  const verifySnap = await ref.get();
+  const verifyData = verifySnap.data() || {};
+  if (verifyData.serviceActive === true && verifyData.isActive !== true) {
+    await ref.set({ isActive: true }, { merge: true });
+  }
+
   // Recalculer le supplément mensuel (si le membre est éligible)
   await recomputeAndApplyFamilyMonthlySupplement(uid);
 
@@ -738,6 +745,12 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
       },
       { merge: true }
     );
+    // Vérification de sécurité: garantir que isActive est bien défini
+    const verifySnap = await memberRef.get();
+    const verifyData = verifySnap.data() || {};
+    if (verifyData.serviceActive === true && verifyData.isActive !== true) {
+      await memberRef.set({ isActive: true }, { merge: true });
+    }
     await recomputeAndApplyFamilyMonthlySupplement(uid);
     res.json({ ok: true, memberId, serviceActive: true, serviceActivationPaymentId: null });
     return;
@@ -774,6 +787,14 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
     },
     { merge: true }
   );
+
+  // Vérification de sécurité: garantir que isActive est bien défini
+  // (cas observé: serviceActive=true mais isActive manquant)
+  const verifySnap = await memberRef.get();
+  const verifyData = verifySnap.data() || {};
+  if (verifyData.serviceActive === true && verifyData.isActive !== true) {
+    await memberRef.set({ isActive: true }, { merge: true });
+  }
 
   await recomputeAndApplyFamilyMonthlySupplement(uid);
   res.json({ ok: true, memberId, serviceActive: true, serviceActivationPaymentId: sale.salePaymeId });

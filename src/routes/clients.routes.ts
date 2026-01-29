@@ -101,6 +101,60 @@ router.post(
   asyncHandler(clientSubscriptionController.modifyClientSubscription as any)
 );
 
+// PATCH /api/clients/:clientId/subscription/admin/membership (Firestore only)
+router.patch(
+  '/:clientId/subscription/admin/membership',
+  authenticateToken,
+  requireConseiller,
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:clients:subscription:admin:membership',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  asyncHandler(clientSubscriptionController.adminPatchSubscriptionMembershipFirestoreOnly as any)
+);
+
+// PATCH /api/clients/:clientId/subscription/admin/payme/price (PayMe set-price only)
+router.patch(
+  '/:clientId/subscription/admin/payme/price',
+  authenticateToken,
+  requireConseiller,
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:clients:subscription:admin:payme:price',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  asyncHandler(clientSubscriptionController.adminSetPaymeSubscriptionPriceOnly as any)
+);
+
+// PATCH /api/clients/:clientId/subscription/admin/membership-and-payme-price (Firestore membership + PayMe set-price)
+router.patch(
+  '/:clientId/subscription/admin/membership-and-payme-price',
+  authenticateToken,
+  requireConseiller,
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:clients:subscription:admin:membership-and-payme-price',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  asyncHandler(clientSubscriptionController.adminPatchMembershipAndSetPaymePrice as any)
+);
+
 // POST /api/clients/:clientId/subscription/pause|resume|cancel
 router.post(
   '/:clientId/subscription/pause',

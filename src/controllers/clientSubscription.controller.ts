@@ -478,6 +478,14 @@ type ModifyBody = {
   useCustomPrice?: unknown;
 };
 
+type AdminPatchMembershipBody = {
+  membership?: unknown;
+};
+
+type AdminSetPriceBody = {
+  newPriceInCents?: unknown;
+};
+
 /**
  * POST /api/clients/:clientId/subscription/modify
  * Le backend décide: set-price si possible, sinon replace.
@@ -618,6 +626,209 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
   } satisfies CreateOrReplaceBody;
 
   await createOrReplaceClientSubscription(req, res);
+}
+
+/**
+ * PATCH /api/clients/:clientId/subscription/admin/membership
+ *
+ * Admin-only safe operation:
+ * - modifie UNIQUEMENT Firestore `Clients/{clientId}/subscription/current.plan.membership`
+ * - ne touche PAS PayMe
+ * - ne (re)crée JAMAIS de sale/subscription
+ */
+export async function adminPatchSubscriptionMembershipFirestoreOnly(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientId = pickString((req.params as any)?.clientId);
+  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+
+  const callerUid = req.uid || null;
+  const body = (req.body || {}) as AdminPatchMembershipBody;
+  const membership = pickString(body.membership);
+  if (!membership) throw new HttpError(400, 'membership requis.');
+
+  const { subscriptionRef, subscription } = await loadClientAndSubscription({ clientId });
+  if (!subscription) throw new HttpError(409, "Aucun doc subscription/current: impossible de modifier le membership.");
+
+  const currentMembership = pickString(subscription?.plan?.membership) || null;
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  const db = getFirestore();
+  const batch = db.batch();
+  batch.set(
+    subscriptionRef,
+    {
+      plan: { membership },
+      updatedAt: now,
+      history: { lastModified: now, modifiedBy: callerUid || 'system', previousMembership: currentMembership }
+    },
+    { merge: true }
+  );
+  await batch.commit();
+
+  await writeAdminAuditLog({
+    action: 'CLIENT_SUBSCRIPTION_ADMIN_PATCH_MEMBERSHIP_FIRESTORE_ONLY',
+    callerUid,
+    clientId,
+    payload: { membership, previousMembership: currentMembership },
+    req
+  });
+
+  res.status(200).json({ success: true });
+}
+
+/**
+ * PATCH /api/clients/:clientId/subscription/admin/payme/price
+ *
+ * Admin-only safe operation:
+ * - modifie UNIQUEMENT PayMe via set-price
+ * - ne touche PAS Firestore
+ * - ne (re)crée JAMAIS de sale/subscription
+ */
+export async function adminSetPaymeSubscriptionPriceOnly(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientId = pickString((req.params as any)?.clientId);
+  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+
+  const callerUid = req.uid || null;
+  const body = (req.body || {}) as AdminSetPriceBody;
+  const newPriceInCents = coercePositiveInt(body.newPriceInCents, 'newPriceInCents');
+
+  const { client, subscription } = await loadClientAndSubscription({ clientId });
+  const { subId, subCode } = extractPaymeIdentifiers({ client, subscription });
+  if (!subId) throw new HttpError(409, "Aucun abonnement PayMe modifiable (subId manquant).");
+
+  // Refuser set-price si annulé localement ou chez PayMe.
+  const localSubStatusRaw =
+    (subscription as any)?.payme?.sub_status ??
+    (subscription as any)?.payme?.subStatus ??
+    (subscription as any)?.payme?.status ??
+    (subscription as any)?.sub_status ??
+    (subscription as any)?.subStatus ??
+    null;
+  const localSubStatus =
+    typeof localSubStatusRaw === 'string'
+      ? Number(localSubStatusRaw)
+      : typeof localSubStatusRaw === 'number'
+        ? localSubStatusRaw
+        : NaN;
+  const isLocallyCancelled = Number.isFinite(localSubStatus) && localSubStatus === 5;
+  if (isLocallyCancelled) throw new HttpError(409, "Abonnement PayMe annulé (status=5): set-price interdit.");
+
+  let remoteStatus: number | null = null;
+  if (subCode != null) {
+    try {
+      remoteStatus = await paymeGetSubscriptionStatus(subCode);
+    } catch {
+      remoteStatus = null;
+    }
+  }
+  if (remoteStatus === 5) throw new HttpError(409, "Abonnement PayMe annulé (status=5): set-price interdit.");
+
+  await paymeSetSubscriptionPrice({ subId, priceInCents: newPriceInCents });
+
+  await writeAdminAuditLog({
+    action: 'CLIENT_SUBSCRIPTION_ADMIN_SET_PAYME_PRICE_ONLY',
+    callerUid,
+    clientId,
+    payload: {
+      newPriceInCents,
+      subId,
+      subCode: subCode ?? null,
+      localSubStatus: Number.isFinite(localSubStatus) ? localSubStatus : null,
+      remoteStatus
+    },
+    req
+  });
+
+  res.status(200).json({ success: true });
+}
+
+/**
+ * PATCH /api/clients/:clientId/subscription/admin/membership-and-payme-price
+ *
+ * Admin-only safe operation:
+ * - Firestore: modifie UNIQUEMENT `subscription/current.plan.membership`
+ * - PayMe: set-price
+ * - ne (re)crée JAMAIS de sale/subscription
+ */
+export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientId = pickString((req.params as any)?.clientId);
+  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+
+  const callerUid = req.uid || null;
+  const body = (req.body || {}) as (AdminPatchMembershipBody & AdminSetPriceBody);
+
+  const membership = pickString((body as any).membership);
+  if (!membership) throw new HttpError(400, 'membership requis.');
+  const newPriceInCents = coercePositiveInt((body as any).newPriceInCents, 'newPriceInCents');
+
+  const { client, subscriptionRef, subscription } = await loadClientAndSubscription({ clientId });
+  if (!subscription) throw new HttpError(409, "Aucun doc subscription/current: impossible de modifier le membership.");
+
+  const { subId, subCode } = extractPaymeIdentifiers({ client, subscription });
+  if (!subId) throw new HttpError(409, "Aucun abonnement PayMe modifiable (subId manquant).");
+
+  // Refuser set-price si annulé localement ou chez PayMe.
+  const localSubStatusRaw =
+    (subscription as any)?.payme?.sub_status ??
+    (subscription as any)?.payme?.subStatus ??
+    (subscription as any)?.payme?.status ??
+    (subscription as any)?.sub_status ??
+    (subscription as any)?.subStatus ??
+    null;
+  const localSubStatus =
+    typeof localSubStatusRaw === 'string'
+      ? Number(localSubStatusRaw)
+      : typeof localSubStatusRaw === 'number'
+        ? localSubStatusRaw
+        : NaN;
+  const isLocallyCancelled = Number.isFinite(localSubStatus) && localSubStatus === 5;
+  if (isLocallyCancelled) throw new HttpError(409, "Abonnement PayMe annulé (status=5): set-price interdit.");
+
+  let remoteStatus: number | null = null;
+  if (subCode != null) {
+    try {
+      remoteStatus = await paymeGetSubscriptionStatus(subCode);
+    } catch {
+      remoteStatus = null;
+    }
+  }
+  if (remoteStatus === 5) throw new HttpError(409, "Abonnement PayMe annulé (status=5): set-price interdit.");
+
+  // 1) PayMe d'abord: si PayMe échoue, on ne touche pas Firestore.
+  await paymeSetSubscriptionPrice({ subId, priceInCents: newPriceInCents });
+
+  // 2) Firestore: membership uniquement.
+  const previousMembership = pickString(subscription?.plan?.membership) || null;
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const db = getFirestore();
+  const batch = db.batch();
+  batch.set(
+    subscriptionRef,
+    {
+      plan: { membership },
+      updatedAt: now,
+      history: { lastModified: now, modifiedBy: callerUid || 'system', previousMembership }
+    },
+    { merge: true }
+  );
+  await batch.commit();
+
+  await writeAdminAuditLog({
+    action: 'CLIENT_SUBSCRIPTION_ADMIN_PATCH_MEMBERSHIP_AND_SET_PAYME_PRICE',
+    callerUid,
+    clientId,
+    payload: {
+      membership,
+      previousMembership,
+      newPriceInCents,
+      subId,
+      subCode: subCode ?? null,
+      localSubStatus: Number.isFinite(localSubStatus) ? localSubStatus : null,
+      remoteStatus
+    },
+    req
+  });
+
+  res.status(200).json({ success: true });
 }
 
 async function updateSubscriptionStateDoc(params: {
