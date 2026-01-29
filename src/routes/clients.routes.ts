@@ -155,6 +155,24 @@ router.patch(
   asyncHandler(clientSubscriptionController.adminPatchMembershipAndSetPaymePrice as any)
 );
 
+// PATCH /api/clients/:clientId/subscription/admin/membership-and-payme-description (Firestore membership + PayMe description)
+router.patch(
+  '/:clientId/subscription/admin/membership-and-payme-description',
+  authenticateToken,
+  requireConseiller,
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:clients:subscription:admin:membership-and-payme-description',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  asyncHandler(clientSubscriptionController.adminPatchMembershipAndSetPaymeDescription as any)
+);
+
 // POST /api/clients/:clientId/subscription/pause|resume|cancel
 router.post(
   '/:clientId/subscription/pause',

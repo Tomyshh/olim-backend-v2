@@ -3103,6 +3103,14 @@ paths:
                   type: integer
                   minimum: 1
                   description: Nouveau prix en centimes (agorot)
+                subId:
+                  type: string
+                  description: Optionnel (debug) - forcer le sub_payme_id ciblé
+                subCode:
+                  oneOf:
+                    - type: integer
+                    - type: string
+                  description: Optionnel (debug) - forcer le sub_payme_code ciblé (si connu)
       responses:
         '200':
           description: OK
@@ -3114,6 +3122,10 @@ paths:
                 properties:
                   success:
                     type: boolean
+                  target:
+                    type: object
+                    description: Infos de résolution de la subscription PayMe ciblée
+                    additionalProperties: true
         '400':
           description: Paramètres invalides
           content:
@@ -3137,6 +3149,7 @@ paths:
       summary: Admin - Modifier membership (Firestore) + prix PayMe (set-price)
       description: >
         Modifie `subscription/current.plan.membership` dans Firestore ET le prix PayMe (set-price).
+        Met aussi à jour la description PayMe pour refléter le pack (sub_description = membership).
         Ne crée jamais de sale ni de subscription.
       security:
         - bearerAuth: []
@@ -3157,6 +3170,14 @@ paths:
                   type: integer
                   minimum: 1
                   description: Nouveau prix en centimes (agorot)
+                subId:
+                  type: string
+                  description: Optionnel (debug) - forcer le sub_payme_id ciblé
+                subCode:
+                  oneOf:
+                    - type: integer
+                    - type: string
+                  description: Optionnel (debug) - forcer le sub_payme_code ciblé (si connu)
       responses:
         '200':
           description: OK
@@ -3168,6 +3189,80 @@ paths:
                 properties:
                   success:
                     type: boolean
+                  target:
+                    type: object
+                    description: Infos de résolution de la subscription PayMe ciblée
+                    additionalProperties: true
+                  descriptionUpdate:
+                    type: object
+                    description: Résultat de tentative de mise à jour de description PayMe (best-effort)
+                    additionalProperties: true
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: État incompatible (ex: subscription/current absent, subId manquant, abonnement annulé)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/Error'
+
+  /api/clients/{clientId}/subscription/admin/membership-and-payme-description:
+    patch:
+      tags: [Clients]
+      summary: Admin - Modifier membership (Firestore) + description PayMe (sub_description)
+      description: >
+        Modifie `subscription/current.plan.membership` dans Firestore ET la description PayMe (sub_description).
+        Ne modifie pas le prix PayMe. Ne crée jamais de sale ni de subscription.
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/ClientId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [membership]
+              properties:
+                membership:
+                  type: string
+                  description: Nouveau pack (ex: "Pack Elite")
+                subId:
+                  type: string
+                  description: Optionnel (debug) - forcer le sub_payme_id ciblé
+                subCode:
+                  oneOf:
+                    - type: integer
+                    - type: string
+                  description: Optionnel (debug) - forcer le sub_payme_code ciblé (si connu)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success]
+                properties:
+                  success:
+                    type: boolean
+                  target:
+                    type: object
+                    description: Infos de résolution de la subscription PayMe ciblée
+                    additionalProperties: true
+                  used:
+                    type: object
+                    description: Endpoint PayMe utilisé (si la mise à jour est supportée)
+                    additionalProperties: true
         '400':
           description: Paramètres invalides
           content:

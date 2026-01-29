@@ -809,6 +809,86 @@ export async function paymeSetSubscriptionPrice(params: { subId: string; priceIn
   return { ok: true };
 }
 
+export async function paymeSetSubscriptionDescription(params: {
+  subId: string;
+  description: string;
+}): Promise<{ ok: true; used: { method: 'POST' | 'PATCH'; path: string } }> {
+  const seller_payme_id = requirePaymeSellerKey();
+  const debug = process.env.PAYME_DEBUG === 'true';
+
+  const subId = (params.subId || '').trim();
+  if (!subId) throw new HttpError(400, 'PayMe set-description: subId manquant.');
+  const description = String(params.description || '').trim();
+  if (!description) throw new HttpError(400, 'PayMe set-description: description manquante.');
+
+  // PayMe n'est pas stable côté endpoints; on tente plusieurs variantes (best-effort).
+  const attempts: Array<{ method: 'PATCH' | 'POST'; path: string; body: any }> = [
+    // Hypothèse REST (cohérent avec set-price)
+    { method: 'PATCH', path: `subscriptions/${encodeURIComponent(subId)}`, body: { seller_payme_id, sub_description: description } },
+    // Variante: endpoint dédié set-description
+    {
+      method: 'PATCH',
+      path: `subscriptions/${encodeURIComponent(subId)}/set-description`,
+      body: { seller_payme_id, sub_description: description }
+    },
+    // Variante: set-details
+    {
+      method: 'PATCH',
+      path: `subscriptions/${encodeURIComponent(subId)}/set-details`,
+      body: { seller_payme_id, sub_description: description }
+    },
+    // Variante "API style" (cohérent avec generate-subscription / get-subscriptions)
+    { method: 'POST', path: 'set-subscription-description', body: { seller_payme_id, sub_payme_id: subId, sub_description: description } },
+    { method: 'POST', path: 'update-subscription', body: { seller_payme_id, sub_payme_id: subId, sub_description: description } },
+    { method: 'POST', path: 'edit-subscription', body: { seller_payme_id, sub_payme_id: subId, sub_description: description } }
+  ];
+
+  let last: { ok: boolean; status: number; json: any } | null = null;
+
+  for (const a of attempts) {
+    try {
+      const reqFn = a.method === 'PATCH' ? paymePatchJson : paymePostJson;
+      const { ok, status, json } = await reqFn(a.path, a.body, 20000);
+      last = { ok, status, json };
+
+      if (debug) {
+        console.log(`[PayMe] Réponse ${a.method} ${a.path} (set-description):`, {
+          ok,
+          status,
+          errorCode: json?.status_error_code,
+          statusCode: paymeStatusCode(json),
+          keys: Object.keys(json || {})
+        });
+      }
+
+      if (!ok || json?.status_error_code) continue;
+      assertPaymeStatusCodeOk(json, 'PayMe set-description');
+      return { ok: true, used: { method: a.method, path: a.path } };
+    } catch (e: any) {
+      // Continue: si une variante échoue, on tente les suivantes.
+      last = {
+        ok: false,
+        status: Number((e as any)?.statusCode || (e as any)?.status || 0) || 0,
+        json: (e as any)?.payme || null
+      };
+      continue;
+    }
+  }
+
+  const err = new HttpError(400, `PayMe set-description: ${safePaymeErrorMessage(last?.json)}`, 'PAYME_SET_DESCRIPTION_FAILED');
+  (err as any).statusCode = last?.status || 0;
+  (err as any).errorCode = last?.json?.status_error_code ?? null;
+  attachPaymeDetails(err, {
+    endpoint: 'set-description',
+    attempted: attempts.map((a) => ({ method: a.method, path: a.path })),
+    httpStatus: last?.status || null,
+    paymeStatusCode: last?.json ? paymeStatusCode(last.json) : null,
+    paymeErrorCode: last?.json?.status_error_code ?? null,
+    paymeErrorMessage: last?.json ? safePaymeErrorMessage(last.json) : null
+  });
+  throw err;
+}
+
 async function paymeSubscriptionAction(params: {
   subId: string;
   action: 'pause' | 'resume' | 'cancel';

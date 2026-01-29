@@ -8,8 +8,10 @@ import {
   paymeGenerateSale,
   paymeGenerateSubscription,
   paymeGetSubscriptionStatus,
+  paymeListSubscriptions,
   paymePauseSubscription,
   paymeResumeSubscription,
+  paymeSetSubscriptionDescription,
   paymeSetSubscriptionPrice
 } from '../services/payme.service.js';
 
@@ -160,6 +162,137 @@ function extractPaymeIdentifiers(params: { client: Record<string, any>; subscrip
         : null;
 
   return { subCode: normalizedSubCode, subId };
+}
+
+function pickPaymeOverrideIdentifiers(body: any): { subId: string | null; subCode: number | string | null } {
+  const subIdRaw =
+    pickString(body?.subId) ||
+    pickString(body?.subID) ||
+    pickString(body?.paymeSubId) ||
+    pickString(body?.paymeSubID) ||
+    pickString(body?.sub_payme_id) ||
+    '';
+  const subId = subIdRaw ? subIdRaw : null;
+
+  const subCodeRaw = body?.subCode ?? body?.sub_payme_code ?? body?.paymeSubCode ?? null;
+  const subCode =
+    typeof subCodeRaw === 'number' && Number.isFinite(subCodeRaw)
+      ? subCodeRaw
+      : typeof subCodeRaw === 'string' && subCodeRaw.trim()
+        ? subCodeRaw.trim()
+        : null;
+
+  return { subId, subCode };
+}
+
+async function resolvePaymeTarget(params: {
+  client: Record<string, any>;
+  subscription: Record<string, any> | null;
+  override?: { subId: string | null; subCode: number | string | null };
+  forceList?: boolean;
+}): Promise<{
+  subId: string;
+  subCode: number | string | null;
+  source: 'override' | 'firestore' | 'payme_list';
+  diagnostics: {
+    email: string | null;
+    extracted: { subId: string | null; subCode: number | string | null };
+    override: { subId: string | null; subCode: number | string | null };
+    remoteStatusFromExtractedSubCode: number | null;
+    listCandidates: number;
+  };
+}> {
+  const email = pickString(params.client?.Email) || null;
+  const override = params.override || { subId: null, subCode: null };
+
+  if (override.subId) {
+    return {
+      subId: override.subId,
+      subCode: override.subCode ?? null,
+      source: 'override',
+      diagnostics: {
+        email,
+        extracted: extractPaymeIdentifiers({ client: params.client, subscription: params.subscription }),
+        override,
+        remoteStatusFromExtractedSubCode: null,
+        listCandidates: 0
+      }
+    };
+  }
+
+  const extracted = extractPaymeIdentifiers({ client: params.client, subscription: params.subscription });
+  let remoteStatusFromExtractedSubCode: number | null = null;
+
+  // Heuristique: si subCode pointe vers un status=5 (annulé), il est probable qu'on pointe une ancienne subscription.
+  // Dans ce cas, on tente de résoudre via la liste PayMe (email + status).
+  let shouldUseList = Boolean(params.forceList);
+  if (!shouldUseList && extracted.subCode != null) {
+    try {
+      remoteStatusFromExtractedSubCode = await paymeGetSubscriptionStatus(extracted.subCode);
+      if (remoteStatusFromExtractedSubCode === 5) shouldUseList = true;
+    } catch {
+      // best-effort: si PayMe est indispo, on ne bascule pas automatiquement sur list
+      remoteStatusFromExtractedSubCode = null;
+    }
+  }
+
+  // Sans subId, on doit résoudre via list (si possible).
+  if (!extracted.subId) shouldUseList = true;
+
+  if (!shouldUseList) {
+    return {
+      subId: extracted.subId!,
+      subCode: extracted.subCode ?? null,
+      source: 'firestore',
+      diagnostics: {
+        email,
+        extracted,
+        override,
+        remoteStatusFromExtractedSubCode,
+        listCandidates: 0
+      }
+    };
+  }
+
+  // Résolution via PayMe list
+  const all = await paymeListSubscriptions();
+  const emailLc = (email || '').toLowerCase();
+  const candidates = all.filter((it) => (it.subId || '').trim() && (it.email || '').toLowerCase() === emailLc);
+  const listCandidates = candidates.length;
+
+  // Statut PayMe observé en prod:
+  // - 5 = annulé
+  // - 2 = actif (observé dans vos logs)
+  const active = candidates.filter((it) => it.subStatus != null && it.subStatus !== 5);
+  const prefer = active.length > 0 ? active : candidates;
+
+  // Choix: privilégier status=2, puis date la plus récente.
+  const sorted = [...prefer].sort((a, b) => {
+    const aActive = a.subStatus === 2 ? 1 : 0;
+    const bActive = b.subStatus === 2 ? 1 : 0;
+    if (aActive !== bActive) return bActive - aActive;
+    const aT = (a.startDate?.getTime() || a.lastPaymentDate?.getTime() || 0) as number;
+    const bT = (b.startDate?.getTime() || b.lastPaymentDate?.getTime() || 0) as number;
+    return bT - aT;
+  });
+
+  const chosen = sorted[0] || null;
+  if (!chosen?.subId) {
+    throw new HttpError(409, "Impossible de résoudre la subscription PayMe active (aucun subId trouvé).");
+  }
+
+  return {
+    subId: String(chosen.subId),
+    subCode: chosen.subCode ?? null,
+    source: 'payme_list',
+    diagnostics: {
+      email,
+      extracted,
+      override,
+      remoteStatusFromExtractedSubCode,
+      listCandidates
+    }
+  };
 }
 
 function extractMembershipFromSubscriptionCurrent(s: Record<string, any> | null): string {
@@ -484,6 +617,11 @@ type AdminPatchMembershipBody = {
 
 type AdminSetPriceBody = {
   newPriceInCents?: unknown;
+  // Optional overrides (debug/admin rescue):
+  subId?: unknown;
+  subCode?: unknown;
+  paymeSubId?: unknown;
+  paymeSubCode?: unknown;
 };
 
 /**
@@ -692,53 +830,42 @@ export async function adminSetPaymeSubscriptionPriceOnly(req: AuthenticatedReque
   const newPriceInCents = coercePositiveInt(body.newPriceInCents, 'newPriceInCents');
 
   const { client, subscription } = await loadClientAndSubscription({ clientId });
-  const { subId, subCode } = extractPaymeIdentifiers({ client, subscription });
-  if (!subId) throw new HttpError(409, "Aucun abonnement PayMe modifiable (subId manquant).");
+  const override = pickPaymeOverrideIdentifiers(body);
 
-  // Refuser set-price si annulé localement ou chez PayMe.
-  const localSubStatusRaw =
-    (subscription as any)?.payme?.sub_status ??
-    (subscription as any)?.payme?.subStatus ??
-    (subscription as any)?.payme?.status ??
-    (subscription as any)?.sub_status ??
-    (subscription as any)?.subStatus ??
-    null;
-  const localSubStatus =
-    typeof localSubStatusRaw === 'string'
-      ? Number(localSubStatusRaw)
-      : typeof localSubStatusRaw === 'number'
-        ? localSubStatusRaw
-        : NaN;
-  const isLocallyCancelled = Number.isFinite(localSubStatus) && localSubStatus === 5;
-  if (isLocallyCancelled) throw new HttpError(409, "Abonnement PayMe annulé (status=5): set-price interdit.");
+  // Résoudre la bonne subscription PayMe (utile si Firestore pointe une ancienne sub annulée).
+  const target = await resolvePaymeTarget({ client, subscription, override });
 
-  let remoteStatus: number | null = null;
-  if (subCode != null) {
-    try {
-      remoteStatus = await paymeGetSubscriptionStatus(subCode);
-    } catch {
-      remoteStatus = null;
+  // Ne pas bloquer sur subCode (souvent obsolète). On tente set-price sur subId.
+  // Si PayMe refuse parce que l'abonnement est annulé/inactif, on renverra l'erreur PayMe telle quelle.
+  try {
+    await paymeSetSubscriptionPrice({ subId: target.subId, priceInCents: newPriceInCents });
+  } catch (e: any) {
+    // Tentative de secours: si la résolution venait de Firestore, retenter via list PayMe.
+    if (target.source !== 'payme_list') {
+      const target2 = await resolvePaymeTarget({ client, subscription, override, forceList: true });
+      await paymeSetSubscriptionPrice({ subId: target2.subId, priceInCents: newPriceInCents });
+      await writeAdminAuditLog({
+        action: 'CLIENT_SUBSCRIPTION_ADMIN_SET_PAYME_PRICE_ONLY',
+        callerUid,
+        clientId,
+        payload: { newPriceInCents, target: target2, recoveredFrom: target },
+        req
+      });
+      res.status(200).json({ success: true, target: target2 });
+      return;
     }
+    throw e;
   }
-  if (remoteStatus === 5) throw new HttpError(409, "Abonnement PayMe annulé (status=5): set-price interdit.");
-
-  await paymeSetSubscriptionPrice({ subId, priceInCents: newPriceInCents });
 
   await writeAdminAuditLog({
     action: 'CLIENT_SUBSCRIPTION_ADMIN_SET_PAYME_PRICE_ONLY',
     callerUid,
     clientId,
-    payload: {
-      newPriceInCents,
-      subId,
-      subCode: subCode ?? null,
-      localSubStatus: Number.isFinite(localSubStatus) ? localSubStatus : null,
-      remoteStatus
-    },
+    payload: { newPriceInCents, target },
     req
   });
 
-  res.status(200).json({ success: true });
+  res.status(200).json({ success: true, target });
 }
 
 /**
@@ -763,38 +890,32 @@ export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedReq
   const { client, subscriptionRef, subscription } = await loadClientAndSubscription({ clientId });
   if (!subscription) throw new HttpError(409, "Aucun doc subscription/current: impossible de modifier le membership.");
 
-  const { subId, subCode } = extractPaymeIdentifiers({ client, subscription });
-  if (!subId) throw new HttpError(409, "Aucun abonnement PayMe modifiable (subId manquant).");
-
-  // Refuser set-price si annulé localement ou chez PayMe.
-  const localSubStatusRaw =
-    (subscription as any)?.payme?.sub_status ??
-    (subscription as any)?.payme?.subStatus ??
-    (subscription as any)?.payme?.status ??
-    (subscription as any)?.sub_status ??
-    (subscription as any)?.subStatus ??
-    null;
-  const localSubStatus =
-    typeof localSubStatusRaw === 'string'
-      ? Number(localSubStatusRaw)
-      : typeof localSubStatusRaw === 'number'
-        ? localSubStatusRaw
-        : NaN;
-  const isLocallyCancelled = Number.isFinite(localSubStatus) && localSubStatus === 5;
-  if (isLocallyCancelled) throw new HttpError(409, "Abonnement PayMe annulé (status=5): set-price interdit.");
-
-  let remoteStatus: number | null = null;
-  if (subCode != null) {
-    try {
-      remoteStatus = await paymeGetSubscriptionStatus(subCode);
-    } catch {
-      remoteStatus = null;
-    }
-  }
-  if (remoteStatus === 5) throw new HttpError(409, "Abonnement PayMe annulé (status=5): set-price interdit.");
+  const override = pickPaymeOverrideIdentifiers(body);
+  let target = await resolvePaymeTarget({ client, subscription, override });
 
   // 1) PayMe d'abord: si PayMe échoue, on ne touche pas Firestore.
-  await paymeSetSubscriptionPrice({ subId, priceInCents: newPriceInCents });
+  // Mettre aussi à jour la description pour qu'elle reflète le pack côté Isracard/PayMe.
+  let descriptionUpdate: { ok: boolean; used?: any; error?: any } = { ok: true };
+  try {
+    const used = await paymeSetSubscriptionDescription({ subId: target.subId, description: membership });
+    descriptionUpdate = { ok: true, used };
+  } catch (e: any) {
+    // Best-effort: la mise à jour de description peut ne pas être supportée par PayMe.
+    // On continue quand même avec set-price (objectif principal).
+    descriptionUpdate = { ok: false, error: { message: e?.message || String(e), code: (e as any)?.code || null } };
+  }
+  try {
+    await paymeSetSubscriptionPrice({ subId: target.subId, priceInCents: newPriceInCents });
+  } catch (e: any) {
+    // Secours: si Firestore pointe une ancienne subscription, retenter via la liste PayMe.
+    if (target.source !== 'payme_list') {
+      const target2 = await resolvePaymeTarget({ client, subscription, override, forceList: true });
+      target = target2;
+      await paymeSetSubscriptionPrice({ subId: target2.subId, priceInCents: newPriceInCents });
+    } else {
+      throw e;
+    }
+  }
 
   // 2) Firestore: membership uniquement.
   const previousMembership = pickString(subscription?.plan?.membership) || null;
@@ -820,15 +941,82 @@ export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedReq
       membership,
       previousMembership,
       newPriceInCents,
-      subId,
-      subCode: subCode ?? null,
-      localSubStatus: Number.isFinite(localSubStatus) ? localSubStatus : null,
-      remoteStatus
+      target,
+      descriptionUpdate
     },
     req
   });
 
-  res.status(200).json({ success: true });
+  res.status(200).json({ success: true, target, descriptionUpdate });
+}
+
+/**
+ * PATCH /api/clients/:clientId/subscription/admin/membership-and-payme-description
+ *
+ * Admin-only safe operation:
+ * - Firestore: modifie UNIQUEMENT `subscription/current.plan.membership`
+ * - PayMe: met à jour UNIQUEMENT la description (sub_description)
+ * - ne (re)crée JAMAIS de sale/subscription
+ */
+export async function adminPatchMembershipAndSetPaymeDescription(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientId = pickString((req.params as any)?.clientId);
+  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+
+  const callerUid = req.uid || null;
+  const body = (req.body || {}) as AdminPatchMembershipBody;
+  const membership = pickString(body.membership);
+  if (!membership) throw new HttpError(400, 'membership requis.');
+
+  const { client, subscriptionRef, subscription } = await loadClientAndSubscription({ clientId });
+  if (!subscription) throw new HttpError(409, "Aucun doc subscription/current: impossible de modifier le membership.");
+
+  const override = pickPaymeOverrideIdentifiers(body);
+  let target = await resolvePaymeTarget({ client, subscription, override });
+
+  // 1) PayMe d'abord: si PayMe échoue, on ne touche pas Firestore.
+  let used: any = null;
+  try {
+    used = await paymeSetSubscriptionDescription({ subId: target.subId, description: membership });
+  } catch (e: any) {
+    if (target.source !== 'payme_list') {
+      const target2 = await resolvePaymeTarget({ client, subscription, override, forceList: true });
+      target = target2;
+      used = await paymeSetSubscriptionDescription({ subId: target2.subId, description: membership });
+    } else {
+      throw e;
+    }
+  }
+
+  // 2) Firestore: membership uniquement.
+  const previousMembership = pickString(subscription?.plan?.membership) || null;
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const db = getFirestore();
+  const batch = db.batch();
+  batch.set(
+    subscriptionRef,
+    {
+      plan: { membership },
+      updatedAt: now,
+      history: { lastModified: now, modifiedBy: callerUid || 'system', previousMembership }
+    },
+    { merge: true }
+  );
+  await batch.commit();
+
+  await writeAdminAuditLog({
+    action: 'CLIENT_SUBSCRIPTION_ADMIN_PATCH_MEMBERSHIP_AND_SET_PAYME_DESCRIPTION',
+    callerUid,
+    clientId,
+    payload: {
+      membership,
+      previousMembership,
+      target,
+      used
+    },
+    req
+  });
+
+  res.status(200).json({ success: true, target, used });
 }
 
 async function updateSubscriptionStateDoc(params: {
