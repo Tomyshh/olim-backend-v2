@@ -49,6 +49,7 @@ import { startQueueWorker } from './services/queue.service.js';
 import { sendTwilioMessage } from './services/twilio.service.js';
 import { startDailyClientActivityScheduler } from './services/clientActivity.service.js';
 import { startAnalyticsSyncScheduler } from './services/analyticsSync.service.js';
+import { startPaymeMonthlyNextPaymentDateSyncScheduler } from './services/paymeMonthlyNextPaymentSync.service.js';
 import { closeRedisClient } from './config/redis.js';
 
 const app = express();
@@ -62,6 +63,9 @@ startDailyClientActivityScheduler();
 
 // Job analytique : synchronise les données vers Supabase à 04:00
 startAnalyticsSyncScheduler();
+
+// Job PayMe (mensuel): synchronise nextPaymentDate/endDate (nuit)
+startPaymeMonthlyNextPaymentDateSyncScheduler();
 
 // Middleware globaux
 // Render (reverse proxy) : nécessaire pour que req.ip soit correct (rate-limit, logs)
