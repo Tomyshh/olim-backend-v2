@@ -812,6 +812,7 @@ export async function paymeSetSubscriptionPrice(params: { subId: string; priceIn
 export async function paymeSetSubscriptionDescription(params: {
   subId: string;
   description: string;
+  subCode?: number | string | null;
 }): Promise<{ ok: true; used: { method: 'POST' | 'PATCH'; path: string } }> {
   const seller_payme_id = requirePaymeSellerKey();
   const debug = process.env.PAYME_DEBUG === 'true';
@@ -820,27 +821,80 @@ export async function paymeSetSubscriptionDescription(params: {
   if (!subId) throw new HttpError(400, 'PayMe set-description: subId manquant.');
   const description = String(params.description || '').trim();
   if (!description) throw new HttpError(400, 'PayMe set-description: description manquante.');
+  const subCode =
+    typeof params.subCode === 'number' && Number.isFinite(params.subCode)
+      ? params.subCode
+      : typeof params.subCode === 'string' && params.subCode.trim()
+        ? params.subCode.trim()
+        : null;
 
   // PayMe n'est pas stable côté endpoints; on tente plusieurs variantes (best-effort).
   const attempts: Array<{ method: 'PATCH' | 'POST'; path: string; body: any }> = [
     // Hypothèse REST (cohérent avec set-price)
-    { method: 'PATCH', path: `subscriptions/${encodeURIComponent(subId)}`, body: { seller_payme_id, sub_description: description } },
+    {
+      method: 'PATCH',
+      path: `subscriptions/${encodeURIComponent(subId)}`,
+      body: {
+        seller_payme_id,
+        // Selon les schémas, la colonne UI peut afficher description/product_name/plan_name
+        sub_description: description,
+        description,
+        product_name: description,
+        plan_name: description
+      }
+    },
     // Variante: endpoint dédié set-description
     {
       method: 'PATCH',
       path: `subscriptions/${encodeURIComponent(subId)}/set-description`,
-      body: { seller_payme_id, sub_description: description }
+      body: { seller_payme_id, sub_description: description, description, product_name: description, plan_name: description }
     },
     // Variante: set-details
     {
       method: 'PATCH',
       path: `subscriptions/${encodeURIComponent(subId)}/set-details`,
-      body: { seller_payme_id, sub_description: description }
+      body: { seller_payme_id, sub_description: description, description, product_name: description, plan_name: description }
     },
     // Variante "API style" (cohérent avec generate-subscription / get-subscriptions)
-    { method: 'POST', path: 'set-subscription-description', body: { seller_payme_id, sub_payme_id: subId, sub_description: description } },
-    { method: 'POST', path: 'update-subscription', body: { seller_payme_id, sub_payme_id: subId, sub_description: description } },
-    { method: 'POST', path: 'edit-subscription', body: { seller_payme_id, sub_payme_id: subId, sub_description: description } }
+    {
+      method: 'POST',
+      path: 'set-subscription-description',
+      body: {
+        seller_payme_id,
+        sub_payme_id: subId,
+        ...(subCode != null ? { sub_payme_code: subCode } : {}),
+        sub_description: description,
+        description,
+        product_name: description,
+        plan_name: description
+      }
+    },
+    {
+      method: 'POST',
+      path: 'update-subscription',
+      body: {
+        seller_payme_id,
+        sub_payme_id: subId,
+        ...(subCode != null ? { sub_payme_code: subCode } : {}),
+        sub_description: description,
+        description,
+        product_name: description,
+        plan_name: description
+      }
+    },
+    {
+      method: 'POST',
+      path: 'edit-subscription',
+      body: {
+        seller_payme_id,
+        sub_payme_id: subId,
+        ...(subCode != null ? { sub_payme_code: subCode } : {}),
+        sub_description: description,
+        description,
+        product_name: description,
+        plan_name: description
+      }
+    }
   ];
 
   let last: { ok: boolean; status: number; json: any } | null = null;

@@ -897,7 +897,7 @@ export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedReq
   // Mettre aussi à jour la description pour qu'elle reflète le pack côté Isracard/PayMe.
   let descriptionUpdate: { ok: boolean; used?: any; error?: any } = { ok: true };
   try {
-    const used = await paymeSetSubscriptionDescription({ subId: target.subId, description: membership });
+    const used = await paymeSetSubscriptionDescription({ subId: target.subId, subCode: target.subCode, description: membership });
     descriptionUpdate = { ok: true, used };
   } catch (e: any) {
     // Best-effort: la mise à jour de description peut ne pas être supportée par PayMe.
@@ -915,6 +915,16 @@ export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedReq
     } else {
       throw e;
     }
+  }
+
+  // Vérifier (best-effort) la description réellement visible côté PayMe
+  let observedDescription: string | null = null;
+  try {
+    const list = await paymeListSubscriptions();
+    const found = list.find((it) => String(it.subId || '').trim() === String(target.subId).trim());
+    observedDescription = found?.description ?? null;
+  } catch {
+    observedDescription = null;
   }
 
   // 2) Firestore: membership uniquement.
@@ -942,12 +952,13 @@ export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedReq
       previousMembership,
       newPriceInCents,
       target,
-      descriptionUpdate
+      descriptionUpdate,
+      observedDescription
     },
     req
   });
 
-  res.status(200).json({ success: true, target, descriptionUpdate });
+  res.status(200).json({ success: true, target, descriptionUpdate, observedDescription });
 }
 
 /**
@@ -976,15 +987,25 @@ export async function adminPatchMembershipAndSetPaymeDescription(req: Authentica
   // 1) PayMe d'abord: si PayMe échoue, on ne touche pas Firestore.
   let used: any = null;
   try {
-    used = await paymeSetSubscriptionDescription({ subId: target.subId, description: membership });
+    used = await paymeSetSubscriptionDescription({ subId: target.subId, subCode: target.subCode, description: membership });
   } catch (e: any) {
     if (target.source !== 'payme_list') {
       const target2 = await resolvePaymeTarget({ client, subscription, override, forceList: true });
       target = target2;
-      used = await paymeSetSubscriptionDescription({ subId: target2.subId, description: membership });
+      used = await paymeSetSubscriptionDescription({ subId: target2.subId, subCode: target2.subCode, description: membership });
     } else {
       throw e;
     }
+  }
+
+  // Vérifier (best-effort) la description réellement visible côté PayMe
+  let observedDescription: string | null = null;
+  try {
+    const list = await paymeListSubscriptions();
+    const found = list.find((it) => String(it.subId || '').trim() === String(target.subId).trim());
+    observedDescription = found?.description ?? null;
+  } catch {
+    observedDescription = null;
   }
 
   // 2) Firestore: membership uniquement.
@@ -1011,12 +1032,13 @@ export async function adminPatchMembershipAndSetPaymeDescription(req: Authentica
       membership,
       previousMembership,
       target,
-      used
+      used,
+      observedDescription
     },
     req
   });
 
-  res.status(200).json({ success: true, target, used });
+  res.status(200).json({ success: true, target, used, observedDescription });
 }
 
 async function updateSubscriptionStateDoc(params: {

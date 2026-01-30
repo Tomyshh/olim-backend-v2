@@ -3197,6 +3197,10 @@ paths:
                     type: object
                     description: Résultat de tentative de mise à jour de description PayMe (best-effort)
                     additionalProperties: true
+                  observedDescription:
+                    type: string
+                    nullable: true
+                    description: Description observée côté PayMe après tentative (best-effort). Si inchangé, PayMe/Isracard360 ne supporte probablement pas l'édition.
         '400':
           description: Paramètres invalides
           content:
@@ -3263,6 +3267,10 @@ paths:
                     type: object
                     description: Endpoint PayMe utilisé (si la mise à jour est supportée)
                     additionalProperties: true
+                  observedDescription:
+                    type: string
+                    nullable: true
+                    description: Description observée côté PayMe après tentative (best-effort). Si inchangé, PayMe/Isracard360 ne supporte probablement pas l'édition.
         '400':
           description: Paramètres invalides
           content:
