@@ -49,6 +49,95 @@ function addMonths(date: Date, months: number): Date {
   return d;
 }
 
+function coerceStatusCode(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number(value.trim());
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+/**
+ * Normalise un montant PayMe en agorot (cents ILS).
+ * Hypothèse prod: les valeurs entières (string sans '.' ou number) sont déjà en agorot.
+ * Les valeurs décimales ("59.00") sont des shekels.
+ */
+function parsePaymeMoneyToAgorot(value: any): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+  if (typeof value === 'string' && value.trim()) {
+    const s0 = value.trim().replace(',', '.');
+    if (!s0) return null;
+    if (s0.includes('.')) {
+      const f = Number(s0);
+      return Number.isFinite(f) ? Math.round(f * 100) : null;
+    }
+    const n = Number(s0);
+    return Number.isFinite(n) ? Math.round(n) : null;
+  }
+  return null;
+}
+
+function pickPaymeSubscriptionAmountRaw(item: any): unknown {
+  return (
+    item?.sub_price ??
+    item?.subPrice ??
+    item?.transaction_periodical_payment ??
+    item?.transactionPeriodicalPayment ??
+    item?.transaction_first_payment ??
+    item?.transactionFirstPayment ??
+    item?.sale_price ??
+    item?.salePrice ??
+    item?.sale_price_after_fees ??
+    item?.salePriceAfterFees ??
+    item?.price ??
+    item?.amount ??
+    item?.sale?.sale_price ??
+    item?.sale?.price ??
+    null
+  );
+}
+
+function pickPaymeAmountAgorot(it: PaymeSubscriptionListItem): number | null {
+  const raw = it?.raw;
+  const agorot = parsePaymeMoneyToAgorot(pickPaymeSubscriptionAmountRaw(raw));
+  return typeof agorot === 'number' && Number.isFinite(agorot) && agorot > 0 ? agorot : null;
+}
+
+function pickPaymeAmountShekel(it: PaymeSubscriptionListItem): number | null {
+  const agorot = pickPaymeAmountAgorot(it);
+  if (agorot == null || agorot <= 0) return null;
+  const shekel = agorot / 100;
+  const rounded = Math.round(shekel);
+  return Number.isFinite(rounded) && rounded > 0 ? rounded : null;
+}
+
+function membershipFromAmountShekel(amountShekel: number): string | null {
+  const exceptions: Record<number, 'Pack Start' | 'Pack Essential' | 'Pack VIP'> = {
+    168: 'Pack Start',
+    218: 'Pack Start',
+    237: 'Pack Start',
+    287: 'Pack Start',
+    268: 'Pack Essential',
+    337: 'Pack Essential',
+    406: 'Pack Essential',
+    318: 'Pack Essential',
+    387: 'Pack Essential',
+    456: 'Pack Essential',
+    468: 'Pack VIP',
+    537: 'Pack VIP',
+    606: 'Pack VIP'
+  };
+  const exact = exceptions[amountShekel as keyof typeof exceptions];
+  if (exact) return exact;
+  if (amountShekel >= 95 && amountShekel <= 149) return 'Pack Start';
+  if (amountShekel >= 150 && amountShekel <= 249) return 'Pack Essential';
+  if (amountShekel >= 250 && amountShekel < 600) return 'Pack VIP';
+  if (amountShekel >= 600) return 'Pack Elite';
+  return null;
+}
+
 function msUntilNextLocalTime(params: { hour: number; minute: number; second?: number }): number {
   const now = new Date();
   const second = params.second ?? 0;
@@ -193,6 +282,7 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
     clientsScanned: 0,
     monthlyDocsFound: 0,
     updated: 0,
+    skippedNotActive: 0,
     skippedNoSubDoc: 0,
     skippedNotMonthly: 0,
     skippedNoSubCode: 0,
@@ -250,6 +340,21 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         return;
       }
 
+      // Règle:
+      // - status Firestore = 2 (actif) => sync normale + membership
+      // - status Firestore = 5 (annulé) => forcer nextPaymentDate = null + endDate = fin d'abonnement PayMe
+      // - autre => skip
+      const firestoreStatus =
+        coerceStatusCode(sub?.payme?.status) ??
+        coerceStatusCode(sub?.status) ??
+        coerceStatusCode(sub?.payme?.sub_status) ??
+        coerceStatusCode(sub?.payme?.subStatus) ??
+        null;
+      if (firestoreStatus !== 2 && firestoreStatus !== 5) {
+        stats.skippedNotActive++;
+        return;
+      }
+
       const subCode = extractMonthlySubCodeFromSubscriptionCurrent(sub);
       if (!subCode) {
         stats.skippedNoSubCode++;
@@ -267,6 +372,12 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
       const storedPaymeNext = toDateOrNull(sub?.payme?.nextPaymentDate);
       const storedPaymentNext = toDateOrNull(sub?.payment?.nextPaymentDate);
       const storedEnd = toDateOrNull(sub?.dates?.endDate);
+      const storedMembership = typeof sub?.plan?.membership === 'string' ? String(sub.plan.membership).trim() : '';
+      const storedPlanPriceAgorot = typeof sub?.plan?.price === 'number' && Number.isFinite(sub.plan.price) ? sub.plan.price : null;
+
+      const desiredPriceAgorot = pickPaymeAmountAgorot(payme);
+      const amountShekel = pickPaymeAmountShekel(payme);
+      const desiredMembership = amountShekel != null ? membershipFromAmountShekel(amountShekel) : null;
 
       const patch: Record<string, any> = {
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -274,7 +385,53 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
 
       let needsWrite = false;
 
-      if (desiredNext) {
+      // Membership: uniquement si abonnement actif (status Firestore = 2)
+      if (firestoreStatus === 2 && desiredMembership && desiredMembership !== storedMembership) {
+        patch.plan = { ...(sub.plan || {}), membership: desiredMembership };
+        needsWrite = true;
+      }
+
+      // Price: on met à jour uniquement plan.price (en agorot) si PayMe fournit un montant.
+      if (desiredPriceAgorot != null && desiredPriceAgorot !== storedPlanPriceAgorot) {
+        patch.plan = { ...(sub.plan || {}), ...(patch.plan || {}), price: desiredPriceAgorot };
+        needsWrite = true;
+      }
+
+      // Cas annulé: endDate = fin PayMe ; nextPaymentDate = null
+      if (firestoreStatus === 5) {
+        const desiredEnd = desiredNext || (payme.lastPaymentDate ? addMonths(payme.lastPaymentDate, 1) : null);
+        if (!desiredEnd) {
+          stats.skippedNoDates++;
+          return;
+        }
+        const desiredEndMs = desiredEnd.getTime();
+        const storedEndMs = storedEnd?.getTime?.() ?? null;
+        const storedPlanMs = storedPlanNext?.getTime?.() ?? null;
+        const storedPaymeMs = storedPaymeNext?.getTime?.() ?? null;
+        const storedPaymentMs = storedPaymentNext?.getTime?.() ?? null;
+
+        const alreadyOk =
+          storedEndMs === desiredEndMs &&
+          storedPlanMs == null &&
+          storedPaymeMs == null &&
+          storedPaymentMs == null;
+
+        patch.plan = { ...(sub.plan || {}), ...(patch.plan || {}), nextPaymentDate: null };
+        patch.payment = { ...(sub.payment || {}), nextPaymentDate: null };
+        patch.payme = {
+          ...(sub.payme || {}),
+          nextPaymentDate: null,
+          ...(payme.subStatus != null ? { sub_status: payme.subStatus } : {})
+        };
+        patch.dates = { ...(sub.dates || {}), endDate: desiredEnd };
+        // willExpire: uniquement si (status=5) ET endDate (PayMe) est dans le futur
+        const stillActive = now.getTime() < desiredEndMs;
+        patch.states = { ...(sub.states || {}), isActive: stillActive, willExpire: stillActive };
+
+        if (!alreadyOk || storedEnd == null || storedPlanNext != null || storedPaymeNext != null || storedPaymentNext != null) {
+          needsWrite = true;
+        }
+      } else if (desiredNext) {
         const desiredMs = desiredNext.getTime();
         const alreadyOk =
           (storedPlanNext?.getTime?.() === desiredMs || storedPlanNext == null) &&
@@ -282,7 +439,7 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
           (storedPaymentNext?.getTime?.() === desiredMs || storedPaymentNext == null) &&
           (storedEnd?.getTime?.() === desiredMs || storedEnd == null);
 
-        patch.plan = { ...(sub.plan || {}), nextPaymentDate: desiredNext };
+        patch.plan = { ...(sub.plan || {}), ...(patch.plan || {}), nextPaymentDate: desiredNext };
         patch.payment = { ...(sub.payment || {}), nextPaymentDate: desiredNext };
         patch.payme = {
           ...(sub.payme || {}),
@@ -292,11 +449,7 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         patch.dates = { ...(sub.dates || {}), endDate: desiredNext };
 
         const stillActive = now.getTime() < desiredMs;
-        if (payme.subStatus === 5) {
-          patch.states = { ...(sub.states || {}), isActive: stillActive, willExpire: stillActive };
-        } else {
-          patch.states = { ...(sub.states || {}), isActive: stillActive };
-        }
+        patch.states = { ...(sub.states || {}), isActive: stillActive };
 
         const mustBackfillPlanNext = storedPlanNext == null;
         const mustBackfillPaymeNext = storedPaymeNext == null;
@@ -331,6 +484,10 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         console.log('[payme-monthly-sync][DRY-RUN] would update', {
           clientId,
           subCode,
+          firestoreStatus,
+          desiredMembership,
+          desiredPriceAgorot,
+          amountShekel,
           desiredNext: desiredNext ? desiredNext.toISOString() : null,
           desiredEnd: desiredNext
             ? desiredNext.toISOString()

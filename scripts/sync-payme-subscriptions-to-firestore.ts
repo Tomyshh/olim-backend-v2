@@ -74,6 +74,104 @@ function normalizeEmail(email: string): string {
   return pickString(email).toLowerCase();
 }
 
+/**
+ * Normalise un montant PayMe en agorot (cents ILS).
+ * PayMe peut renvoyer:
+ * - "59.00" => 5900
+ * - "5900" => 5900
+ * - 5900 => 5900
+ *
+ * IMPORTANT (prod):
+ * On considère que les valeurs entières (string sans '.' ou number) sont déjà en agorot.
+ * Ça évite l'ambiguïté 800 => 8.00 ILS (800 agorot), au lieu de 800 ILS.
+ */
+function parsePaymeMoneyToAgorot(value: any): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    // Déjà en agorot
+    return Math.round(value);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    const s0 = value.trim().replace(',', '.');
+    if (!s0) return null;
+    if (s0.includes('.')) {
+      const f = Number(s0);
+      return Number.isFinite(f) ? Math.round(f * 100) : null;
+    }
+    const n = Number(s0);
+    if (!Number.isFinite(n)) return null;
+    // String entier => déjà en agorot
+    return Math.round(n);
+  }
+  return null;
+}
+
+function pickPaymeSubscriptionAmountRaw(item: any): unknown {
+  // PayMe varie selon endpoints/schémas. On tente des clés observées/probables.
+  return (
+    item?.sub_price ??
+    item?.subPrice ??
+    item?.transaction_periodical_payment ??
+    item?.transactionPeriodicalPayment ??
+    item?.transaction_first_payment ??
+    item?.transactionFirstPayment ??
+    item?.sale_price ??
+    item?.salePrice ??
+    item?.sale_price_after_fees ??
+    item?.salePriceAfterFees ??
+    item?.price ??
+    item?.amount ??
+    item?.sale?.sale_price ??
+    item?.sale?.price ??
+    null
+  );
+}
+
+function pickPaymeSubscriptionAmountAgorot(best: PaymeSubscriptionListItem): number | null {
+  const raw = best?.raw;
+  const amountRaw = pickPaymeSubscriptionAmountRaw(raw);
+  const agorot = parsePaymeMoneyToAgorot(amountRaw);
+  return typeof agorot === 'number' && Number.isFinite(agorot) && agorot > 0 ? agorot : null;
+}
+
+function pickPaymeSubscriptionAmountShekel(best: PaymeSubscriptionListItem): number | null {
+  const agorot = pickPaymeSubscriptionAmountAgorot(best);
+  if (agorot == null) return null;
+  // Conversion agorot -> shekel
+  const shekel = agorot / 100;
+  // On travaille avec des montants "catalogue" entiers.
+  const rounded = Math.round(shekel);
+  return Number.isFinite(rounded) && rounded > 0 ? rounded : null;
+}
+
+function membershipFromAmountShekel(amountShekel: number): string | null {
+  // Exceptions (prioritaires)
+  const exceptions: Record<number, 'Pack Start' | 'Pack Essential' | 'Pack VIP'> = {
+    168: 'Pack Start',
+    218: 'Pack Start',
+    237: 'Pack Start',
+    287: 'Pack Start',
+    268: 'Pack Essential',
+    337: 'Pack Essential',
+    406: 'Pack Essential',
+    318: 'Pack Essential',
+    387: 'Pack Essential',
+    456: 'Pack Essential',
+    468: 'Pack VIP',
+    537: 'Pack VIP',
+    606: 'Pack VIP'
+  };
+  const exact = exceptions[amountShekel as keyof typeof exceptions];
+  if (exact) return exact;
+
+  // Règles générales
+  if (amountShekel >= 95 && amountShekel <= 149) return 'Pack Start';
+  if (amountShekel >= 150 && amountShekel <= 249) return 'Pack Essential';
+  if (amountShekel >= 250 && amountShekel < 600) return 'Pack VIP';
+  if (amountShekel >= 600) return 'Pack Elite';
+  return null;
+}
+
 function coerceSubCodeToComparable(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   if (typeof value === 'string' && value.trim()) return value.trim();
@@ -143,7 +241,7 @@ function toIsoOrEmpty(d: Date | null): string {
 }
 
 function chooseMostRecentActive(items: PaymeSubscriptionListItem[]): PaymeSubscriptionListItem | null {
-  const active = items.filter((x) => x && x.subStatus === 2 && x.subCode != null && x.description);
+  const active = items.filter((x) => x && x.subStatus === 2 && x.subCode != null);
   if (active.length === 0) return null;
 
   function parseCreatedMs(it: PaymeSubscriptionListItem): number {
@@ -323,13 +421,22 @@ async function syncOneClient(params: {
     return { changed: false, reason: 'skip:no_active_subscription' };
   }
 
-  const desiredMembership = pickString(best.description);
+  const amountAgorot = pickPaymeSubscriptionAmountAgorot(best);
+  const amountShekel = pickPaymeSubscriptionAmountShekel(best);
+  const desiredMembership = membershipFromAmountShekel(amountShekel || 0) || pickString(best.description);
   const desiredSubCode = best.subCode != null ? String(best.subCode) : '';
   const desiredStatus = best.subStatus != null ? String(best.subStatus) : '';
   if (!desiredMembership || !desiredSubCode) return { changed: false, reason: 'skip:invalid_payme_data' };
 
   const current = extractFirestoreCurrent({ client, subscription });
   const isActive = best.subStatus === 2;
+
+  // Règle: on ne modifie pas Membership / subscription/current si le status Firestore n'est pas actif (2).
+  // (Même si PayMe indique actif, on ne corrige pas ici: on skip.)
+  if (current.paymeStatusOnSubscriptionDoc !== '2') {
+    return { changed: false, reason: 'skip:firestore_status_not_active' };
+  }
+
   const ok =
     current.membershipOnClientDoc === desiredMembership &&
     current.membershipOnSubscriptionDoc === desiredMembership &&
@@ -420,7 +527,12 @@ async function syncOneClient(params: {
     console.log('[DRY-RUN] Would update', {
       clientId: params.clientId,
       email,
-      desired: { membership: desiredMembership, subCode: desiredSubCode },
+      desired: {
+        membership: desiredMembership,
+        subCode: desiredSubCode,
+        amountShekel: amountShekel ?? null,
+        amountAgorot: amountAgorot ?? null
+      },
       current,
       subscriptionUpdatesPreview: subscriptionUpdates
     });
