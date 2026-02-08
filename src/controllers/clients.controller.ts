@@ -196,6 +196,8 @@ function mapClientDoc(params: { uid: string; email: string; clientData: Record<s
 
   const doc: Record<string, any> = {
     'Client ID': params.uid,
+    // Timestamp de création (exigé pour TOUS les clients)
+    'Created At': admin.firestore.FieldValue.serverTimestamp(),
     ...(params.email ? { Email: params.email } : {}),
     ...(lastName ? { 'Last Name': lastName } : {}),
     ...(firstName ? { 'First Name': firstName } : {}),
@@ -222,7 +224,6 @@ function mapClientDoc(params: { uid: string; email: string; clientData: Record<s
   if (!isFreeClient) {
     // Votre tableau mentionne aussi "Client UID" en supplément (paiement)
     doc['Client UID'] = params.uid;
-    doc['Created At'] = admin.firestore.FieldValue.serverTimestamp();
     if (israCardSubId) doc['IsraCard Sub ID'] = israCardSubId;
     const salePaymeId = pickString(cd.sale_payme_id);
     if (salePaymeId) doc.sale_payme_id = salePaymeId;

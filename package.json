@@ -15,7 +15,8 @@
     "script:list-system-registration": "tsx scripts/list-system-registration-clients.ts",
     "script:upsert-membership-details": "tsx scripts/upsert-membership-details.ts",
     "script:add-icinema-movies": "tsx scripts/add-icinema-movies.ts",
-    "script:run-analytics-sync": "tsx scripts/run-analytics-sync.ts"
+    "script:run-analytics-sync": "tsx scripts/run-analytics-sync.ts",
+    "script:backfill-created-at": "tsx scripts/backfill-created-at-from-auth.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.89.0",

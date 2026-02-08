@@ -27,11 +27,14 @@ export async function initUser(req: AuthenticatedRequest, res: Response): Promis
   const snap = await clientRef.get();
 
   if (snap.exists) {
+    const existing = (snap.data() || {}) as Record<string, any>;
+    const hasCreatedAt = existing?.['Created At'] != null;
     // Non destructif : on met juste à jour des champs "safe" (merge)
     await clientRef.set(
       {
         ...(email ? { Email: email } : {}),
         ...(phoneNumber ? { 'Phone Number': phoneNumber } : {}),
+        ...(!hasCreatedAt ? { 'Created At': admin.firestore.FieldValue.serverTimestamp() } : {}),
         lastLoginAt: admin.firestore.FieldValue.serverTimestamp()
       },
       { merge: true }
@@ -48,6 +51,8 @@ export async function initUser(req: AuthenticatedRequest, res: Response): Promis
       ...(email ? { Email: email } : {}),
       ...(phoneNumber ? { 'Phone Number': phoneNumber } : {}),
       createdVia: 'firebaseAuth',
+      // Champ demandé: ajouté à la création du client
+      'Created At': admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       lastLoginAt: admin.firestore.FieldValue.serverTimestamp(),
       registrationComplete: false

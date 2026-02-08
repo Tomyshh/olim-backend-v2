@@ -207,11 +207,14 @@ export async function verifyLoginOtp(params: {
     await clientRef.set(
       {
         uid,
+        'Client ID': uid,
         'Phone Number': norm.e164,
         phoneVerified: true,
         verifiedPhoneNumber: norm.e164,
         phoneVerifiedAt: new Date(),
         createdVia: 'phoneOtp',
+        // Champ demandé: ajouté à la création du client (sans suppression)
+        'Created At': admin.firestore.FieldValue.serverTimestamp(),
         createdAt: new Date(),
         registrationComplete: false
       },
