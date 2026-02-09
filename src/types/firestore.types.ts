@@ -1,5 +1,17 @@
 // Types pour les collections Firestore principales
 
+export type SeniorityTier = 'ultra_new' | 'new' | 'bronze' | 'silver' | 'gold' | 'platinum';
+
+export interface ClientSeniority {
+  version: 1;
+  days: number;         // jours depuis "Created At"
+  months: number;       // mois entiers
+  tier: SeniorityTier;
+  tierLabel: string;    // "Ultra-Nouveau" | "Nouveau" | "Bronze" | "Silver" | "Gold" | "Platinum"
+  since: any;           // Timestamp — copie de "Created At"
+  computedAt: any;      // Timestamp
+}
+
 export interface Client {
   uid: string;
   'First Name'?: string;
@@ -11,6 +23,8 @@ export interface Client {
   registrationCompletedAt?: any;
   createdVia?: string;
   createdAt?: any;
+  'Created At'?: any;
+  seniority?: ClientSeniority;
   activity?: {
     version: 1;
     score: number; // 0..100

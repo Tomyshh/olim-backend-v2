@@ -9,6 +9,7 @@ import {
   normalizeCardNumberDigitsOnly,
   tryCreateSecurdenFolderAndCard
 } from '../services/securden.service.js';
+import { buildInitialSeniority } from '../services/clientSeniority.service.js';
 import {
   calculateSubscriptionStartDate,
   paymeCaptureBuyerToken,
@@ -217,7 +218,8 @@ function mapClientDoc(params: { uid: string; email: string; clientData: Record<s
     createdFrom: 'CRM',
     language: 'fr',
     registrationComplete: true,
-    registrationCompletedAt: admin.firestore.FieldValue.serverTimestamp()
+    registrationCompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+    seniority: buildInitialSeniority()
   };
 
   // Champs additionnels si inscription avec paiement

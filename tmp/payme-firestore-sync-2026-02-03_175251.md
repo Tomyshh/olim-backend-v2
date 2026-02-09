@@ -1,4 +1,4 @@
-# Rapport sync PayMe → Firestore
+git # Rapport sync PayMe → Firestore
 
 - Début: 2026-02-03T15:47:22.528Z
 - Fin: 2026-02-03T15:52:51.381Z

@@ -1,6 +1,7 @@
 import type { Response } from 'express';
 import { admin, getFirestore } from '../config/firebase.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
+import { buildInitialSeniority } from '../services/clientSeniority.service.js';
 
 /**
  * POST /users/init
@@ -29,12 +30,14 @@ export async function initUser(req: AuthenticatedRequest, res: Response): Promis
   if (snap.exists) {
     const existing = (snap.data() || {}) as Record<string, any>;
     const hasCreatedAt = existing?.['Created At'] != null;
+    const hasSeniority = existing?.seniority != null;
     // Non destructif : on met juste à jour des champs "safe" (merge)
     await clientRef.set(
       {
         ...(email ? { Email: email } : {}),
         ...(phoneNumber ? { 'Phone Number': phoneNumber } : {}),
         ...(!hasCreatedAt ? { 'Created At': admin.firestore.FieldValue.serverTimestamp() } : {}),
+        ...(!hasSeniority ? { seniority: buildInitialSeniority() } : {}),
         lastLoginAt: admin.firestore.FieldValue.serverTimestamp()
       },
       { merge: true }
@@ -55,7 +58,8 @@ export async function initUser(req: AuthenticatedRequest, res: Response): Promis
       'Created At': admin.firestore.FieldValue.serverTimestamp(),
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       lastLoginAt: admin.firestore.FieldValue.serverTimestamp(),
-      registrationComplete: false
+      registrationComplete: false,
+      seniority: buildInitialSeniority()
     },
     { merge: true }
   );

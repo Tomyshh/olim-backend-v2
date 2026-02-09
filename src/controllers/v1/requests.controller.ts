@@ -140,6 +140,7 @@ async function resolveAssignedTo(params: { uid: string; requestType: string; req
   const lang = String(clientLanguage || '').trim().toLowerCase() || 'fr';
 
   // On tente de choisir un conseiller présent, compatible langue, avec la charge la plus basse (now_request)
+  // Stratégie 1 : requête composite (nécessite un index Firestore composite)
   try {
     const q = db
       .collection('Conseillers2')
@@ -153,10 +154,11 @@ async function resolveAssignedTo(params: { uid: string; requestType: string; req
       const name = String(d?.name || '').trim();
       if (name) return name;
     }
-  } catch {
-    // Index/field absent => fallback
+  } catch (err) {
+    console.warn('[resolveAssignedTo] Requête composite lang+isPresent échouée (index manquant ?), fallback en cours', err);
   }
 
+  // Stratégie 2 : requête composite sans langue (nécessite un index Firestore composite)
   try {
     const q2 = db.collection('Conseillers2').where('isPresent', '==', true).orderBy('now_request', 'asc').limit(1);
     const snap2 = await q2.get();
@@ -165,8 +167,35 @@ async function resolveAssignedTo(params: { uid: string; requestType: string; req
       const name = String(d?.name || '').trim();
       if (name) return name;
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[resolveAssignedTo] Requête composite isPresent+orderBy échouée (index manquant ?), fallback en cours', err);
+  }
+
+  // Stratégie 3 : fallback sans index composite — simple filtre isPresent, tri en mémoire
+  try {
+    const q3 = db.collection('Conseillers2').where('isPresent', '==', true);
+    const snap3 = await q3.get();
+    if (!snap3.empty) {
+      const docs = snap3.docs
+        .map((d) => d.data() as any)
+        .filter((d) => d?.name);
+
+      // Trier par now_request (asc), préférer ceux qui parlent la langue du client
+      docs.sort((a: any, b: any) => {
+        const aLang = a?.language?.[lang] === true ? 0 : 1;
+        const bLang = b?.language?.[lang] === true ? 0 : 1;
+        if (aLang !== bLang) return aLang - bLang;
+        return (Number(a?.now_request) || 0) - (Number(b?.now_request) || 0);
+      });
+
+      const best = docs[0];
+      if (best) {
+        const name = String(best.name).trim();
+        if (name) return name;
+      }
+    }
+  } catch (err) {
+    console.error('[resolveAssignedTo] Fallback isPresent simple échoué', err);
   }
 
   // Fallback ultime demandé

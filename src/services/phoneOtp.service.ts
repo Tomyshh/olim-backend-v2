@@ -4,6 +4,7 @@ import { consumeRateLimit } from './rateLimit.service.js';
 import { generateOtpCode6, otpCodeHash, requireOtpSecret, timingSafeEqualHex } from './otpCrypto.service.js';
 import { checkTwilioVerifyCode, hasTwilioVerifyEnabled, sendTwilioVerifySms } from './twilioVerify.service.js';
 import { sendOtp } from './otpSender.service.js';
+import { buildInitialSeniority } from './clientSeniority.service.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 3;
@@ -216,7 +217,8 @@ export async function verifyLoginOtp(params: {
         // Champ demandé: ajouté à la création du client (sans suppression)
         'Created At': admin.firestore.FieldValue.serverTimestamp(),
         createdAt: new Date(),
-        registrationComplete: false
+        registrationComplete: false,
+        seniority: buildInitialSeniority()
       },
       { merge: true }
     );
