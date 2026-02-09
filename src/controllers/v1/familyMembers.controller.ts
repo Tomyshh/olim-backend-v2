@@ -1071,10 +1071,12 @@ async function adminActivateFamilyMember(params: {
     // Free activation: no sale, no monthly impact
     updates.billingExempt = true;
     updates.billingExemptReason = 'admin_free_activation';
-    // IMPORTANT: on ne touche PAS à serviceActive ici.
-    // L'activation/désactivation du membre doit uniquement basculer isActive,
-    // exactement comme les routes client. Le service se gère via paiement (/activate paid)
-    // ou via /service/activate (conjoint gratuit).
+    // Traiter le membre comme "adult_paid" côté service : service actif sans paiement
+    if (isAdult && !isConjoint(status)) {
+      updates.serviceActive = true;
+      updates.serviceActivatedAt = admin.firestore.FieldValue.serverTimestamp();
+      updates.adult_paid = true; // membre majeur (hors conjoint) considéré comme service activé (gratuit admin)
+    }
   }
 
   await ref.set(stripUndefinedDeep(updates), { merge: true });
