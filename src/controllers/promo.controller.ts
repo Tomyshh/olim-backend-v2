@@ -22,11 +22,16 @@ export async function validatePromoCode(req: AuthenticatedRequest, res: Response
       code?: unknown;
       membershipType?: unknown;
       plan?: unknown;
+      customPriceInCents?: unknown;
     };
 
     const codeRaw = pickString(body.code);
     const membershipType = pickString(body.membershipType);
     const plan = pickString(body.plan);
+    // Prix custom optionnel (ex: prix défini manuellement par le conseiller dans le CRM)
+    const customPriceRaw = typeof body.customPriceInCents === 'number' ? body.customPriceInCents
+      : typeof body.customPriceInCents === 'string' ? Number(body.customPriceInCents) : NaN;
+    const customPriceInCents = Number.isFinite(customPriceRaw) && customPriceRaw > 0 ? Math.floor(customPriceRaw) : null;
 
     if (!codeRaw) {
       res.status(200).json({ valid: false, error: 'Code requis.', errorType: 'invalid_code' });
@@ -89,10 +94,14 @@ export async function validatePromoCode(req: AuthenticatedRequest, res: Response
     const source = pickString(doc.source) || codeNormalized;
 
     // Calculer le prix original et réduit
+    // Priorité: customPriceInCents (prix admin) > Remote Config > fallback
     let originalPriceInCents = 0;
     let discountedPriceInCents = 0;
 
-    if (membershipType && plan) {
+    if (customPriceInCents) {
+      originalPriceInCents = customPriceInCents;
+      discountedPriceInCents = Math.max(0, Math.round(originalPriceInCents - (originalPriceInCents * reduction / 100)));
+    } else if (membershipType && plan) {
       const pricing = await computeMembershipPricing({ membershipType, plan });
       if (pricing.ok) {
         originalPriceInCents = pricing.serverPriceInCents;

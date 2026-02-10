@@ -176,6 +176,19 @@ export async function computeMembershipPricing(params: {
   const nisUsed = remoteConfigValueNisUsed != null ? remoteConfigValueNisUsed : fallbackNis;
   const serverPriceInCents = nisUsed * 100;
 
+  // Diagnostic log: repérer quand le backend tombe sur le fallback au lieu de Remote Config
+  if (pricingSource === 'fallback') {
+    console.warn('[membershipPricing] FALLBACK used instead of Remote Config', {
+      membershipTypeNormalized,
+      planNormalized,
+      keyInfo,
+      fallbackNis,
+      templateAvailable: !!template,
+      remoteConfigKeyUsed,
+      remoteConfigValueNisUsed
+    });
+  }
+
   const clientRaw = typeof params.clientPriceInCents === 'number' ? params.clientPriceInCents : pickString(params.clientPriceInCents);
   const clientParsed =
     typeof clientRaw === 'number'

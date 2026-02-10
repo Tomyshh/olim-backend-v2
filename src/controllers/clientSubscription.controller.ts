@@ -14,6 +14,8 @@ import {
   paymeSetSubscriptionDescription,
   paymeSetSubscriptionPrice
 } from '../services/payme.service.js';
+import { validateAndApplyPromo, type PromoValidationOk } from '../services/promoCode.service.js';
+import { computeMembershipPricing } from '../services/membershipPricing.service.js';
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -30,6 +32,14 @@ function coerceOptionalPositiveInt(value: unknown): number | null {
   const n = typeof value === 'string' ? Number(value.trim()) : typeof value === 'number' ? value : NaN;
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.floor(n);
+}
+
+function addMonths(date: Date, months: number): Date {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + months);
+  if (d.getDate() < day) d.setDate(0);
+  return d;
 }
 
 function parseDdMmYyyy(value: string): Date | null {
@@ -430,10 +440,40 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
   const paymentCredentialId = pickString(body.paymentCredentialId);
   if (!paymentCredentialId) throw new HttpError(400, 'paymentCredentialId requis.');
 
-  const priceInCents = coercePositiveInt(body.priceInCents, 'priceInCents');
+  let priceInCents = coercePositiveInt(body.priceInCents, 'priceInCents');
   const installments = coerceOptionalPositiveInt(body.installments);
   const promoCode = pickString(body.promoCode) || null;
   const isReplacement = body.isReplacement === true;
+
+  // Validation du code promo (optionnel)
+  let promoResult: PromoValidationOk | null = null;
+  let basePriceBeforePromo = priceInCents;
+  if (promoCode) {
+    // Priorité: prix custom admin > Remote Config > fallback
+    if (body.useCustomPrice === true) {
+      // Le conseiller a choisi un prix manuellement, on l'utilise comme base promo
+      basePriceBeforePromo = priceInCents;
+    } else {
+      const basePricing = await computeMembershipPricing({ membershipType: membership, plan });
+      if (basePricing.ok) {
+        basePriceBeforePromo = basePricing.serverPriceInCents;
+      }
+    }
+
+    const promoValidation = await validateAndApplyPromo({
+      promoCode,
+      membershipTypeNormalized: membership,
+      planNormalized: plan as 'monthly' | 'annual',
+      basePriceInCents: basePriceBeforePromo
+    });
+
+    if (!promoValidation.ok) {
+      throw new HttpError(400, `Code promo invalide: ${promoValidation.code}`, promoValidation.code);
+    }
+
+    promoResult = promoValidation;
+    priceInCents = promoValidation.finalPriceInCents;
+  }
 
   const { clientRef, client, subscriptionRef, subscription } = await loadClientAndSubscription({ clientId });
 
@@ -567,15 +607,90 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
     priceInCents,
     installments: installments,
     payme: planNumber === 3 ? { buyerKey, subCode, subID } : null,
-    promoCode,
+    promoCode: promoResult ? promoResult.promoCodeNormalized : promoCode,
     createdByUid: callerUid,
     nextPaymentDate,
     previousMembership,
     previousPlan
   });
+
+  // Ajout du bloc pricing.promo si un code promo a été validé
+  if (promoResult) {
+    const promoDurationCycles = promoResult.durationCycles;
+    const promoRevertAt = promoDurationCycles && promoDurationCycles > 0
+      ? addMonths(nextPaymentDate || new Date(), promoDurationCycles)
+      : null;
+    (subscriptionDoc as any).pricing = {
+      basePriceInCents: basePriceBeforePromo,
+      discountInCents: promoResult.discountInCents,
+      chargedPriceInCents: promoResult.finalPriceInCents,
+      pricingSource: 'promo_applied',
+      membershipTypeNormalized: membership,
+      planNormalized: plan,
+      promo: {
+        promoCode: promoResult.promoCodeNormalized,
+        promotionId: promoResult.promotionId,
+        discountType: promoResult.discountType,
+        discountValue: promoResult.discountValue,
+        expiresAt: promoResult.expiresAt,
+        durationCycles: promoDurationCycles,
+        appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+        revertAt: promoRevertAt
+      }
+    };
+    (subscriptionDoc as any).promoCode = {
+      code: promoResult.promoCodeNormalized,
+      reduction: promoResult.discountValue,
+      appliedDate: new Date().toISOString(),
+      expirationDate: promoResult.expiresAt ? promoResult.expiresAt.toISOString() : null,
+      source: promoResult.promoCodeNormalized
+    };
+  }
+
   batch.set(subscriptionRef, subscriptionDoc, { merge: true });
 
   await batch.commit();
+
+  // Post-commit: gestion promo (désactivation usage unique + PromoReverts)
+  if (promoResult) {
+    const db2 = getFirestore();
+    // Désactivation des codes à usage unique (forEveryone === false)
+    if (!promoResult.forEveryone && promoResult.promotionId) {
+      try {
+        await db2.collection('Promotions').doc(promoResult.promotionId).set(
+          { isValid: false, usedByUid: clientId, usedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+      } catch (e: any) {
+        console.error('[createOrReplaceClientSubscription] Échec désactivation code promo:', e?.message);
+      }
+    }
+
+    // Créer le PromoReverts pour la réversion automatique
+    const promoDurationCycles = promoResult.durationCycles;
+    if (promoDurationCycles && promoDurationCycles > 0) {
+      const promoRevertAt = addMonths(nextPaymentDate || new Date(), promoDurationCycles);
+      try {
+        await db2.collection('PromoReverts').add({
+          uid: clientId,
+          promoCode: promoResult.promoCodeNormalized,
+          promotionId: promoResult.promotionId,
+          revertAt: promoRevertAt,
+          basePriceInCents: basePriceBeforePromo,
+          discountedPriceInCents: priceInCents,
+          planType: plan,
+          membershipType: membership,
+          paymeSubId: subID || null,
+          durationCycles: promoDurationCycles,
+          status: 'pending',
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          source: 'crm_createOrReplace'
+        });
+      } catch (e: any) {
+        console.error('[createOrReplaceClientSubscription] Échec écriture PromoReverts:', e?.message);
+      }
+    }
+  }
 
   await writeAdminAuditLog({
     action: isReplacement ? 'CLIENT_SUBSCRIPTION_REPLACE' : 'CLIENT_SUBSCRIPTION_CREATE',
@@ -588,7 +703,8 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
       subCode: subCode ?? null,
       subID: subID ?? null,
       cancelAttempted,
-      cancelSkippedAsNonFatal
+      cancelSkippedAsNonFatal,
+      promoApplied: !!promoResult
     }
   });
 
@@ -647,12 +763,42 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
   if (requestedPlan !== 'monthly' && requestedPlan !== 'annual') throw new HttpError(400, 'plan invalide (monthly|annual).');
 
   const requestedMembership = pickString(body.membership) || currentMembership;
-  const requestedPrice = body.newPriceInCents != null ? coercePositiveInt(body.newPriceInCents, 'newPriceInCents') : currentPrice;
+  let requestedPrice = body.newPriceInCents != null ? coercePositiveInt(body.newPriceInCents, 'newPriceInCents') : currentPrice;
   if (!requestedMembership) throw new HttpError(400, 'membership manquant (aucun membership actuel détecté).');
   if (!requestedPrice) throw new HttpError(400, 'newPriceInCents manquant (aucun prix actuel détecté).');
 
   const installments = coerceOptionalPositiveInt(body.installments);
   const promoCode = pickString(body.promoCode) || null;
+
+  // Validation du code promo (optionnel)
+  let modifyPromoResult: PromoValidationOk | null = null;
+  let modifyBasePriceBeforePromo = requestedPrice;
+  if (promoCode) {
+    // Priorité: prix custom admin > Remote Config > fallback
+    if (body.useCustomPrice === true && body.newPriceInCents != null) {
+      // Le conseiller a choisi un prix manuellement, on l'utilise comme base promo
+      modifyBasePriceBeforePromo = requestedPrice;
+    } else {
+      const basePricing = await computeMembershipPricing({ membershipType: requestedMembership, plan: requestedPlan });
+      if (basePricing.ok) {
+        modifyBasePriceBeforePromo = basePricing.serverPriceInCents;
+      }
+    }
+
+    const promoValidation = await validateAndApplyPromo({
+      promoCode,
+      membershipTypeNormalized: requestedMembership,
+      planNormalized: requestedPlan as 'monthly' | 'annual',
+      basePriceInCents: modifyBasePriceBeforePromo
+    });
+
+    if (!promoValidation.ok) {
+      throw new HttpError(400, `Code promo invalide: ${promoValidation.code}`, promoValidation.code);
+    }
+
+    modifyPromoResult = promoValidation;
+    requestedPrice = promoValidation.finalPriceInCents;
+  }
 
   const { subId, subCode } = extractPaymeIdentifiers({ client, subscription });
 
@@ -698,15 +844,47 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
       const db = getFirestore();
       const batch = db.batch();
       const now = admin.firestore.FieldValue.serverTimestamp();
-      batch.set(
-        subscriptionRef,
-        {
-          plan: { price: requestedPrice },
-          updatedAt: now,
-          history: { lastModified: now, modifiedBy: callerUid || 'system' }
-        },
-        { merge: true }
-      );
+
+      const setPriceSubUpdate: Record<string, any> = {
+        plan: { price: requestedPrice },
+        updatedAt: now,
+        history: { lastModified: now, modifiedBy: callerUid || 'system' }
+      };
+
+      // Ajout du bloc pricing.promo si un code promo a été validé
+      if (modifyPromoResult) {
+        const promoDurationCycles = modifyPromoResult.durationCycles;
+        const promoRevertAt = promoDurationCycles && promoDurationCycles > 0
+          ? addMonths(new Date(), promoDurationCycles)
+          : null;
+        setPriceSubUpdate.pricing = {
+          basePriceInCents: modifyBasePriceBeforePromo,
+          discountInCents: modifyPromoResult.discountInCents,
+          chargedPriceInCents: modifyPromoResult.finalPriceInCents,
+          pricingSource: 'promo_applied',
+          membershipTypeNormalized: requestedMembership,
+          planNormalized: requestedPlan,
+          promo: {
+            promoCode: modifyPromoResult.promoCodeNormalized,
+            promotionId: modifyPromoResult.promotionId,
+            discountType: modifyPromoResult.discountType,
+            discountValue: modifyPromoResult.discountValue,
+            expiresAt: modifyPromoResult.expiresAt,
+            durationCycles: promoDurationCycles,
+            appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+            revertAt: promoRevertAt
+          }
+        };
+        setPriceSubUpdate.promoCode = {
+          code: modifyPromoResult.promoCodeNormalized,
+          reduction: modifyPromoResult.discountValue,
+          appliedDate: new Date().toISOString(),
+          expirationDate: modifyPromoResult.expiresAt ? modifyPromoResult.expiresAt.toISOString() : null,
+          source: modifyPromoResult.promoCodeNormalized
+        };
+      }
+
+      batch.set(subscriptionRef, setPriceSubUpdate, { merge: true });
       batch.set(
         clientRef,
         stripUndefinedDeep({
@@ -720,6 +898,44 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
       );
       await batch.commit();
 
+      // Post-commit: gestion promo (désactivation usage unique + PromoReverts)
+      if (modifyPromoResult) {
+        if (!modifyPromoResult.forEveryone && modifyPromoResult.promotionId) {
+          try {
+            await db.collection('Promotions').doc(modifyPromoResult.promotionId).set(
+              { isValid: false, usedByUid: clientId, usedAt: admin.firestore.FieldValue.serverTimestamp() },
+              { merge: true }
+            );
+          } catch (e: any) {
+            console.error('[modifyClientSubscription] Échec désactivation code promo:', e?.message);
+          }
+        }
+
+        const promoDurationCycles = modifyPromoResult.durationCycles;
+        if (promoDurationCycles && promoDurationCycles > 0) {
+          const promoRevertAt = addMonths(new Date(), promoDurationCycles);
+          try {
+            await db.collection('PromoReverts').add({
+              uid: clientId,
+              promoCode: modifyPromoResult.promoCodeNormalized,
+              promotionId: modifyPromoResult.promotionId,
+              revertAt: promoRevertAt,
+              basePriceInCents: modifyBasePriceBeforePromo,
+              discountedPriceInCents: requestedPrice,
+              planType: requestedPlan,
+              membershipType: requestedMembership,
+              paymeSubId: subId || null,
+              durationCycles: promoDurationCycles,
+              status: 'pending',
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              source: 'crm_modify_setPrice'
+            });
+          } catch (e: any) {
+            console.error('[modifyClientSubscription] Échec écriture PromoReverts:', e?.message);
+          }
+        }
+      }
+
       await writeAdminAuditLog({
         action: 'CLIENT_SUBSCRIPTION_SET_PRICE',
         callerUid,
@@ -730,7 +946,8 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
           subId,
           subCode: subCode ?? null,
           localSubStatus: Number.isFinite(localSubStatus) ? localSubStatus : null,
-          remoteStatus
+          remoteStatus,
+          promoApplied: !!modifyPromoResult
         }
       });
 

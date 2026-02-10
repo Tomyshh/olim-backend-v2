@@ -690,6 +690,16 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     const planNumber = pricing.planNormalized === 'annual' ? 4 : 3;
     const basePriceInCents = pricing.serverPriceInCents;
 
+    // Diagnostic: tracer la source de prix utilisée pour le calcul promo
+    console.info('[subscribe] Pricing resolved', {
+      membership,
+      plan: pricing.planNormalized,
+      basePriceInCents,
+      pricingSource: pricing.pricingSource,
+      remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
+      remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed
+    });
+
     // Promo (optionnel) => calcule le prix final serveur
     const promoCodeRaw = pickString(body.promoCode);
     const promoCodeSource = pickString(body.promoCodeSource) || null;

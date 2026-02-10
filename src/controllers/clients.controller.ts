@@ -18,6 +18,7 @@ import {
 } from '../services/payme.service.js';
 import { isRevolutBin6 } from '../services/revolutCardBins.service.js';
 import { computeMembershipPricing } from '../services/membershipPricing.service.js';
+import { validateAndApplyPromo, type PromoValidationOk } from '../services/promoCode.service.js';
 
 type CreateClientBody = {
   email?: unknown;
@@ -63,6 +64,14 @@ function coerceObject(value: unknown): Record<string, any> | undefined {
 function digitsOnly(value: unknown): string {
   const raw = typeof value === 'string' ? value : '';
   return raw.replace(/\D+/g, '');
+}
+
+function addMonths(date: Date, months: number): Date {
+  const d = new Date(date);
+  const day = d.getDate();
+  d.setMonth(d.getMonth() + months);
+  if (d.getDate() < day) d.setDate(0);
+  return d;
 }
 
 /**
@@ -363,6 +372,8 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
   let priceInCentsFinal = 0;
   let membershipTypeFinal = pickString(clientData.membershipType) || 'Pack Start';
   let installmentsUsed = 1;
+  let promoResultForClient: PromoValidationOk | null = null;
+  let basePriceBeforePromo = 0;
 
   if (isPayingClient) {
     try {
@@ -382,20 +393,47 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       const priceFromPayload = Number((clientData as any).membershipPrice || 0);
       membershipTypeFinal = pickString(clientData.membershipType) || 'Pack Start';
 
-      if (Number.isFinite(priceFromPayload) && priceFromPayload > 0) {
-        // Backward compatible: si le CRM fournit un prix, on le garde.
+      // Calcul déterministe du prix de base côté serveur (Remote Config -> fallback)
+      const planNormalizedForPricing = planNumber === 4 ? 'annual' : 'monthly';
+      const basePricing = await computeMembershipPricing({
+        membershipType: membershipTypeFinal,
+        plan: planNormalizedForPricing
+      });
+      if (!basePricing.ok) {
+        const code = basePricing.code === 'PLAN_INVALID' ? 'PLAN_INVALID' : 'MEMBERSHIP_INVALID';
+        throw new HttpError(400, `${code}.`, code);
+      }
+      // Priorité prix de base: prix custom CRM > Remote Config > fallback
+      const hasCustomPrice = Number.isFinite(priceFromPayload) && priceFromPayload > 0;
+      const basePriceInCentsForPromo = hasCustomPrice
+        ? Math.floor(priceFromPayload)
+        : basePricing.serverPriceInCents;
+
+      if (hasCustomPrice) {
         priceInCentsFinal = Math.floor(priceFromPayload);
       } else {
-        // Sinon: calcul déterministe côté serveur (Remote Config -> fallback), pour éviter les erreurs de pack.
-        const pricing = await computeMembershipPricing({
-          membershipType: membershipTypeFinal,
-          plan: planNumber === 4 ? 'annual' : 'monthly'
+        priceInCentsFinal = basePricing.chargedPriceInCents;
+      }
+
+      // Validation du code promo (optionnel)
+      const promoCodeRaw = pickString((clientData as any).promoCode)
+        || pickString((body.clientData as any)?.subscriptionData?.promoCode);
+
+      if (promoCodeRaw) {
+        const promoValidation = await validateAndApplyPromo({
+          promoCode: promoCodeRaw,
+          membershipTypeNormalized: membershipTypeFinal,
+          planNormalized: planNormalizedForPricing as 'monthly' | 'annual',
+          basePriceInCents: basePriceInCentsForPromo
         });
-        if (!pricing.ok) {
-          const code = pricing.code === 'PLAN_INVALID' ? 'PLAN_INVALID' : 'MEMBERSHIP_INVALID';
-          throw new HttpError(400, `${code}.`, code);
+
+        if (!promoValidation.ok) {
+          throw new HttpError(400, `Code promo invalide: ${promoValidation.code}`, promoValidation.code);
         }
-        priceInCentsFinal = pricing.chargedPriceInCents;
+
+        promoResultForClient = promoValidation;
+        basePriceBeforePromo = basePriceInCentsForPromo;
+        priceInCentsFinal = promoValidation.finalPriceInCents;
       }
       const fullName = `${firstName} ${lastName}`.trim();
       const cardHolder = pickString((clientData as any).cardHolder) || fullName;
@@ -586,6 +624,41 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
         subscriptionDataFromPayload,
         createdByUid: req.uid
       });
+
+      // Ajout du bloc pricing.promo si un code promo a été validé
+      if (promoResultForClient) {
+        const promoDurationCycles = promoResultForClient.durationCycles;
+        const promoRevertAt = promoDurationCycles && promoDurationCycles > 0
+          ? addMonths(new Date(), promoDurationCycles)
+          : null;
+        (subscriptionDoc as any).pricing = {
+          basePriceInCents: basePriceBeforePromo,
+          discountInCents: promoResultForClient.discountInCents,
+          chargedPriceInCents: promoResultForClient.finalPriceInCents,
+          pricingSource: 'promo_applied',
+          membershipTypeNormalized: membershipTypeFinal,
+          planNormalized: planNumber === 4 ? 'annual' : 'monthly',
+          promo: {
+            promoCode: promoResultForClient.promoCodeNormalized,
+            promotionId: promoResultForClient.promotionId,
+            discountType: promoResultForClient.discountType,
+            discountValue: promoResultForClient.discountValue,
+            expiresAt: promoResultForClient.expiresAt,
+            durationCycles: promoDurationCycles,
+            appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+            revertAt: promoRevertAt
+          }
+        };
+        // Stocker aussi le promoCode au top-level pour compatibilité
+        (subscriptionDoc as any).promoCode = {
+          code: promoResultForClient.promoCodeNormalized,
+          reduction: promoResultForClient.discountValue,
+          appliedDate: new Date().toISOString(),
+          expirationDate: promoResultForClient.expiresAt ? promoResultForClient.expiresAt.toISOString() : null,
+          source: promoResultForClient.promoCodeNormalized
+        };
+      }
+
       batch.set(clientRef.collection('subscription').doc('current'), subscriptionDoc, { merge: true });
     } else if (subscriptionDataFromPayload) {
       // Visiteur: stocker le payload tel quel (si fourni)
@@ -597,6 +670,46 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     }
 
     await batch.commit();
+
+    // Post-commit: gestion promo (désactivation usage unique + PromoReverts)
+    if (promoResultForClient && uid) {
+      // Désactivation des codes à usage unique (forEveryone === false)
+      if (!promoResultForClient.forEveryone && promoResultForClient.promotionId) {
+        try {
+          await db.collection('Promotions').doc(promoResultForClient.promotionId).set(
+            { isValid: false, usedByUid: uid, usedAt: admin.firestore.FieldValue.serverTimestamp() },
+            { merge: true }
+          );
+        } catch (e: any) {
+          console.error('[createClient] Échec désactivation code promo à usage unique:', e?.message);
+        }
+      }
+
+      // Créer le PromoReverts pour la réversion automatique
+      const promoDurationCycles = promoResultForClient.durationCycles;
+      if (promoDurationCycles && promoDurationCycles > 0) {
+        const promoRevertAt = addMonths(new Date(), promoDurationCycles);
+        try {
+          await db.collection('PromoReverts').add({
+            uid,
+            promoCode: promoResultForClient.promoCodeNormalized,
+            promotionId: promoResultForClient.promotionId,
+            revertAt: promoRevertAt,
+            basePriceInCents: basePriceBeforePromo,
+            discountedPriceInCents: priceInCentsFinal,
+            planType: planNumber === 4 ? 'annual' : 'monthly',
+            membershipType: membershipTypeFinal,
+            paymeSubId: payme?.subID || null,
+            durationCycles: promoDurationCycles,
+            status: 'pending',
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            source: 'crm_createClient'
+          });
+        } catch (e: any) {
+          console.error('[createClient] Échec écriture PromoReverts:', e?.message);
+        }
+      }
+    }
 
     // 3) Securden (best effort)
     const securden = await tryCreateSecurdenFolderAndCard({
