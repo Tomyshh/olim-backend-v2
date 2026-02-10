@@ -1143,45 +1143,35 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
       nextPaymentDate,
       createdByUid: uid
     });
-    // Audit pricing / debug (source de vérité)
+    // Calcul promo revert (utilisé aussi pour PromoReverts post-commit + réponse JSON)
     const promoDurationCycles = promoResult?.ok ? promoResult.durationCycles : null;
-    // Calcul de revertAt pour monthly ET annual
     const promoRevertAt =
       promoResult?.ok && promoDurationCycles
         ? pricing.planNormalized === 'monthly'
           ? addMonths(nextPaymentDate || new Date(), promoDurationCycles)
-          : addMonths(new Date(), promoDurationCycles) // annual: à partir de maintenant
+          : addMonths(new Date(), promoDurationCycles)
         : null;
-    (subscriptionDoc as any).pricing = {
-      basePriceInCents,
-      discountInCents,
-      chargedPriceInCents: finalPriceInCents,
-      pricingSource: promoResult?.ok ? 'promo_applied' : pricing.pricingSource,
-      remoteConfigKeyUsed: pricing.remoteConfigKeyUsed,
-      remoteConfigValueNisUsed: pricing.remoteConfigValueNisUsed,
-      membershipTypeNormalized: pricing.membershipTypeNormalized,
-      planNormalized: pricing.planNormalized,
-      promo: promoResult?.ok
-        ? {
-            promoCode: promoResult.promoCodeNormalized,
-            promotionId: promoResult.promotionId,
-            discountType: promoResult.discountType,
-            discountValue: promoResult.discountValue,
-            expiresAt: promoResult.expiresAt,
-            source: promoCodeSource,
-            durationCycles: promoDurationCycles,
-            appliedAt: admin.firestore.FieldValue.serverTimestamp(),
-            revertAt: promoRevertAt
-          }
-        : null,
-      client: {
-        expectedPriceInCents: clientFinalPriceInCents,
-        rawPriceInCents: body.priceInCents ?? null,
-        rawExpectedPriceInCents: body.expectedPriceInCents ?? null
-      }
-    };
-    // promoCode top-level: même format que le CRM pour cohérence (le frontend s'en sert pour afficher la carte promo)
+
+    // Ajout du bloc pricing.promo si un code promo a été validé (format identique CRM)
     if (promoResult?.ok) {
+      (subscriptionDoc as any).pricing = {
+        basePriceInCents,
+        discountInCents,
+        chargedPriceInCents: finalPriceInCents,
+        pricingSource: 'promo_applied',
+        membershipTypeNormalized: pricing.membershipTypeNormalized,
+        planNormalized: pricing.planNormalized,
+        promo: {
+          promoCode: promoResult.promoCodeNormalized,
+          promotionId: promoResult.promotionId,
+          discountType: promoResult.discountType,
+          discountValue: promoResult.discountValue,
+          expiresAt: promoResult.expiresAt,
+          durationCycles: promoDurationCycles,
+          appliedAt: admin.firestore.FieldValue.serverTimestamp(),
+          revertAt: promoRevertAt
+        }
+      };
       (subscriptionDoc as any).promoCode = {
         code: promoResult.promoCodeNormalized,
         reduction: promoResult.discountValue,
