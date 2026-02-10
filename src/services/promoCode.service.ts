@@ -10,6 +10,7 @@ export type PromoValidationOk = {
   basePriceInCents: number;
   finalPriceInCents: number;
   durationCycles: number | null;
+  forEveryone: boolean;
   // audit
   membershipTypeNormalized: string;
   planNormalized: 'monthly' | 'annual';
@@ -25,14 +26,14 @@ function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function digitsOnlyUpper(value: unknown): string {
+export function digitsOnlyUpper(value: unknown): string {
   // On accepte codes type "START-10", " start10 " => "START10"
   const s = pickString(value);
   if (!s) return '';
   return s.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
 }
 
-function timestampToDate(value: any): Date | null {
+export function timestampToDate(value: any): Date | null {
   if (!value) return null;
   if (value instanceof Date) return value;
   const ts = (admin.firestore as any).Timestamp;
@@ -45,7 +46,7 @@ function timestampToDate(value: any): Date | null {
   return null;
 }
 
-function isPromoActive(doc: Record<string, any>): boolean {
+export function isPromoActive(doc: Record<string, any>): boolean {
   // Beaucoup de schémas possibles: isValid / active / enabled
   if (doc.isValid === false) return false;
   if (doc.active === false) return false;
@@ -143,7 +144,7 @@ function extractPromoDurationCycles(doc: Record<string, any>): number | null {
   return Math.min(k, 24);
 }
 
-async function loadPromotionByCode(promoCodeNormalized: string): Promise<{ id: string; data: Record<string, any> } | null> {
+export async function loadPromotionByCode(promoCodeNormalized: string): Promise<{ id: string; data: Record<string, any> } | null> {
   const db = getFirestore();
 
   // 1) Tentative docId direct
@@ -212,6 +213,7 @@ export async function validateAndApplyPromo(params: {
     basePriceInCents,
     finalPriceInCents,
     durationCycles,
+    forEveryone: doc.forEveryone === true,
     membershipTypeNormalized: params.membershipTypeNormalized,
     planNormalized: params.planNormalized,
     expiresAt: expiresAt || null

@@ -31,6 +31,7 @@ import qaRoutes from './routes/qa.routes.js';
 import clientsRoutes from './routes/clients.routes.js';
 import usersRoutes from './routes/users.routes.js';
 import aiRoutes from './routes/ai.routes.js';
+import promoRoutes from './routes/promo.routes.js';
 
 // v1 routes (frontend)
 import v1AuthPhoneOtpRoutes from './routes/v1/auth.phoneOtp.routes.js';
@@ -51,6 +52,7 @@ import { startDailyClientActivityScheduler } from './services/clientActivity.ser
 import { startAnalyticsSyncScheduler } from './services/analyticsSync.service.js';
 import { startPaymeMonthlyNextPaymentDateSyncScheduler } from './services/paymeMonthlyNextPaymentSync.service.js';
 import { startDailySeniorityScheduler } from './services/clientSeniority.service.js';
+import { startPromoRevertScheduler } from './services/promoRevert.service.js';
 import { closeRedisClient } from './config/redis.js';
 
 const app = express();
@@ -70,6 +72,9 @@ startPaymeMonthlyNextPaymentDateSyncScheduler();
 
 // Job ancienneté : met à jour le tier de seniority de chaque client à 01:00
 startDailySeniorityScheduler();
+
+// Job promo revert : remet le prix de base quand la durée d'une promo expire (05:00)
+startPromoRevertScheduler();
 
 // Middleware globaux
 // Render (reverse proxy) : nécessaire pour que req.ip soit correct (rate-limit, logs)
@@ -187,6 +192,7 @@ app.use('/api/documents', documentsRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/notifications', notificationsRoutes);
 app.use('/api/subscription', subscriptionRoutes);
+app.use('/api/promo', promoRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/partners', partnersRoutes);

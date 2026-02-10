@@ -1132,9 +1132,12 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     });
     // Audit pricing / debug (source de vérité)
     const promoDurationCycles = promoResult?.ok ? promoResult.durationCycles : null;
+    // Calcul de revertAt pour monthly ET annual
     const promoRevertAt =
-      promoResult?.ok && pricing.planNormalized === 'monthly' && promoDurationCycles && subID
-        ? addMonths(nextPaymentDate || new Date(), promoDurationCycles)
+      promoResult?.ok && promoDurationCycles
+        ? pricing.planNormalized === 'monthly'
+          ? addMonths(nextPaymentDate || new Date(), promoDurationCycles)
+          : addMonths(new Date(), promoDurationCycles) // annual: à partir de maintenant
         : null;
     (subscriptionDoc as any).pricing = {
       basePriceInCents,
@@ -1167,6 +1170,50 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     batch.set(clientRef.collection('subscription').doc('current'), subscriptionDoc, { merge: true });
 
     await batch.commit();
+
+    // Désactivation des codes promo à usage unique (forEveryone === false => isValid = false)
+    // Effectué après le commit pour ne pas bloquer la souscription en cas d'erreur
+    if (promoResult?.ok && !promoResult.forEveryone && promoResult.promotionId) {
+      try {
+        await db.collection('Promotions').doc(promoResult.promotionId).set(
+          { isValid: false, usedByUid: uid, usedAt: admin.firestore.FieldValue.serverTimestamp() },
+          { merge: true }
+        );
+      } catch (e: any) {
+        console.error('[subscribe] Échec désactivation code promo à usage unique:', {
+          promotionId: promoResult.promotionId,
+          promoCode: promoResult.promoCodeNormalized,
+          uid,
+          error: String(e?.message || e)
+        });
+      }
+    }
+
+    // Planifier la réversion automatique de la promo si promo_duration > 0
+    if (promoResult?.ok && promoDurationCycles && promoDurationCycles > 0 && promoRevertAt) {
+      try {
+        await db.collection('PromoReverts').add({
+          uid,
+          promoCode: promoResult.promoCodeNormalized,
+          promotionId: promoResult.promotionId,
+          revertAt: promoRevertAt,
+          basePriceInCents,
+          discountedPriceInCents: finalPriceInCents,
+          planType: pricing.planNormalized,
+          membershipType: membership,
+          paymeSubId: subID || null,
+          durationCycles: promoDurationCycles,
+          status: 'pending',
+          createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+      } catch (e: any) {
+        console.error('[subscribe] Échec écriture PromoReverts:', {
+          uid,
+          promoCode: promoResult.promoCodeNormalized,
+          error: String(e?.message || e)
+        });
+      }
+    }
 
     res.status(200).json({
       success: true,
