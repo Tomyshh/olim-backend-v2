@@ -254,14 +254,17 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       if (isMonthly && subId && revertAt && !revertedAt && basePriceInCents > 0 && Date.now() > revertAt.getTime()) {
         try {
           await paymeSetSubscriptionPrice({ subId, priceInCents: Math.floor(basePriceInCents) });
+          // IMPORTANT: promoCode = delete pour que le frontend masque la carte "Période promotionnelle"
           await currentSubscriptionRef.set(
             {
               plan: { price: Math.floor(basePriceInCents) },
               pricing: {
                 discountInCents: 0,
                 chargedPriceInCents: Math.floor(basePriceInCents),
+                pricingSource: 'promo_reverted',
                 promo: { ...(promo || {}), revertedAt: admin.firestore.FieldValue.serverTimestamp() }
               },
+              promoCode: admin.firestore.FieldValue.delete(),
               updatedAt: admin.firestore.FieldValue.serverTimestamp()
             },
             { merge: true }

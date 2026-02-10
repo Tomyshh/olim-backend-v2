@@ -208,6 +208,7 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
       await paymeSetSubscriptionPrice({ subId: data.paymeSubId, priceInCents: Math.floor(basePriceInCents) });
 
       // Mettre à jour Firestore subscription/current
+      // IMPORTANT: promoCode = null pour que le frontend masque la carte "Période promotionnelle"
       await subRef.set(
         {
           plan: { price: Math.floor(basePriceInCents) },
@@ -217,6 +218,7 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
             pricingSource: 'promo_reverted',
             promo: { ...(promoData || {}), revertedAt: admin.firestore.FieldValue.serverTimestamp() }
           },
+          promoCode: admin.firestore.FieldValue.delete(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         },
         { merge: true }
@@ -239,11 +241,14 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
       const subSnap = await subRef.get();
       const promoData = subSnap.exists ? ((subSnap.data() || {}) as any)?.pricing?.promo : null;
 
+      // IMPORTANT: promoCode = delete pour que le frontend masque la carte "Période promotionnelle"
       await subRef.set(
         {
           pricing: {
+            pricingSource: 'promo_reverted',
             promo: { ...(promoData || {}), revertedAt: admin.firestore.FieldValue.serverTimestamp(), note: 'annual_promo_period_ended' }
           },
+          promoCode: admin.firestore.FieldValue.delete(),
           updatedAt: admin.firestore.FieldValue.serverTimestamp()
         },
         { merge: true }
