@@ -1180,6 +1180,16 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
         rawExpectedPriceInCents: body.expectedPriceInCents ?? null
       }
     };
+    // promoCode top-level: même format que le CRM pour cohérence (le frontend s'en sert pour afficher la carte promo)
+    if (promoResult?.ok) {
+      (subscriptionDoc as any).promoCode = {
+        code: promoResult.promoCodeNormalized,
+        reduction: promoResult.discountValue,
+        appliedDate: new Date().toISOString(),
+        expirationDate: promoResult.expiresAt ? promoResult.expiresAt.toISOString() : null,
+        source: promoResult.promoCodeNormalized
+      };
+    }
     batch.set(clientRef.collection('subscription').doc('current'), subscriptionDoc, { merge: true });
 
     await batch.commit();
