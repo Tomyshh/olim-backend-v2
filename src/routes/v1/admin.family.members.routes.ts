@@ -9,7 +9,9 @@ import {
   v1AdminCreateFamilyMemberConjointFree,
   v1AdminDeactivateFamilyMember,
   v1AdminActivateFamilyMemberFree,
-  v1AdminActivateFamilyMemberPaid
+  v1AdminActivateFamilyMemberPaid,
+  v1AdminEditFamilyMember,
+  v1AdminDeleteFamilyMember
 } from '../../controllers/v1/familyMembers.controller.js';
 
 const router = Router();
@@ -57,6 +59,22 @@ router.post(
   authenticateToken,
   requireAdmin,
   asyncHandler(v1AdminActivateFamilyMemberPaid as any)
+);
+
+// Édition métier complète d'un membre
+router.patch(
+  '/admin/clients/:uid/family/members/:id',
+  authenticateToken,
+  requireAdmin,
+  asyncHandler(v1AdminEditFamilyMember as any)
+);
+
+// Suppression d'un membre (avec protection membre actif)
+router.delete(
+  '/admin/clients/:uid/family/members/:id',
+  authenticateToken,
+  requireAdmin,
+  asyncHandler(v1AdminDeleteFamilyMember as any)
 );
 
 export default router;

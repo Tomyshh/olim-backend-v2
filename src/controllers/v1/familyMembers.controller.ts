@@ -128,6 +128,77 @@ function stripUndefinedDeep<T>(value: T): T {
   return value;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Normalisation de la réponse API (format canonique camelCase)
+// ═══════════════════════════════════════════════════════════════════
+
+function normalizeMemberForResponse(
+  memberId: string,
+  data: Record<string, any>
+): {
+  memberId: string;
+  member: Record<string, any>;
+  serviceState: Record<string, any>;
+  validationStatus: string;
+} {
+  const birthday = pickString(data.Birthday);
+  const age = birthday
+    ? computeAgeYearsFromBirthdayString(birthday)
+    : typeof data.age === 'number'
+      ? data.age
+      : null;
+  const phoneNumbers = Array.isArray(data.phoneNumbers)
+    ? data.phoneNumbers.filter(Boolean)
+    : data['Phone Number']
+      ? [data['Phone Number']]
+      : [];
+
+  return {
+    memberId,
+    member: {
+      firstName: pickString(data['First Name']),
+      lastName: pickStringOrNull(data['Last Name']),
+      fatherName: pickStringOrNull(data['Father Name']),
+      relationship: pickString(data['Family Member Status']),
+      birthday: birthday || null,
+      age,
+      teoudatZeout: pickStringOrNull(data['Teoudat Zeout']),
+      koupatHolim: pickStringOrNull(data['Koupat Holim']),
+      phoneNumbers,
+      email: pickStringOrNull(data.Email),
+      livesAtHome: pickBool(data.livesAtHome, false),
+      isChild: data.isChild === true,
+      isAccountOwner: data.isAccountOwner === true
+    },
+    serviceState: {
+      isActive: pickBool(data.isActive, true),
+      serviceActive: pickBool(data.serviceActive, false),
+      billingExempt: pickBool(data.billingExempt, false),
+      billingExemptReason: pickStringOrNull(data.billingExemptReason),
+      monthlySupplementApplied: pickBool(data.monthlySupplementApplied, false),
+      monthlySupplementNis: typeof data.monthlySupplementNis === 'number' ? data.monthlySupplementNis : null,
+      selectedCardId: pickStringOrNull(data.selectedCardId),
+      serviceActivationPaymentId: pickStringOrNull(data.serviceActivationPaymentId)
+    },
+    validationStatus: pickString(data.validationStatus) || 'en_attente'
+  };
+}
+
+function buildPricingImpact(monthly: {
+  attempted: boolean;
+  paymeUpdated: boolean;
+  eligibleAdultsCount?: number;
+  targetPriceInCents?: number | null;
+}): Record<string, any> | null {
+  if (!monthly.attempted) return null;
+  return {
+    recomputed: true,
+    eligibleAdultsCount: monthly.eligibleAdultsCount ?? 0,
+    targetPriceInCents: monthly.targetPriceInCents ?? null,
+    paymeUpdated: monthly.paymeUpdated
+  };
+}
+
 async function resolveCardIdForBilling(params: {
   db: ReturnType<typeof getFirestore>;
   uid: string;
@@ -150,7 +221,7 @@ async function resolveCardIdForBilling(params: {
   const doc = snap.docs[0];
   if (doc) return doc.id;
 
-  throw new HttpError(400, 'payment.cardId requis (aucune carte par défaut / carte membre).');
+  throw new HttpError(400, 'payment.cardId requis (aucune carte par défaut / carte membre).', 'CARD_REQUIRED');
 }
 
 function normalizePayload(body: any): { member: Record<string, any>; flags: Record<string, any>; payment: Record<string, any>; raw: any } {
@@ -204,7 +275,7 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
       getLegacyKey(raw, 'firstName', 'firstName')
     )
   );
-  if (!firstName) throw new HttpError(400, 'First Name requis.');
+  if (!firstName) throw new HttpError(400, 'First Name requis.', 'MISSING_REQUIRED_FIELD');
 
   const familyMemberStatus = pickString(
     pickFromMany(
@@ -215,17 +286,17 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
       getLegacyKey(raw, 'familyMemberStatus', 'familyMemberStatus')
     )
   );
-  if (!familyMemberStatus) throw new HttpError(400, 'Family Member Status requis.');
+  if (!familyMemberStatus) throw new HttpError(400, 'Family Member Status requis.', 'MISSING_REQUIRED_FIELD');
 
   // Requis côté storage: string "dd/MM/yyyy" (JJ/MM/YYYY)
   const birthdayRaw = pickFromMany(member.birthday, getLegacyKey(raw, 'Birthday', 'birthday'));
   const birthdayStr = birthdayRaw == null ? null : parseBirthdayToDdMmYyyy(birthdayRaw);
   // Birthday requis (car on doit calculer age et la facturation dépend de l'âge)
   if (birthdayRaw == null) {
-    throw new HttpError(400, 'Birthday requis (format "dd/MM/yyyy").');
+    throw new HttpError(400, 'Birthday requis (format "dd/MM/yyyy").', 'INVALID_BIRTHDAY');
   }
   if (!birthdayStr) {
-    throw new HttpError(400, 'Birthday invalide (attendu "dd/MM/yyyy").');
+    throw new HttpError(400, 'Birthday invalide (attendu "dd/MM/yyyy").', 'INVALID_BIRTHDAY');
   }
   const age = birthdayStr ? computeAgeYearsFromBirthdayString(birthdayStr) : null;
 
@@ -322,7 +393,7 @@ function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any>
 
   if (member.birthday !== undefined || maybe('Birthday', 'birthday') !== undefined) {
     const birthdayStr = parseBirthdayToDdMmYyyy(pickFromMany(member.birthday, maybe('Birthday', 'birthday')));
-    if (!birthdayStr) throw new HttpError(400, 'Birthday invalide (attendu "dd/MM/yyyy").');
+    if (!birthdayStr) throw new HttpError(400, 'Birthday invalide (attendu "dd/MM/yyyy").', 'INVALID_BIRTHDAY');
     updates.Birthday = birthdayStr;
     const age = computeAgeYearsFromBirthdayString(birthdayStr);
     if (typeof age === 'number' && Number.isFinite(age)) updates.age = age;
@@ -343,6 +414,15 @@ function buildUpdateDoc(params: { uid: string; body: any }): Record<string, any>
   }
   if (payment.cardId !== undefined || raw?.selectedCardId !== undefined) {
     updates.selectedCardId = pickStringOrNull(pickFromMany(payment.cardId, raw?.selectedCardId));
+  }
+
+  // billingExempt (flags ou raw)
+  if (flags.billingExempt !== undefined || raw?.billingExempt !== undefined) {
+    updates.billingExempt = pickBool(pickFromMany(flags.billingExempt, raw?.billingExempt), false);
+    if (updates.billingExempt) {
+      updates.billingExemptReason =
+        pickStringOrNull(pickFromMany(flags.billingExemptReason, raw?.billingExemptReason)) || 'admin_manual';
+    }
   }
 
   // Champs système
@@ -368,7 +448,7 @@ function patchAffectsMonthlySupplement(body: any): boolean {
 
 function pickTargetClientUidFromParams(req: AuthenticatedRequest): string {
   const uid = pickString((req.params as any)?.uid);
-  if (!uid) throw new HttpError(400, 'Paramètre uid (client) manquant.');
+  if (!uid) throw new HttpError(400, 'Paramètre uid (client) manquant.', 'MISSING_REQUIRED_FIELD');
   return uid;
 }
 
@@ -411,7 +491,7 @@ function ensureRequiredIdentityFields(params: {
   if (!status) missing.push('Family Member Status');
   if (!birthdayStr) missing.push('Birthday (dd/MM/yyyy)');
   if (missing.length > 0) {
-    throw new HttpError(400, `Champs requis manquants pour activer: ${missing.join(', ')}.`);
+    throw new HttpError(400, `Champs requis manquants pour activer: ${missing.join(', ')}.`, 'MISSING_REQUIRED_FIELD');
   }
 
   const age = birthdayStr ? computeAgeYearsFromBirthdayString(birthdayStr) : null;
@@ -454,7 +534,7 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
   // - supplément mensuel (géré plus bas via recompute)
   if (isAdult && !isConjoint(status)) {
     if (!cardIdFromPayload) {
-      throw new HttpError(400, 'payment.cardId requis pour ajouter un membre majeur.');
+      throw new HttpError(400, 'payment.cardId requis pour ajouter un membre majeur.', 'CARD_REQUIRED');
     }
     // Par défaut, un membre majeur ajouté est considéré "au foyer" si le frontend n'a pas explicitement fourni le flag.
     // Sans livesAtHome=true, le supplément mensuel ne peut pas être appliqué.
@@ -464,13 +544,13 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
 
     // Récupérer buyerKey depuis Payment credentials/{cardId}
     const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardIdFromPayload).get();
-    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
     const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
-    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
     const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
     if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
-      throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+      throw new HttpError(500, 'Prix activation service invalide (Remote Config).', 'INVALID_PRICING');
     }
 
     // Débit one-shot immédiatement à l'ajout (membre majeur)
@@ -519,18 +599,18 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
 export async function v1UpdateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = req.uid!;
   const memberId = pickString(req.params.id);
-  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
   const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   const updates = buildUpdateDoc({ uid, body: req.body || {} });
   // Si rien à mettre à jour (à part updatedAt), on évite un faux-positif
   const meaningfulKeys = Object.keys(updates).filter((k) => k !== 'updatedAt');
   if (meaningfulKeys.length === 0) {
-    throw new HttpError(400, 'Aucun champ à modifier.');
+    throw new HttpError(400, 'Aucun champ à modifier.', 'NO_FIELDS_TO_UPDATE');
   }
   await ref.set(stripUndefinedDeep(updates), { merge: true });
 
@@ -545,12 +625,12 @@ export async function v1UpdateFamilyMember(req: AuthenticatedRequest, res: Respo
 export async function v1DeactivateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = req.uid!;
   const memberId = pickString(req.params.id);
-  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
   const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   await ref.set(
     {
@@ -568,12 +648,12 @@ export async function v1DeactivateFamilyMember(req: AuthenticatedRequest, res: R
 export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = req.uid!;
   const memberId = pickString(req.params.id);
-  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
   const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   const data = (snap.data() || {}) as Record<string, any>;
   const status = pickString(data['Family Member Status']);
@@ -617,18 +697,18 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
 
     // Ici, on exige la cardId envoyée par le frontend (pas de fallback silencieux)
     const cardId = cardIdFromPayload;
-    if (!cardId) throw new HttpError(400, 'cardId requis pour réactiver un membre majeur.');
+    if (!cardId) throw new HttpError(400, 'cardId requis pour réactiver un membre majeur.', 'CARD_REQUIRED');
 
     // Récupérer buyerKey depuis Payment credentials/{cardId}
     const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
-    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
     const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
-    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
     const pricing = await getFamilyMemberPricingNis();
     const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
     if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
-      throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+      throw new HttpError(500, 'Prix activation service invalide (Remote Config).', 'INVALID_PRICING');
     }
 
     // Débit one-shot lors de la réactivation (membre majeur)
@@ -676,17 +756,27 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
 export async function v1DeleteFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = req.uid!;
   const memberId = pickString(req.params.id);
-  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
 
   // Sécurité: ne jamais supprimer le titulaire
   if (memberId === 'account_owner') {
-    throw new HttpError(400, "Impossible de supprimer le titulaire du compte.");
+    throw new HttpError(400, "Impossible de supprimer le titulaire du compte.", 'CANNOT_DELETE_ACCOUNT_OWNER');
   }
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
   const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+
+  const memberData = (snap.data() || {}) as Record<string, any>;
+  // Refuser la suppression d'un membre avec service actif
+  if (memberData.serviceActive === true && memberData.isActive === true) {
+    throw new HttpError(
+      400,
+      "Impossible de supprimer un membre avec un service actif. Désactivez-le d'abord.",
+      'MEMBER_ACTIVE_CANNOT_DELETE'
+    );
+  }
 
   // Suppression complète du document Firestore (hard delete)
   await ref.delete();
@@ -700,15 +790,15 @@ export async function v1DeleteFamilyMember(req: AuthenticatedRequest, res: Respo
 export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = req.uid!;
   const memberId = pickString(req.params.id);
-  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
 
   const cardId = pickString(req.body?.payment?.cardId ?? req.body?.cardId ?? req.body?.selectedCardId);
-  if (!cardId) throw new HttpError(400, 'cardId requis.');
+  if (!cardId) throw new HttpError(400, 'cardId requis.', 'CARD_REQUIRED');
 
   const db = getFirestore();
   const memberRef = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
   const memberSnap = await memberRef.get();
-  if (!memberSnap.exists) throw new HttpError(404, 'Membre introuvable.');
+  if (!memberSnap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   const memberData = (memberSnap.data() || {}) as Record<string, any>;
   const status = pickString(memberData['Family Member Status']);
@@ -769,15 +859,15 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
 
   // Récupérer buyerKey depuis Payment credentials/{cardId}
   const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
-  if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+  if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
   const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
-  if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+  if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
   // Débit one-shot (Remote Config: add_family_member_ponctually en NIS)
   const pricing = await getFamilyMemberPricingNis();
   const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
   if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
-    throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+    throw new HttpError(500, 'Prix activation service invalide (Remote Config).', 'INVALID_PRICING');
   }
 
   const sale = await paymeGenerateSale({
@@ -862,10 +952,10 @@ async function adminCreateFamilyMember(params: {
 
   // Validation âge selon la route
   if (mode === 'adult_free' || mode === 'adult_paid') {
-    if (!isAdult) throw new HttpError(400, 'Le membre doit être majeur (>= 18 ans) pour cette route.');
+    if (!isAdult) throw new HttpError(400, 'Le membre doit être majeur (>= 18 ans) pour cette route.', 'INVALID_AGE_FOR_ROUTE');
   }
   if (mode === 'child') {
-    if (isAdult) throw new HttpError(400, 'Le membre doit être mineur (< 18 ans) pour cette route.');
+    if (isAdult) throw new HttpError(400, 'Le membre doit être mineur (< 18 ans) pour cette route.', 'INVALID_AGE_FOR_ROUTE');
     (doc as any).isChild = true;
   }
 
@@ -874,18 +964,18 @@ async function adminCreateFamilyMember(params: {
   // Paid adult: one-shot + recompute mensuel (logique identique à la route client)
   if (mode === 'adult_paid' && isAdult && !isConjoint(status)) {
     if (!cardIdFromPayload) {
-      throw new HttpError(400, 'payment.cardId requis pour ajouter un membre majeur (paid).');
+      throw new HttpError(400, 'payment.cardId requis pour ajouter un membre majeur (paid).', 'CARD_REQUIRED');
     }
     if ((doc as any).livesAtHome !== true) (doc as any).livesAtHome = true;
 
     const cardSnap = await db.collection('Clients').doc(clientUid).collection('Payment credentials').doc(cardIdFromPayload).get();
-    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
     const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
-    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+    if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
     const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
     if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
-      throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+      throw new HttpError(500, 'Prix activation service invalide (Remote Config).', 'INVALID_PRICING');
     }
 
     const sale = await paymeGenerateSale({
@@ -944,47 +1034,59 @@ async function adminCreateFamilyMember(params: {
   };
 }
 
+function buildAdminCreateResponse(clientUid: string, result: { memberId: string; doc: Record<string, any>; billing: any }) {
+  const normalized = normalizeMemberForResponse(result.memberId, result.doc);
+  return {
+    ok: true,
+    clientUid,
+    ...normalized,
+    pricingImpact: buildPricingImpact(result.billing.monthly),
+    billing: result.billing
+  };
+}
+
 export async function v1AdminCreateFamilyMemberAdultFree(req: AuthenticatedRequest, res: Response): Promise<void> {
   const clientUid = pickTargetClientUidFromParams(req);
   const adminUid = req.uid!;
   const result = await adminCreateFamilyMember({ clientUid, adminUid, body: req.body || {}, mode: 'adult_free' });
-  res.status(201).json({ clientUid, memberId: result.memberId, ...result.doc, billing: result.billing });
+  res.status(201).json(buildAdminCreateResponse(clientUid, result));
 }
 
 export async function v1AdminCreateFamilyMemberAdultPaid(req: AuthenticatedRequest, res: Response): Promise<void> {
   const clientUid = pickTargetClientUidFromParams(req);
   const adminUid = req.uid!;
   const result = await adminCreateFamilyMember({ clientUid, adminUid, body: req.body || {}, mode: 'adult_paid' });
-  res.status(201).json({ clientUid, memberId: result.memberId, ...result.doc, billing: result.billing });
+  res.status(201).json(buildAdminCreateResponse(clientUid, result));
 }
 
 export async function v1AdminCreateFamilyMemberChild(req: AuthenticatedRequest, res: Response): Promise<void> {
   const clientUid = pickTargetClientUidFromParams(req);
   const adminUid = req.uid!;
   const result = await adminCreateFamilyMember({ clientUid, adminUid, body: req.body || {}, mode: 'child' });
-  res.status(201).json({ clientUid, memberId: result.memberId, ...result.doc, billing: result.billing });
+  res.status(201).json(buildAdminCreateResponse(clientUid, result));
 }
 
 export async function v1AdminCreateFamilyMemberConjointFree(req: AuthenticatedRequest, res: Response): Promise<void> {
   const clientUid = pickTargetClientUidFromParams(req);
   const adminUid = req.uid!;
   const result = await adminCreateFamilyMember({ clientUid, adminUid, body: req.body || {}, mode: 'conjoint_free' });
-  res.status(201).json({ clientUid, memberId: result.memberId, ...result.doc, billing: result.billing });
+  res.status(201).json(buildAdminCreateResponse(clientUid, result));
 }
 
 export async function v1AdminDeactivateFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
   const clientUid = pickTargetClientUidFromParams(req);
   const memberId = pickString(req.params.id);
-  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
   const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   await ref.set(
     {
       isActive: false,
+      serviceActive: false,
       deactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedByAdminUid: req.uid!,
@@ -993,8 +1095,24 @@ export async function v1AdminDeactivateFamilyMember(req: AuthenticatedRequest, r
     { merge: true }
   );
 
-  await recomputeAndApplyFamilyMonthlySupplement(clientUid);
-  res.json({ ok: true, clientUid, memberId });
+  const result = await recomputeAndApplyFamilyMonthlySupplement(clientUid);
+
+  // Lire l'état après désactivation
+  const afterSnap = await ref.get();
+  const afterData = afterSnap.data() || {};
+  const normalized = normalizeMemberForResponse(memberId, afterData);
+
+  res.json({
+    ok: true,
+    clientUid,
+    ...normalized,
+    pricingImpact: {
+      recomputed: true,
+      eligibleAdultsCount: result.eligibleAdultsCount,
+      targetPriceInCents: result.targetPriceInCents,
+      paymeUpdated: result.paymeUpdated
+    }
+  });
 }
 
 async function adminActivateFamilyMember(params: {
@@ -1008,7 +1126,7 @@ async function adminActivateFamilyMember(params: {
   const db = getFirestore();
   const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
   const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.');
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   const data = (snap.data() || {}) as Record<string, any>;
   if (data.isActive === true) {
@@ -1057,17 +1175,17 @@ async function adminActivateFamilyMember(params: {
 
       attemptedSale = true;
       const cardId = cardIdFromPayload;
-      if (!cardId) throw new HttpError(400, 'cardId requis pour activer (paid) un membre majeur.');
+      if (!cardId) throw new HttpError(400, 'cardId requis pour activer (paid) un membre majeur.', 'CARD_REQUIRED');
 
       const cardSnap = await db.collection('Clients').doc(clientUid).collection('Payment credentials').doc(cardId).get();
-      if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.');
+      if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
       const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
-      if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.');
+      if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
       const pricing = await getFamilyMemberPricingNis();
       const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
       if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
-        throw new HttpError(500, 'Prix activation service invalide (Remote Config).');
+        throw new HttpError(500, 'Prix activation service invalide (Remote Config).', 'INVALID_PRICING');
       }
 
       const sale = await paymeGenerateSale({
@@ -1104,7 +1222,7 @@ async function adminActivateFamilyMember(params: {
 export async function v1AdminActivateFamilyMemberFree(req: AuthenticatedRequest, res: Response): Promise<void> {
   const clientUid = pickTargetClientUidFromParams(req);
   const memberId = pickString(req.params.id);
-  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
   const result = await adminActivateFamilyMember({
     clientUid,
     memberId,
@@ -1112,19 +1230,180 @@ export async function v1AdminActivateFamilyMemberFree(req: AuthenticatedRequest,
     body: req.body || {},
     mode: 'free'
   });
+  // Lire le membre après activation pour réponse normalisée
+  const db = getFirestore();
+  const afterSnap = await db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId).get();
+  const afterData = afterSnap.data() || {};
+  const normalized = normalizeMemberForResponse(memberId, afterData);
+  res.json({
+    ok: true,
+    clientUid,
+    ...normalized,
+    alreadyActive: result.alreadyActive,
+    billing: { sale: { attempted: result.attemptedSale, salePaymeId: result.salePaymeId } }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Admin: PATCH édition métier complète d'un membre
+// ═══════════════════════════════════════════════════════════════════
+
+export async function v1AdminEditFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const memberId = pickString(req.params.id);
+  if (!memberId) throw new HttpError(400, 'Id membre manquant.', 'MISSING_MEMBER_ID');
+
+  const db = getFirestore();
+  const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+
+  const existing = (snap.data() || {}) as Record<string, any>;
+  const updates = buildUpdateDoc({ uid: clientUid, body: req.body || {} });
+  const { flags, raw } = normalizePayload(req.body || {});
+
+  // billingExempt via flags ou raw (déjà géré dans buildUpdateDoc, mais on vérifie la raison)
+  // Admin metadata
+  updates.updatedByAdminUid = req.uid!;
+  updates.updatedByAdminAt = admin.firestore.FieldValue.serverTimestamp();
+
+  // ── Règles métier ──────────────────────────────────────────────
+  const warnings: string[] = [];
+
+  // Recalculer l'âge si le birthday change
+  const birthdayStr = updates.Birthday || existing.Birthday;
+  const age = birthdayStr ? computeAgeYearsFromBirthdayString(birthdayStr) : null;
+  if (updates.Birthday && age !== null) {
+    updates.age = age;
+    const oldAge = typeof existing.age === 'number' ? existing.age : null;
+    // Transition mineur → majeur
+    if (oldAge !== null && oldAge < 18 && age >= 18) {
+      warnings.push('Le membre est passé à majeur (>= 18 ans). Vérifier les options de facturation.');
+    }
+    // Transition majeur → mineur
+    if (oldAge !== null && oldAge >= 18 && age < 18) {
+      warnings.push("Le membre est passé à mineur (< 18 ans). La facturation adulte ne s'applique plus.");
+    }
+  }
+
+  // Règles relationship
+  const relationship = updates['Family Member Status'] || existing['Family Member Status'];
+  const currentAge = age ?? (typeof existing.age === 'number' ? existing.age : null);
+  const isAdult = currentAge != null && Number.isFinite(currentAge) && currentAge >= 18;
+
+  if (isConjoint(relationship)) {
+    // Conjoint: pas de supplément mensuel
+    if (existing.monthlySupplementApplied) {
+      warnings.push("Le conjoint n'est pas éligible au supplément mensuel.");
+    }
+  }
+
+  // Mineur: pas d'activation payante adulte
+  if (!isAdult && existing.serviceActive === true && !isConjoint(relationship)) {
+    warnings.push('Le membre est mineur mais a un service actif (adulte). Vérifier la cohérence.');
+  }
+
+  // États contradictoires
+  if (updates.billingExempt === true && existing.serviceActive === true && !isConjoint(relationship)) {
+    warnings.push('billingExempt=true avec serviceActive=true: le membre est actif mais exempté de facturation.');
+  }
+
+  // Vérification champs significatifs
+  const meaningfulKeys = Object.keys(updates).filter(
+    (k) => k !== 'updatedAt' && k !== 'updatedByAdminUid' && k !== 'updatedByAdminAt'
+  );
+  if (meaningfulKeys.length === 0) {
+    throw new HttpError(400, 'Aucun champ à modifier.', 'NO_FIELDS_TO_UPDATE');
+  }
+
+  await ref.set(stripUndefinedDeep(updates), { merge: true });
+
+  // Recalcul billing si nécessaire
+  let pricingImpact: Record<string, any> | null = null;
+  if (patchAffectsMonthlySupplement(req.body || {})) {
+    const result = await recomputeAndApplyFamilyMonthlySupplement(clientUid);
+    pricingImpact = {
+      recomputed: true,
+      eligibleAdultsCount: result.eligibleAdultsCount,
+      targetPriceInCents: result.targetPriceInCents,
+      paymeUpdated: result.paymeUpdated
+    };
+  }
+
+  const afterSnap = await ref.get();
+  const afterData = afterSnap.data() || {};
+  const normalized = normalizeMemberForResponse(memberId, afterData);
+
+  res.json({
+    ok: true,
+    clientUid,
+    ...normalized,
+    pricingImpact,
+    warnings: warnings.length > 0 ? warnings : undefined
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Admin: DELETE suppression d'un membre (avec protection membre actif)
+// ═══════════════════════════════════════════════════════════════════
+
+export async function v1AdminDeleteFamilyMember(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientUid = pickTargetClientUidFromParams(req);
+  const memberId = pickString(req.params.id);
+  if (!memberId) throw new HttpError(400, 'Id membre manquant.', 'MISSING_MEMBER_ID');
+
+  // Sécurité: ne jamais supprimer le titulaire
+  if (memberId === 'account_owner') {
+    throw new HttpError(400, 'Impossible de supprimer le titulaire du compte.', 'CANNOT_DELETE_ACCOUNT_OWNER');
+  }
+
+  const db = getFirestore();
+  const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+
+  const data = (snap.data() || {}) as Record<string, any>;
+
+  // Refuser la suppression d'un membre avec service actif
+  // sauf si force=true est explicitement fourni
+  const force = pickBool(req.body?.force, false);
+  if (data.isActive === true && data.serviceActive === true && !force) {
+    throw new HttpError(
+      400,
+      "Impossible de supprimer un membre avec un service actif. Désactivez-le d'abord ou utilisez force=true.",
+      'MEMBER_ACTIVE_CANNOT_DELETE'
+    );
+  }
+  if (data.isActive === true && !force) {
+    throw new HttpError(
+      400,
+      "Le membre est encore actif. Désactivez-le d'abord ou utilisez force=true.",
+      'MEMBER_ACTIVE_CANNOT_DELETE'
+    );
+  }
+
+  // Capturer l'état avant suppression pour la réponse
+  const memberSnapshot = normalizeMemberForResponse(memberId, data);
+
+  await ref.delete();
+
+  // Recalculer le supplément (cumulable) si ce membre contribuait
+  await recomputeAndApplyFamilyMonthlySupplement(clientUid);
+
   res.json({
     ok: true,
     clientUid,
     memberId,
-    alreadyActive: result.alreadyActive,
-    billing: { sale: { attempted: result.attemptedSale, salePaymeId: result.salePaymeId } }
+    deleted: true,
+    deletedMember: memberSnapshot.member,
+    deletedByAdminUid: req.uid!
   });
 }
 
 export async function v1AdminActivateFamilyMemberPaid(req: AuthenticatedRequest, res: Response): Promise<void> {
   const clientUid = pickTargetClientUidFromParams(req);
   const memberId = pickString(req.params.id);
-  if (!memberId) throw new HttpError(400, 'Id manquant.');
+  if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
   const result = await adminActivateFamilyMember({
     clientUid,
     memberId,
@@ -1132,10 +1411,15 @@ export async function v1AdminActivateFamilyMemberPaid(req: AuthenticatedRequest,
     body: req.body || {},
     mode: 'paid'
   });
+  // Lire le membre après activation pour réponse normalisée
+  const db = getFirestore();
+  const afterSnap = await db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId).get();
+  const afterData = afterSnap.data() || {};
+  const normalized = normalizeMemberForResponse(memberId, afterData);
   res.json({
     ok: true,
     clientUid,
-    memberId,
+    ...normalized,
     alreadyActive: result.alreadyActive,
     billing: { sale: { attempted: result.attemptedSale, salePaymeId: result.salePaymeId } }
   });
