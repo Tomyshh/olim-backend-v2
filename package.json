@@ -19,7 +19,8 @@
     "script:backfill-created-at": "tsx scripts/backfill-created-at-from-auth.ts",
     "script:backfill-seniority": "tsx scripts/backfill-seniority.ts",
     "script:check-payme-69": "tsx scripts/check-payme-subscriptions-69.ts",
-    "script:list-paid-family-members": "tsx scripts/list-clients-with-paid-family-members.ts"
+    "script:list-paid-family-members": "tsx scripts/list-clients-with-paid-family-members.ts",
+    "script:backfill-subscription-current": "tsx scripts/backfill-subscription-current.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.89.0",

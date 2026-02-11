@@ -229,8 +229,9 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
         success: true,
         subscription: {
           uid,
-          payme: { subCode: null, subId: null, sub_status: null, next_payment_date: null },
-          entitlement: { isEntitled: false, state: 'expired', accessUntil: null },
+          // Note: `sub_status` gardé en alias (legacy) pour compatibilité; source préférée: `status`.
+          payme: { subCode: null, subId: null, status: null, sub_status: null, next_payment_date: null },
+          entitlement: { isEntitled: false, state: 'none', accessUntil: null, hadSubscription: false },
           updatedAt: new Date().toISOString()
         }
       });
@@ -282,12 +283,13 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
 
     const now = new Date();
 
-    // ---- Entitlement & PayMe "cancelled but still active" (sub_status=5) ----
+    // ---- Entitlement & PayMe "cancelled but still active" (status=5) ----
     const subObj = (subscription || {}) as Record<string, any>;
     const paymeObj = (subObj.payme || {}) as Record<string, any>;
 
     // Prefer stored values, otherwise fetch from PayMe (cached côté service)
-    const storedSubStatus = coerceIntOrNull(paymeObj.sub_status);
+    const storedSubStatus =
+      coerceIntOrNull(paymeObj.status) ?? coerceIntOrNull(paymeObj.sub_status) ?? coerceIntOrNull(paymeObj.subStatus);
     const storedNextPaymentDate = toDate(paymeObj.nextPaymentDate);
     const storedEndDate = toDate(subObj?.dates?.endDate);
     const storedPaymentNext = toDate(subObj?.payment?.nextPaymentDate);
@@ -305,7 +307,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       storedEndDate || storedNextPaymentDate || storedPaymentNext || details?.nextPaymentDate || null;
     const nextPaymentDateYmd = details?.nextPaymentDateYmd || (accessUntil ? formatYyyyMmDd(accessUntil) : null);
 
-    type EntitlementState = 'active' | 'cancelled_pending' | 'expired' | 'unpaid_grace' | 'unpaid';
+    type EntitlementState = 'active' | 'cancelled_pending' | 'expired' | 'unpaid_grace' | 'unpaid' | 'none';
     let entitlementState: EntitlementState = 'expired';
     let isEntitled = false;
 
@@ -325,7 +327,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       // Si accessUntil existe, on l'utilise pour déterminer l'état, indépendamment de states.isActive
       const isBeforeAccessUntil = now.getTime() < accessUntil.getTime();
       if (paymeSubStatus === 5) {
-        // Règle métier obligatoire pour sub_status=5
+        // Règle métier obligatoire pour status=5
         if (isBeforeAccessUntil) {
           entitlementState = 'cancelled_pending';
           isEntitled = true;
@@ -366,7 +368,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       };
       if (paymeSubStatus != null || accessUntil) {
         patch.payme = {
-          ...(paymeSubStatus != null ? { sub_status: paymeSubStatus } : {}),
+          ...(paymeSubStatus != null ? { status: paymeSubStatus } : {}),
           ...(accessUntil ? { nextPaymentDate: accessUntil } : {})
         };
       }
@@ -404,7 +406,8 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     const entitlement = {
       isEntitled,
       state: entitlementState,
-      accessUntil: accessUntil ? accessUntil.toISOString() : null
+      accessUntil: accessUntil ? accessUntil.toISOString() : null,
+      hadSubscription: true
     };
 
     const subIdAlias =
@@ -421,7 +424,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
         payme: {
           ...(paymeObj || {}),
           ...(subIdAlias && !(paymeObj as any)?.subId ? { subId: subIdAlias } : {}),
-          ...(paymeSubStatus != null ? { sub_status: paymeSubStatus } : {}),
+          ...(paymeSubStatus != null ? { status: paymeSubStatus, sub_status: paymeSubStatus } : {}),
           ...(nextPaymentDateYmd ? { next_payment_date: nextPaymentDateYmd } : {})
         },
         entitlement,

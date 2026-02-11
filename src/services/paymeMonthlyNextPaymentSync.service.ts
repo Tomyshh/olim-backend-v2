@@ -343,13 +343,54 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
       // Règle:
       // - status Firestore = 2 (actif) => sync normale + membership
       // - status Firestore = 5 (annulé) => forcer nextPaymentDate = null + endDate = fin d'abonnement PayMe
-      // - autre => skip
-      const firestoreStatus =
-        coerceStatusCode(sub?.payme?.status) ??
-        coerceStatusCode(sub?.status) ??
+      // - autre => skip (sauf nettoyage legacy)
+      const statusFromPayme = coerceStatusCode(sub?.payme?.status);
+      const statusFromRoot = coerceStatusCode(sub?.status);
+      const statusFromLegacy =
         coerceStatusCode(sub?.payme?.sub_status) ??
         coerceStatusCode(sub?.payme?.subStatus) ??
-        null;
+        coerceStatusCode((sub as any)?.sub_status) ??
+        coerceStatusCode((sub as any)?.subStatus);
+      const firestoreStatus = statusFromPayme ?? statusFromRoot ?? statusFromLegacy ?? null;
+
+      const hasLegacySubStatusField =
+        (sub?.payme &&
+          (Object.prototype.hasOwnProperty.call(sub.payme, 'sub_status') || Object.prototype.hasOwnProperty.call(sub.payme, 'subStatus'))) ||
+        Object.prototype.hasOwnProperty.call(sub, 'sub_status') ||
+        Object.prototype.hasOwnProperty.call(sub, 'subStatus');
+
+      // Nettoyage: si on trouve encore `payme.sub_status`/`payme.subStatus`, on le supprime même si le status est "invalide".
+      // Et si on a un status legacy numérique, on le recopie vers `payme.status` (champ canonique app).
+      if ((firestoreStatus !== 2 && firestoreStatus !== 5) && hasLegacySubStatusField) {
+        const patch: Record<string, any> = {
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          sub_status: admin.firestore.FieldValue.delete(),
+          subStatus: admin.firestore.FieldValue.delete(),
+          payme: {
+            ...(sub.payme || {}),
+            ...(statusFromLegacy != null ? { status: statusFromLegacy } : {}),
+            sub_status: admin.firestore.FieldValue.delete(),
+            subStatus: admin.firestore.FieldValue.delete()
+          }
+        };
+
+        stats.updated++;
+        if (!dryRun) {
+          batch.set(subRef, patch, { merge: true });
+          writes++;
+          await commitBatchIfNeeded(false);
+        } else {
+          console.log('[payme-monthly-sync][DRY-RUN] would cleanup legacy status fields', {
+            clientId,
+            firestoreStatus,
+            statusFromPayme,
+            statusFromRoot,
+            statusFromLegacy
+          });
+        }
+        return;
+      }
+
       if (firestoreStatus !== 2 && firestoreStatus !== 5) {
         stats.skippedNotActive++;
         return;
@@ -380,7 +421,9 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
       const desiredMembership = amountShekel != null ? membershipFromAmountShekel(amountShekel) : null;
 
       const patch: Record<string, any> = {
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        sub_status: admin.firestore.FieldValue.delete(),
+        subStatus: admin.firestore.FieldValue.delete()
       };
 
       let needsWrite = false;
@@ -421,7 +464,9 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         patch.payme = {
           ...(sub.payme || {}),
           nextPaymentDate: null,
-          ...(payme.subStatus != null ? { sub_status: payme.subStatus } : {})
+          sub_status: admin.firestore.FieldValue.delete(),
+          subStatus: admin.firestore.FieldValue.delete(),
+          ...(payme.subStatus != null ? { status: payme.subStatus } : {})
         };
         patch.dates = { ...(sub.dates || {}), endDate: desiredEnd };
         // willExpire: uniquement si (status=5) ET endDate (PayMe) est dans le futur
@@ -444,7 +489,9 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         patch.payme = {
           ...(sub.payme || {}),
           nextPaymentDate: desiredNext,
-          ...(payme.subStatus != null ? { sub_status: payme.subStatus } : {})
+          sub_status: admin.firestore.FieldValue.delete(),
+          subStatus: admin.firestore.FieldValue.delete(),
+          ...(payme.subStatus != null ? { status: payme.subStatus } : {})
         };
         patch.dates = { ...(sub.dates || {}), endDate: desiredNext };
 
@@ -469,8 +516,27 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         const storedMs = storedEnd?.getTime?.() ?? null;
         if (storedMs !== desiredMs) {
           patch.dates = { ...(sub.dates || {}), endDate: computedEnd };
+          patch.payme = {
+            ...(sub.payme || {}),
+            sub_status: admin.firestore.FieldValue.delete(),
+            subStatus: admin.firestore.FieldValue.delete()
+          };
           needsWrite = true;
         }
+      }
+
+      // Nettoyage legacy: si payme.sub_status est encore présent, on écrit pour le supprimer (même si le reste est à jour).
+      const hasLegacySubStatus =
+        (sub?.payme && (sub.payme.sub_status !== undefined || sub.payme.subStatus !== undefined)) ||
+        (sub as any)?.sub_status !== undefined ||
+        (sub as any)?.subStatus !== undefined;
+      if (!needsWrite && hasLegacySubStatus) {
+        patch.payme = {
+          ...(sub.payme || {}),
+          sub_status: admin.firestore.FieldValue.delete(),
+          subStatus: admin.firestore.FieldValue.delete()
+        };
+        needsWrite = true;
       }
 
       if (!needsWrite) return;

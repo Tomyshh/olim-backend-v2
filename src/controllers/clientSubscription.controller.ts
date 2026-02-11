@@ -484,12 +484,13 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
   const existing = extractPaymeIdentifiers({ client, subscription });
   let cancelAttempted = false;
   let cancelSkippedAsNonFatal = false;
-  // IMPORTANT: si on sait déjà (Firestore) que l'abonnement est annulé (sub_status=5),
+  // IMPORTANT: si on sait déjà (Firestore) que l'abonnement est annulé (status=5),
   // ne pas appeler PayMe cancel: ça peut renvoyer un 500/305 ("sale status not suitable") et ralentir inutilement la requête.
   const localSubStatusRaw =
+    (subscription as any)?.payme?.status ??
     (subscription as any)?.payme?.sub_status ??
     (subscription as any)?.payme?.subStatus ??
-    (subscription as any)?.payme?.status ??
+    (subscription as any)?.status ??
     (subscription as any)?.sub_status ??
     (subscription as any)?.subStatus ??
     null;
@@ -806,12 +807,13 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
   const membershipChanged = requestedMembership !== currentMembership;
 
   // Cas simple: abonnement mensuel existant + changement de prix uniquement => set-price
-  // IMPORTANT: si l'abonnement est annulé (PayMe sub_status=5), PayMe peut refuser set-price (ex: errorCode 377).
+  // IMPORTANT: si l'abonnement est annulé (PayMe status=5), PayMe peut refuser set-price (ex: errorCode 377).
   // Dans ce cas, on doit réabonner (replacement: sale + subscription).
   const localSubStatusRaw =
+    (subscription as any)?.payme?.status ??
     (subscription as any)?.payme?.sub_status ??
     (subscription as any)?.payme?.subStatus ??
-    (subscription as any)?.payme?.status ??
+    (subscription as any)?.status ??
     (subscription as any)?.sub_status ??
     (subscription as any)?.subStatus ??
     null;
@@ -1325,7 +1327,7 @@ export async function cancelClientSubscription(req: AuthenticatedRequest, res: R
 
   await paymeCancelSubscription({ subId });
 
-  // IMPORTANT: "cancel" PayMe = sub_status=5 => l'accès reste actif jusqu'à la fin de période.
+  // IMPORTANT: "cancel" PayMe = status=5 => l'accès reste actif jusqu'à la fin de période.
   // On ne doit pas basculer le client en Visitor immédiatement.
   const accessUntil =
     (subscription?.payment?.nextPaymentDate as any) ??
@@ -1337,7 +1339,7 @@ export async function cancelClientSubscription(req: AuthenticatedRequest, res: R
     patch: {
       states: { willExpire: true, isActive: true },
       dates: { cancelledDate: new Date(), ...(accessUntil ? { endDate: accessUntil } : {}) },
-      payme: { sub_status: 5, ...(accessUntil ? { nextPaymentDate: accessUntil } : {}) },
+      payme: { status: 5, ...(accessUntil ? { nextPaymentDate: accessUntil } : {}) },
       history: { lastModified: admin.firestore.FieldValue.serverTimestamp(), modifiedBy: callerUid || 'system' },
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     }
