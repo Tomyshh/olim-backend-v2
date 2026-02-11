@@ -650,6 +650,8 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
 
   // Activer le membre après le sale (ou immédiatement si pas de sale requis)
   updates.isActive = true;
+  // Passer le statut de validation à "validé" (le membre a été activé/payé)
+  updates.validationStatus = 'validé';
   await ref.set(stripUndefinedDeep(updates), { merge: true });
 
   // Vérification de sécurité: garantir que isActive est bien défini
@@ -743,6 +745,7 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
         serviceActive: true,
         serviceActivationPaymentId: null,
         selectedCardId: cardId,
+        validationStatus: 'validé',
         serviceActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
         reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -789,6 +792,7 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
       serviceActive: true,
       serviceActivationPaymentId: sale.salePaymeId,
       selectedCardId: cardId,
+      validationStatus: 'validé',
       serviceActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
       reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
@@ -1031,7 +1035,8 @@ async function adminActivateFamilyMember(params: {
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     updatedByAdminUid: adminUid,
     updatedByAdminAt: admin.firestore.FieldValue.serverTimestamp(),
-    isActive: true
+    isActive: true,
+    validationStatus: 'validé'
   };
 
   // Compléter uniquement si manquant
