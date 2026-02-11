@@ -9,6 +9,7 @@ import {
   paymeGenerateSale,
   paymeGenerateSubscription,
   paymeGetSubscriptionDetails,
+  paymeListSubscriptions,
   paymeSetSubscriptionPrice
 } from '../services/payme.service.js';
 import { computeMembershipPricing } from '../services/membershipPricing.service.js';
@@ -360,6 +361,29 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       }
     }
 
+    // ---- hadSubscription: le user a-t-il déjà eu un abonnement PayMe ? ----
+    // Vérification rapide: si subCode existe, le user a eu un abonnement.
+    // Sinon, on interroge PayMe par email pour savoir s'il a un historique.
+    let hadSubscription = subCode != null;
+    if (!hadSubscription) {
+      try {
+        const clientDoc = await clientRef.get();
+        const clientEmail = pickString((clientDoc.data() || {} as any).Email);
+        if (clientEmail) {
+          const allSubs = await paymeListSubscriptions();
+          const emailLc = clientEmail.toLowerCase();
+          hadSubscription = allSubs.some((it) => (it.email || '').toLowerCase() === emailLc);
+        }
+      } catch {
+        // best effort: en cas d'erreur PayMe, on assume pas d'abonnement antérieur
+      }
+    }
+
+    // Si le user n'a jamais eu d'abonnement et n'est pas entitled → state = 'none'
+    if (!hadSubscription && !isEntitled) {
+      entitlementState = 'none';
+    }
+
     // ---- Firestore maintenance (best effort) ----
     // Champs source de vérité: Clients/{uid}/subscription/current
     if (currentSubscriptionDoc.exists) {
@@ -407,7 +431,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       isEntitled,
       state: entitlementState,
       accessUntil: accessUntil ? accessUntil.toISOString() : null,
-      hadSubscription: true
+      hadSubscription
     };
 
     const subIdAlias =
