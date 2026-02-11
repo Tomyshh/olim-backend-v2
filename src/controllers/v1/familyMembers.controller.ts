@@ -3,7 +3,7 @@ import { admin, getFirestore } from '../../config/firebase.js';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { HttpError } from '../../utils/errors.js';
 import { paymeGenerateSale } from '../../services/payme.service.js';
-import { isConjoint, recomputeAndApplyFamilyMonthlySupplement } from '../../services/familyBilling.service.js';
+import { isConjoint, recomputeAndApplyFamilyMonthlySupplement, memberIsEligibleAdultSupplement, assertSubscriptionCanSupportFamilySupplement } from '../../services/familyBilling.service.js';
 import { getFamilyMemberPricingNis, nisToCents } from '../../services/remoteConfigPricing.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
@@ -611,6 +611,10 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
   // On déclenche le sale si membre majeur (>=18) et non conjoint.
   let salePaymeId: string | null = null;
   if (isAdult && !isConjoint(status)) {
+    // Sécurité : vérifier que l'abonnement Payme existe et a un prix de base valide
+    // AVANT de prélever et d'activer le membre (évite un état incohérent).
+    await assertSubscriptionCanSupportFamilySupplement(uid);
+
     // Ici, on exige la cardId envoyée par le frontend (pas de fallback silencieux)
     const cardId = cardIdFromPayload;
     if (!cardId) throw new HttpError(400, 'cardId requis pour réactiver un membre majeur.');
@@ -755,6 +759,10 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
     res.json({ ok: true, memberId, serviceActive: true, serviceActivationPaymentId: null });
     return;
   }
+
+  // Sécurité : vérifier que l'abonnement Payme existe et a un prix de base valide
+  // AVANT de prélever et d'activer le membre (évite un état incohérent).
+  await assertSubscriptionCanSupportFamilySupplement(uid);
 
   // Récupérer buyerKey depuis Payment credentials/{cardId}
   const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
@@ -1038,6 +1046,10 @@ async function adminActivateFamilyMember(params: {
   if (mode === 'paid') {
     // Paid activation: same rule as client route (adult + non conjoint)
     if (isAdult && !isConjoint(status)) {
+      // Sécurité : vérifier que l'abonnement Payme existe et a un prix de base valide
+      // AVANT de prélever et d'activer (évite un état incohérent).
+      await assertSubscriptionCanSupportFamilySupplement(clientUid);
+
       attemptedSale = true;
       const cardId = cardIdFromPayload;
       if (!cardId) throw new HttpError(400, 'cardId requis pour activer (paid) un membre majeur.');
