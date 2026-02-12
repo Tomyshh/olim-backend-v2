@@ -66,6 +66,8 @@ export async function createRequest(req: AuthenticatedRequest, res: Response): P
       'First Name': clientData['First Name'],
       'Last Name': clientData['Last Name'],
       Email: clientData.Email,
+      // IMPORTANT: membership calculé côté serveur (middleware) — ne pas faire confiance au client.
+      'Membership Type': typeof (req as any)?.requestMembership === 'string' ? String((req as any).requestMembership).trim() : null,
       'Request Type': requestData.requestType,
       'Request Category': requestData.category,
       'SubCategory ID': requestData.subCategoryId,

@@ -230,7 +230,7 @@ async function upsertSupabaseRequest(params: {
   source: RequestSource;
   idempotencyKey: string;
   request: Record<string, unknown>;
-  computed: { assignedTo: string; priority: number; waitingTime: string | null };
+  computed: { assignedTo: string; priority: number; waitingTime: string | null; membership: MembershipType | null };
 }): Promise<{ inserted: boolean; id: string | null }> {
   const { uid, requestId, source, idempotencyKey, request } = params;
 
@@ -250,7 +250,10 @@ async function upsertSupabaseRequest(params: {
   const lastName = String(pickLegacyField(request, ['Last Name', 'last_name']) ?? '').trim() || null;
   const email = String(pickLegacyField(request, ['Email', 'email']) ?? '').trim() || null;
   const phone = String(pickLegacyField(request, ['Phone', 'phone', 'Phone Number']) ?? '').trim() || null;
-  const membershipType = String(pickLegacyField(request, ['membership_type', 'Membership Type', 'Membership']) ?? '').trim() || null;
+  const membershipType =
+    String(pickLegacyField(request, ['membership_type', 'Membership Type', 'Membership']) ?? '').trim() ||
+    (params.computed.membership ? String(params.computed.membership).trim() : '') ||
+    null;
 
   const uniqueId = `${source}-${requestId}-${uid.slice(0, 8)}`;
 
@@ -377,6 +380,8 @@ export async function v1CreateRequest(req: AuthenticatedRequest, res: Response):
 
   const db = getFirestore();
   const clientCtx = await getClientContext(uid);
+  const membershipFromGuard =
+    typeof (req as any)?.requestMembership === 'string' ? String((req as any).requestMembership).trim() : '';
 
   // Idempotency robuste même si Redis est absent:
   // on stocke une "clé -> requestId" dans Firestore (collection interne).
@@ -385,9 +390,16 @@ export async function v1CreateRequest(req: AuthenticatedRequest, res: Response):
   // Champs essentiels pour calcul serveur
   const reqType = String(pickLegacyField(requestRaw, ['Request Type']) ?? '').trim();
   const reqCategory = String(pickLegacyField(requestRaw, ['Request Category']) ?? '').trim();
-  const membership = (String(pickLegacyField(requestRaw, ['Membership Type']) ?? '').trim() || clientCtx.membership || null) as MembershipType | null;
+  // IMPORTANT: on ne fait PAS confiance au payload pour le membership.
+  // Le middleware `requireActiveMembershipForRequests` fournit la valeur retenue.
+  const membership = ((membershipFromGuard || clientCtx.membership || null) as MembershipType | null);
 
-  const assignedTo = await resolveAssignedTo({ uid, requestType: reqType, requestCategory: reqCategory, clientLanguage: clientCtx.language });
+  const assignedTo = await resolveAssignedTo({
+    uid,
+    requestType: reqType,
+    requestCategory: reqCategory,
+    clientLanguage: clientCtx.language
+  });
   const priority = computePriority({ requestType: reqType, requestCategory: reqCategory, membership });
   const waitingTimeRaw = String(pickLegacyField(requestRaw, ["Temps d'attente"]) ?? '').trim() || null;
   const waitingTime = calculateAdjustedWaitingTime(waitingTimeRaw, membership);
@@ -445,7 +457,7 @@ export async function v1CreateRequest(req: AuthenticatedRequest, res: Response):
       source,
       idempotencyKey,
       request: requestRaw,
-      computed: { assignedTo, priority, waitingTime }
+      computed: { assignedTo, priority, waitingTime, membership }
     });
   }
 

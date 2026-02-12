@@ -2,6 +2,7 @@ import { Router } from 'express';
 import * as requestsController from '../controllers/requests.controller.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
 import { idempotencyMiddleware } from '../middleware/idempotency.middleware.js';
+import { requireActiveMembershipForRequests } from '../middleware/requireActiveMembershipForRequests.middleware.js';
 
 const router = Router();
 
@@ -17,6 +18,7 @@ router.get('/:requestId', requestsController.getRequestDetail);
 // Création d'une demande
 router.post(
   '/',
+  requireActiveMembershipForRequests,
   ...(process.env.IDEMPOTENCY_ENABLED === 'true'
     ? [
         idempotencyMiddleware({
