@@ -303,9 +303,19 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     const details = !isVisitor && subCode != null ? await paymeGetSubscriptionDetails({ subCode }) : null;
     const paymeSubStatus = storedSubStatus ?? details?.subStatus ?? null;
 
-    // accessUntil: on privilégie dates.endDate (source-of-truth), puis payme.nextPaymentDate, puis payment.nextPaymentDate, puis PayMe raw
+    // accessUntil: date jusqu'à laquelle l'accès est garanti. Pour éviter de "faire expirer" à tort un abonnement actif
+    // quand dates.endDate est en retard sur payment.nextPaymentDate (ex. endDate = fin période courante, nextPaymentDate = prochain prélèvement),
+    // on prend la date la plus tardive parmi les candidats.
+    const accessUntilCandidates = [
+      storedEndDate,
+      storedNextPaymentDate,
+      storedPaymentNext,
+      details?.nextPaymentDate ?? null
+    ].filter((d): d is Date => d instanceof Date && Number.isFinite(d.getTime()));
     const accessUntil =
-      storedEndDate || storedNextPaymentDate || storedPaymentNext || details?.nextPaymentDate || null;
+      accessUntilCandidates.length > 0
+        ? new Date(Math.max(...accessUntilCandidates.map((d) => d.getTime())))
+        : null;
     const nextPaymentDateYmd = details?.nextPaymentDateYmd || (accessUntil ? formatYyyyMmDd(accessUntil) : null);
 
     type EntitlementState = 'active' | 'cancelled_pending' | 'expired' | 'unpaid_grace' | 'unpaid' | 'none';
