@@ -301,7 +301,9 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     // Source-of-truth: subscription/current.payme.subCode uniquement
     const subCode = paymeObj.subCode ?? null;
     const details = !isVisitor && subCode != null ? await paymeGetSubscriptionDetails({ subCode }) : null;
-    const paymeSubStatus = storedSubStatus ?? details?.subStatus ?? null;
+    // IMPORTANT: pour réduire les divergences (Firestore vs PayMe), on préfère PayMe quand disponible.
+    // Les conversions Visitor restent protégées par un durcissement (exigeant storedSubStatus===5).
+    const paymeSubStatus = details?.subStatus ?? storedSubStatus ?? null;
 
     // accessUntil: date jusqu'à laquelle l'accès est garanti. Pour éviter de "faire expirer" à tort un abonnement actif
     // quand dates.endDate est en retard sur payment.nextPaymentDate (ex. endDate = fin période courante, nextPaymentDate = prochain prélèvement),
@@ -423,7 +425,18 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
 
     // ---- Conversion Visitor when truly expired (recommended) ----
     // IMPORTANT: ne pas modifier Clients/{uid} (legacy). Conversion Visitor = uniquement subscription/current.
-    if (paymeSubStatus === 5 && accessUntil && now.getTime() >= accessUntil.getTime() && !isVisitor) {
+    // Durcissement: éviter toute conversion abusive.
+    // - on ne convertit que si le status=5 est déjà stocké dans Firestore (pas uniquement via PayMe/cache)
+    // - et uniquement si l'entitlement est vraiment "expired" (pas impayé / pas encore dans la période d'accès)
+    const shouldConvertToVisitor =
+      storedSubStatus === 5 &&
+      entitlementState === 'expired' &&
+      isEntitled === false &&
+      isUnpaidFromCurrent === false &&
+      Boolean(accessUntil && now.getTime() >= accessUntil.getTime()) &&
+      !isVisitor;
+
+    if (shouldConvertToVisitor) {
       await currentSubscriptionRef
         .set(
           {
