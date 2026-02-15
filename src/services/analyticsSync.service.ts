@@ -69,7 +69,9 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
     const PROGRESS_WITH_TOTAL = process.env.ANALYTICS_PROGRESS_WITH_TOTAL === 'true';
     const progressEvery = Math.max(1, Number(process.env.ANALYTICS_PROGRESS_EVERY || 200));
     const progressIntervalMs = Math.max(250, Number(process.env.ANALYTICS_PROGRESS_INTERVAL_MS || 5000));
+    const heartbeatIntervalMs = Math.max(30_000, Number(process.env.ANALYTICS_HEARTBEAT_MS || 60_000)); // 1 min par défaut
     let lastProgressLogAt = 0;
+    let lastHeartbeatAt = Date.now();
     let totalClientsEstimate: number | null = null;
 
     const subscriptionCurrentCache = new Map<string, Record<string, any> | null>();
@@ -340,6 +342,9 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
             const snap = await q.get();
             if (snap.empty) break;
             lastDoc = snap.docs[snap.docs.length - 1]!;
+            if (clientsScanned === 0) {
+                console.log('[analytics-sync] first page loaded', { clientsInPage: snap.docs.length });
+            }
 
             for (const clientDoc of snap.docs) {
                 clientsScanned++;
@@ -349,6 +354,12 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
                     console.log('[analytics-sync] Client', { clientId: clientDoc.id });
                 }
                 maybeLogProgress(false);
+                // Heartbeat pour détecter blocage ou kill (aucun "done" ni "Job failed")
+                const nowMs = Date.now();
+                if (nowMs - lastHeartbeatAt >= heartbeatIntervalMs) {
+                    lastHeartbeatAt = nowMs;
+                    console.log('[analytics-sync] heartbeat', { scanned: clientsScanned, elapsedMs: nowMs - startedAt });
+                }
 
                 // On ne traite que les clients qui ont déjà fait au moins une demande
                 if (activity && activity.lastRequestAt) {
@@ -357,7 +368,9 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
                     const rMonth = Number(activity.currentMonthRequests || 0);
                     const rDay = Number(activity.monthly_average || 0);
 
-                    // Prepare granular history record
+                    // Prepare granular history record (lastRequestAt peut être Timestamp ou {seconds/_seconds})
+                    const lastReqAt = parseDateLike(activity.lastRequestAt);
+                    const lastRequestAtIso = lastReqAt ? lastReqAt.toISOString() : now.toISOString();
                     batchData.push({
                         client_id: clientDoc.id,
                         email: data.Email || null,
@@ -366,7 +379,7 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
                         requests_30d: r30,
                         requests_90d: Number(activity.requests90d || 0),
                         monthly_average: rDay,
-                        last_request_at: new Date(activity.lastRequestAt._seconds * 1000).toISOString(),
+                        last_request_at: lastRequestAtIso,
                         computed_at: now.toISOString()
                     });
 
@@ -617,6 +630,7 @@ export async function runDailyAnalyticsSyncJob(params?: { leaseMs?: number }): P
         return { runId, startedAt, finishedAt };
     } catch (e: any) {
         const finishedAt = new Date();
+        console.warn('[analytics-sync] Job failed', { runId, error: e?.message || String(e) });
         await jobRef.set(
             {
                 jobId: jobRef.id,

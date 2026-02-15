@@ -108,11 +108,18 @@ function isNonFatalPaymeCancelError(err: any): boolean {
   // Observé en prod: errorCode 305 + message hébreu => on continue.
   if (errorCode === 305) return true;
 
+  // PayMe 371 = "מנוי לא נמצא" (abonnement non trouvé). Si l'abonnement n'existe plus côté PayMe,
+  // on continue pour créer un nouvel abonnement (réabonnement depuis le CRM).
+  if (errorCode === 371) return true;
+
   // Si PayMe renvoie 404 sur l'action (endpoint ou subId inexistant), on continue aussi.
   if (statusCode === 404) return true;
 
   // Heuristique: message explicite indiquant que l'action n'est pas possible selon le statut
   if (message.includes('סטטוס') || message.toLowerCase().includes('statut')) return true;
+
+  // Abonnement non trouvé (hébreu "לא נמצא" ou variantes) => on continue pour créer un nouvel abonnement
+  if (message.includes('לא נמצא') || message.toLowerCase().includes('not found') || message.toLowerCase().includes('n\'est pas trouvé')) return true;
 
   return false;
 }
