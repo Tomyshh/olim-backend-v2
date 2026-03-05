@@ -569,10 +569,15 @@ export async function quoteSubscriptionChange(req: AuthenticatedRequest, res: Re
     const lastPaymentDate = toDate(current?.payment?.lastPaymentDate);
     const now = new Date();
     const DEFAULT_PERIOD_MS = 30 * 24 * 3600 * 1000;
-    const periodMs =
+    const MAX_MONTHLY_PERIOD_MS = 35 * 24 * 3600 * 1000;
+    const rawPeriodMs =
       nextPaymentDate && lastPaymentDate && nextPaymentDate.getTime() > lastPaymentDate.getTime()
         ? nextPaymentDate.getTime() - lastPaymentDate.getTime()
         : DEFAULT_PERIOD_MS;
+    // Garde-fou: si lastPaymentDate est obsolète (non mis à jour par le sync),
+    // periodMs peut couvrir plusieurs mois au lieu d'un seul cycle.
+    // On plafonne à ~35 jours pour un abonnement mensuel.
+    const periodMs = rawPeriodMs > MAX_MONTHLY_PERIOD_MS ? DEFAULT_PERIOD_MS : rawPeriodMs;
     const remainingMs = nextPaymentDate ? nextPaymentDate.getTime() - now.getTime() : 0;
     const ratioRemaining = nextPaymentDate ? clamp01(remainingMs / periodMs) : 0;
 

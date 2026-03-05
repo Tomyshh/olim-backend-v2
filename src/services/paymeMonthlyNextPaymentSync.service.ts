@@ -409,9 +409,11 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
       }
 
       const desiredNext = payme.nextPaymentDate || null;
+      const desiredLast = payme.lastPaymentDate || null;
       const storedPlanNext = toDateOrNull(sub?.plan?.nextPaymentDate);
       const storedPaymeNext = toDateOrNull(sub?.payme?.nextPaymentDate);
       const storedPaymentNext = toDateOrNull(sub?.payment?.nextPaymentDate);
+      const storedPaymentLast = toDateOrNull(sub?.payment?.lastPaymentDate);
       const storedEnd = toDateOrNull(sub?.dates?.endDate);
       const storedMembership = typeof sub?.plan?.membership === 'string' ? String(sub.plan.membership).trim() : '';
       const storedPlanPriceAgorot = typeof sub?.plan?.price === 'number' && Number.isFinite(sub.plan.price) ? sub.plan.price : null;
@@ -460,7 +462,7 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
           storedPaymentMs == null;
 
         patch.plan = { ...(sub.plan || {}), ...(patch.plan || {}), nextPaymentDate: null };
-        patch.payment = { ...(sub.payment || {}), nextPaymentDate: null };
+        patch.payment = { ...(sub.payment || {}), nextPaymentDate: null, ...(desiredLast ? { lastPaymentDate: desiredLast } : {}) };
         patch.payme = {
           ...(sub.payme || {}),
           nextPaymentDate: null,
@@ -478,14 +480,17 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         }
       } else if (desiredNext) {
         const desiredMs = desiredNext.getTime();
+        const desiredLastMs = desiredLast?.getTime?.() ?? null;
+        const storedLastMs = storedPaymentLast?.getTime?.() ?? null;
         const alreadyOk =
           (storedPlanNext?.getTime?.() === desiredMs || storedPlanNext == null) &&
           (storedPaymeNext?.getTime?.() === desiredMs || storedPaymeNext == null) &&
           (storedPaymentNext?.getTime?.() === desiredMs || storedPaymentNext == null) &&
-          (storedEnd?.getTime?.() === desiredMs || storedEnd == null);
+          (storedEnd?.getTime?.() === desiredMs || storedEnd == null) &&
+          (desiredLastMs == null || storedLastMs === desiredLastMs);
 
         patch.plan = { ...(sub.plan || {}), ...(patch.plan || {}), nextPaymentDate: desiredNext };
-        patch.payment = { ...(sub.payment || {}), nextPaymentDate: desiredNext };
+        patch.payment = { ...(sub.payment || {}), nextPaymentDate: desiredNext, ...(desiredLast ? { lastPaymentDate: desiredLast } : {}) };
         patch.payme = {
           ...(sub.payme || {}),
           nextPaymentDate: desiredNext,
@@ -502,7 +507,8 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         const mustBackfillPaymeNext = storedPaymeNext == null;
         const mustBackfillPaymentNext = storedPaymentNext == null;
         const mustBackfillEnd = storedEnd == null;
-        if (!alreadyOk || mustBackfillPlanNext || mustBackfillPaymeNext || mustBackfillPaymentNext || mustBackfillEnd) {
+        const mustBackfillPaymentLast = desiredLast != null && storedLastMs !== desiredLastMs;
+        if (!alreadyOk || mustBackfillPlanNext || mustBackfillPaymeNext || mustBackfillPaymentNext || mustBackfillEnd || mustBackfillPaymentLast) {
           needsWrite = true;
         }
       } else {
