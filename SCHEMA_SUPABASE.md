@@ -145,18 +145,17 @@ CREATE TABLE public.clients (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT clients_pkey PRIMARY KEY (id)
 );
-CREATE TABLE public.counselors (
+CREATE TABLE public.conseillers (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
-  name text NOT NULL UNIQUE,
-  email USER-DEFINED,
-  is_present boolean,
-  requests_count integer,
-  is_finance boolean,
-  manage_elite boolean,
-  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  firebase_uid text UNIQUE,
+  name text NOT NULL,
+  email text NOT NULL,
+  role_id uuid,
+  is_active boolean NOT NULL DEFAULT true,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT counselors_pkey PRIMARY KEY (id)
+  CONSTRAINT conseillers_pkey PRIMARY KEY (id),
+  CONSTRAINT conseillers_role_id_fkey FOREIGN KEY (role_id) REFERENCES public.roles(id)
 );
 CREATE TABLE public.daily_platform_stats (
   date date NOT NULL,
@@ -198,19 +197,163 @@ CREATE TABLE public.family_members (
   CONSTRAINT family_members_pkey PRIMARY KEY (id),
   CONSTRAINT family_members_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
 );
+CREATE TABLE public.lead_assignment_rules (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  rule_type text NOT NULL CHECK (rule_type = ANY (ARRAY['source'::text, 'language'::text, 'workload'::text, 'round_robin'::text])),
+  conditions jsonb NOT NULL DEFAULT '{}'::jsonb,
+  conseiller_id text,
+  priority integer NOT NULL DEFAULT 0,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_assignment_rules_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.lead_attachments (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL,
+  file_url text NOT NULL,
+  file_name text NOT NULL,
+  file_size integer,
+  mime_type text,
+  uploaded_by text NOT NULL,
+  uploaded_by_name text,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_attachments_pkey PRIMARY KEY (id),
+  CONSTRAINT lead_attachments_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+);
+CREATE TABLE public.lead_interactions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL,
+  conseiller_id text NOT NULL,
+  conseiller_name text,
+  interaction_type text NOT NULL CHECK (interaction_type = ANY (ARRAY['call'::text, 'email'::text, 'whatsapp'::text, 'meeting'::text, 'sms'::text, 'note'::text, 'status_change'::text, 'other'::text])),
+  summary text NOT NULL,
+  next_action text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_interactions_pkey PRIMARY KEY (id),
+  CONSTRAINT lead_interactions_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+);
+CREATE TABLE public.lead_nurturing_sequences (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  description text,
+  trigger_status_id uuid,
+  steps jsonb NOT NULL DEFAULT '[]'::jsonb,
+  is_active boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_nurturing_sequences_pkey PRIMARY KEY (id),
+  CONSTRAINT lead_nurturing_sequences_trigger_status_id_fkey FOREIGN KEY (trigger_status_id) REFERENCES public.lead_pipeline_statuses(id)
+);
+CREATE TABLE public.lead_pipeline_statuses (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
+  color text,
+  display_order integer NOT NULL DEFAULT 0,
+  is_terminal boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_pipeline_statuses_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.lead_reminders (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL,
+  conseiller_id text NOT NULL,
+  reminder_at timestamp with time zone NOT NULL,
+  note text,
+  treated boolean NOT NULL DEFAULT false,
+  treated_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_reminders_pkey PRIMARY KEY (id),
+  CONSTRAINT lead_reminders_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+);
+CREATE TABLE public.lead_score_rules (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  condition_field text NOT NULL,
+  condition_operator text NOT NULL CHECK (condition_operator = ANY (ARRAY['equals'::text, 'contains'::text, 'gt'::text, 'lt'::text, 'gte'::text, 'lte'::text, 'exists'::text])),
+  condition_value text NOT NULL,
+  score_delta integer NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_score_rules_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.lead_sources (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
+  category text NOT NULL CHECK (category = ANY (ARRAY['digital'::text, 'human'::text, 'other'::text])),
+  icon text,
+  is_active boolean NOT NULL DEFAULT true,
+  display_order integer NOT NULL DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_sources_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.lead_stats_daily (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  stat_date date NOT NULL UNIQUE,
+  total_leads integer NOT NULL DEFAULT 0,
+  new_leads integer NOT NULL DEFAULT 0,
+  converted_leads integer NOT NULL DEFAULT 0,
+  lost_leads integer NOT NULL DEFAULT 0,
+  by_source jsonb NOT NULL DEFAULT '{}'::jsonb,
+  by_conseiller jsonb NOT NULL DEFAULT '{}'::jsonb,
+  by_status jsonb NOT NULL DEFAULT '{}'::jsonb,
+  avg_response_time_hours numeric,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_stats_daily_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.lead_tasks (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  lead_id uuid NOT NULL,
+  task_type text NOT NULL CHECK (task_type = ANY (ARRAY['call'::text, 'send_quote'::text, 'send_documents'::text, 'follow_up'::text, 'meeting'::text, 'other'::text])),
+  title text NOT NULL,
+  description text,
+  deadline timestamp with time zone,
+  responsible_id text NOT NULL,
+  responsible_name text,
+  status text NOT NULL DEFAULT 'pending'::text CHECK (status = ANY (ARRAY['pending'::text, 'in_progress'::text, 'completed'::text, 'cancelled'::text])),
+  reminder_at timestamp with time zone,
+  completed_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_tasks_pkey PRIMARY KEY (id),
+  CONSTRAINT lead_tasks_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+);
 CREATE TABLE public.leads (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   firestore_id text UNIQUE,
-  email USER-DEFINED,
-  first_name text,
-  last_name text,
+  first_name text NOT NULL,
+  last_name text NOT NULL,
   phone text,
-  status text,
-  description text,
+  phone_secondary text,
+  email text,
+  city text,
+  country text,
+  language text DEFAULT 'fr'::text,
+  service_requested text,
+  interest_level text DEFAULT 'cold'::text CHECK (interest_level = ANY (ARRAY['hot'::text, 'warm'::text, 'cold'::text])),
+  estimated_budget text,
+  urgency text DEFAULT 'medium'::text CHECK (urgency = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'critical'::text])),
+  status_id uuid,
+  score integer NOT NULL DEFAULT 0,
+  priority text DEFAULT 'medium'::text CHECK (priority = ANY (ARRAY['low'::text, 'medium'::text, 'high'::text, 'urgent'::text])),
+  source_id uuid,
+  source_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  conseiller_id text,
+  assigned_at timestamp with time zone,
+  last_interaction_at timestamp with time zone,
+  converted_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-  CONSTRAINT leads_pkey PRIMARY KEY (id)
+  archived_at timestamp with time zone,
+  archive_reason text,
+  comments text,
+  CONSTRAINT leads_pkey PRIMARY KEY (id),
+  CONSTRAINT leads_status_id_fkey FOREIGN KEY (status_id) REFERENCES public.lead_pipeline_statuses(id),
+  CONSTRAINT leads_source_id_fkey FOREIGN KEY (source_id) REFERENCES public.lead_sources(id)
 );
 CREATE TABLE public.partners (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -387,6 +530,17 @@ CREATE TABLE public.requests (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT requests_pkey PRIMARY KEY (id),
   CONSTRAINT requests_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.roles (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
+  description text,
+  has_leads_access boolean NOT NULL DEFAULT false,
+  has_admin_access boolean NOT NULL DEFAULT false,
+  display_order integer NOT NULL DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT roles_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.subscription_events (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
