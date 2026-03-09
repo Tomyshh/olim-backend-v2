@@ -31,6 +31,13 @@ router.get(
   asyncHandler(leadsController.getConseillers as any)
 );
 
+router.get(
+  '/roles',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(leadsController.getRoles as any)
+);
+
 // ---------------------------------------------------------------------------
 // Stats (admin only)
 // ---------------------------------------------------------------------------

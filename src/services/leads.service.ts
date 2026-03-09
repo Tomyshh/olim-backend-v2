@@ -882,9 +882,22 @@ export async function getPipelineStatuses() {
 export async function getConseillers() {
   const { data, error } = await supabase
     .from('conseillers')
-    .select('*')
+    .select(`
+      *,
+      role:roles(*)
+    `)
     .eq('is_active', true)
     .order('name', { ascending: true });
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function getRoles() {
+  const { data, error } = await supabase
+    .from('roles')
+    .select('*')
+    .order('display_order', { ascending: true });
 
   if (error) throw error;
   return data ?? [];

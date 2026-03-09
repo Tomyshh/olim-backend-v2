@@ -389,3 +389,8 @@ export async function getConseillers(req: AuthenticatedRequest, res: Response): 
   const data = await leadsService.getConseillers();
   res.json(data);
 }
+
+export async function getRoles(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const data = await leadsService.getRoles();
+  res.json(data);
+}
