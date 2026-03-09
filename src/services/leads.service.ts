@@ -878,3 +878,14 @@ export async function getPipelineStatuses() {
   if (error) throw error;
   return data ?? [];
 }
+
+export async function getConseillers() {
+  const { data, error } = await supabase
+    .from('conseillers')
+    .select('*')
+    .eq('is_active', true)
+    .order('name', { ascending: true });
+
+  if (error) throw error;
+  return data ?? [];
+}

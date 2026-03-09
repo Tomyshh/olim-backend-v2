@@ -24,6 +24,13 @@ router.get(
   asyncHandler(leadsController.getPipelineStatuses as any)
 );
 
+router.get(
+  '/conseillers',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(leadsController.getConseillers as any)
+);
+
 // ---------------------------------------------------------------------------
 // Stats (admin only)
 // ---------------------------------------------------------------------------

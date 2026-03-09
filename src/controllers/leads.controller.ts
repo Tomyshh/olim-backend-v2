@@ -384,3 +384,8 @@ export async function getPipelineStatuses(req: AuthenticatedRequest, res: Respon
   const data = await leadsService.getPipelineStatuses();
   res.json(data);
 }
+
+export async function getConseillers(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const data = await leadsService.getConseillers();
+  res.json(data);
+}
