@@ -24,6 +24,10 @@ export async function requireConseiller(
       return;
     }
 
+    const data = snap.data() || {};
+    (req as any).isAdmin = data.isAdmin === true;
+    (req as any).conseillerName = data.Name || data.name || '';
+
     next();
   } catch (err) {
     next(err);

@@ -32,6 +32,7 @@ import clientsRoutes from './routes/clients.routes.js';
 import usersRoutes from './routes/users.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import promoRoutes from './routes/promo.routes.js';
+import leadsRoutes from './routes/leads.routes.js';
 
 // v1 routes (frontend)
 import v1AuthPhoneOtpRoutes from './routes/v1/auth.phoneOtp.routes.js';
@@ -202,6 +203,7 @@ app.use('/api/cinema', cinemaRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/qa', qaRoutes);
 app.use('/api/clients', clientsRoutes);
+app.use('/api/leads', leadsRoutes);
 app.use('/api/ai', aiRoutes);
 
 // Signup/init (frontend web)
