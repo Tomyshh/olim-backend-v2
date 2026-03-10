@@ -1,31 +1,29 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore, getStorage } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
+import { resolveSupabaseClientId } from '../services/dualWrite.service.js';
 
 export async function getDocuments(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
 
-    // Documents personnels (nouvelle structure)
-    const personalDocsSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Docs')
-      .doc('Personnels')
-      .get();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.json({ personalDocs: [], legacyDocs: [] }); return; }
 
-    // Documents legacy
-    const legacyDocsSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Client Documents')
-      .get();
+    const { data, error } = await supabase
+      .from('client_documents')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false });
 
-    const personalDocs = personalDocsSnapshot.exists ? [personalDocsSnapshot.data()] : [];
-    const legacyDocs = legacyDocsSnapshot.docs.map(doc => ({
-      documentId: doc.id,
-      ...doc.data()
+    if (error) throw error;
+
+    const allDocs = data || [];
+    const personalDocs = allDocs.filter(d => d.category === 'personal');
+    const legacyDocs = allDocs.filter(d => d.category === 'legacy').map(d => ({
+      documentId: d.firestore_id || d.id,
+      ...d
     }));
 
     res.json({ personalDocs, legacyDocs });
@@ -37,22 +35,20 @@ export async function getDocuments(req: AuthenticatedRequest, res: Response): Pr
 export async function getPersonalDocuments(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
 
-    // Nouvelle structure: Clients/{uid}/Docs/Personnels
-    const personalDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Docs')
-      .doc('Personnels')
-      .get();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.json({ documents: [] }); return; }
 
-    if (!personalDoc.exists) {
-      res.json({ documents: [] });
-      return;
-    }
+    const { data, error } = await supabase
+      .from('client_documents')
+      .select('*')
+      .eq('client_id', clientId)
+      .eq('category', 'personal')
+      .order('created_at', { ascending: false });
 
-    res.json({ documents: personalDoc.data() });
+    if (error) throw error;
+
+    res.json({ documents: data || [] });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -62,23 +58,20 @@ export async function getFamilyMemberDocuments(req: AuthenticatedRequest, res: R
   try {
     const uid = req.uid!;
     const { memberId } = req.params;
-    const db = getFirestore();
 
-    const memberDocs = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('membres')
-      .doc(memberId)
-      .collection('Docs')
-      .doc('Personnels')
-      .get();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.json({ documents: [] }); return; }
 
-    if (!memberDocs.exists) {
-      res.json({ documents: [] });
-      return;
-    }
+    const { data, error } = await supabase
+      .from('client_documents')
+      .select('*')
+      .eq('client_id', clientId)
+      .eq('family_member_id', memberId)
+      .order('created_at', { ascending: false });
 
-    res.json({ documents: memberDocs.data() });
+    if (error) throw error;
+
+    res.json({ documents: data || [] });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

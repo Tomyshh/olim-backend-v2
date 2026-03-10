@@ -114,6 +114,117 @@ export function clearClientIdCache(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers: resolve lookup table UUIDs (cached)
+// ---------------------------------------------------------------------------
+
+type LookupTable = 'document_types' | 'membership_types' | 'plan_types' | 'relationship_types';
+const lookupCaches = new Map<LookupTable, Map<string, string>>();
+
+async function resolveLookupId(table: LookupTable, slug: string): Promise<string | null> {
+  if (!slug) return null;
+  let cache = lookupCaches.get(table);
+  if (!cache) {
+    cache = new Map();
+    const { data } = await supabase.from(table).select('id, slug');
+    if (data) {
+      for (const row of data) cache.set(row.slug, row.id);
+    }
+    lookupCaches.set(table, cache);
+  }
+  return cache.get(slug) ?? null;
+}
+
+export async function resolveDocumentTypeId(slug: string): Promise<string | null> {
+  return resolveLookupId('document_types', slug);
+}
+export async function resolveMembershipTypeId(slug: string): Promise<string | null> {
+  return resolveLookupId('membership_types', slug);
+}
+export async function resolvePlanTypeId(slug: string): Promise<string | null> {
+  return resolveLookupId('plan_types', slug);
+}
+export async function resolveRelationshipTypeId(slug: string): Promise<string | null> {
+  return resolveLookupId('relationship_types', slug);
+}
+
+let conseillerIdCache = new Map<string, string>();
+
+export async function resolveConseillerUuid(firestoreId: string): Promise<string | null> {
+  if (!firestoreId || firestoreId === 'unknown') return null;
+  const cached = conseillerIdCache.get(firestoreId);
+  if (cached) return cached;
+
+  const { data } = await supabase
+    .from('conseillers')
+    .select('id')
+    .eq('firestore_id', firestoreId)
+    .maybeSingle();
+
+  if (data?.id) {
+    conseillerIdCache.set(firestoreId, data.id);
+    return data.id;
+  }
+  return null;
+}
+
+export function clearAllCaches(): void {
+  clientIdCache = new Map();
+  lookupCaches.clear();
+  conseillerIdCache = new Map();
+}
+
+function normalizeMembershipSlug(raw: string | null): string | null {
+  if (!raw) return null;
+  return raw.toLowerCase().replace(/\s+/g, '_');
+}
+
+function normalizePlanSlug(raw: string | null): string | null {
+  if (!raw) return null;
+  const lower = raw.toLowerCase().trim();
+  if (lower === 'annualy' || lower === 'anually') return 'annual';
+  if (lower === 'free') return 'monthly';
+  return lower;
+}
+
+function normalizeDocumentTypeSlug(raw: string): string {
+  const s = raw.toLowerCase().trim();
+  if (s.includes('teoudat z') || s.includes('teudat z') || s.includes('תעודת זהות') || s === 'tz') return 'teudat_zehut';
+  if (s.includes('teoudat ol')) return 'teudat_ole';
+  if (s.includes('passeport') && (s.includes('etranger') || s.includes('franc'))) return 'passeport_etranger';
+  if (s.includes('passeport') || s === 'passport') return 'passeport';
+  if (s.includes('permis de conduire') || s === 'driving license') return 'permis_conduire';
+  if (s.includes('carte de cr') || s.includes('credit card')) return 'carte_credit';
+  if (s.includes("carte d'identit") || s.includes('carte d\'identit')) return 'carte_identite';
+  if (s.includes('carte grise') || s.includes('vehicle registration')) return 'carte_grise';
+  if (s.includes('koupat') || s.includes('health fund')) return 'carte_koupat_holim';
+  if (s.includes('contrat de location') || s.includes('rental contract')) return 'contrat_location';
+  if (s.includes('compteur') && s.includes('eau') || s.includes('water meter')) return 'compteur_eau';
+  if (s.includes('compteur') && s.includes('gaz')) return 'compteur_gaz';
+  if (s.includes('compteur') && (s.includes('lectricit') || s.includes('lectr')) || s.includes('electricity meter')) return 'compteur_electricite';
+  if (s.includes('arnona')) return 'facture_arnona';
+  if (s.includes("facture d'eau") || s.includes('facture deau')) return 'facture_eau';
+  if (s.includes('facture de gaz')) return 'facture_gaz';
+  if (s.includes("facture d'") && s.includes('lectricit') || s.includes('electricity bill')) return 'facture_electricite';
+  if (s.includes('facture') && s.includes('phone')) return 'facture_telephone';
+  if (s.includes('fiche de paie') || s.includes('bulletin') && s.includes('salaire')) return 'fiche_paie';
+  if (s.includes('relev') && (s.includes('bancaire') || s.includes('compte'))) return 'releve_bancaire';
+  if (s === 'rib') return 'rib';
+  if (s.includes('sefah')) return 'sefah';
+  if (s.includes('acte de naissance')) return 'acte_naissance';
+  if (s.includes('assurance auto')) return 'assurance_auto';
+  if (s.includes('assurance habitation') || s.includes('home insurance')) return 'assurance_habitation';
+  if (s.includes('attestation') && s.includes('travail')) return 'attestation_travail';
+  if (s.includes('ordonnance')) return 'ordonnance';
+  if (s.includes("photos d'identit") || s.includes('photos d\'identit')) return 'photos_identite';
+  if (s.includes('justificatif') && s.includes('revenus')) return 'justificatif_revenus';
+  if (s.includes('dipl')) return 'diplome';
+  if (s.includes('document m') && s.includes('dic') || s.includes('rapport') && s.includes('dic')) return 'document_medical';
+  if (s.includes('profile_photo') || s === 'profile photo') return 'profile_photo';
+  if (s.includes('request_attachment')) return 'request_attachment';
+  return 'autre';
+}
+
+// ---------------------------------------------------------------------------
 // Helper: safe timestamp conversion
 // ---------------------------------------------------------------------------
 
@@ -208,14 +319,24 @@ export function mapClientToSupabase(uid: string, fs: Record<string, any>): Recor
   };
 }
 
-export function mapSubscriptionToSupabase(
+export async function mapSubscriptionToSupabase(
   clientSupabaseId: string,
   fs: Record<string, any>
-): Record<string, any> {
+): Promise<Record<string, any>> {
+  const planType = pickStr(fs.plan?.type) ?? pickStr(fs.planType);
+  const membershipType = pickStr(fs.plan?.membership) ?? pickStr(fs.membershipType);
+
+  const [membershipTypeId, planTypeId] = await Promise.all([
+    resolveMembershipTypeId(normalizeMembershipSlug(membershipType) ?? ''),
+    resolvePlanTypeId(normalizePlanSlug(planType) ?? ''),
+  ]);
+
   return {
     client_id: clientSupabaseId,
-    plan_type: pickStr(fs.plan?.type) ?? pickStr(fs.planType),
-    membership_type: pickStr(fs.plan?.membership) ?? pickStr(fs.membershipType),
+    plan_type: planType,
+    membership_type: membershipType,
+    membership_type_id: membershipTypeId,
+    plan_type_id: planTypeId,
     price_cents: fs.plan?.price ?? fs.priceInCents ?? null,
     currency: pickStr(fs.plan?.currency) ?? 'ILS',
     payment_method: pickStr(fs.payment?.method),
@@ -250,18 +371,22 @@ export function mapSubscriptionToSupabase(
   };
 }
 
-export function mapFamilyMemberToSupabase(
+export async function mapFamilyMemberToSupabase(
   clientSupabaseId: string,
   memberId: string,
   fs: Record<string, any>
-): Record<string, any> {
+): Promise<Record<string, any>> {
+  const status = pickStr(fs['Family Member Status']) ?? pickStr(fs.status);
+  const relationshipTypeId = await resolveRelationshipTypeFromStatus(status);
+
   return {
     client_id: clientSupabaseId,
     first_name: pickStr(fs['First Name']) ?? pickStr(fs.firstName),
     last_name: pickStr(fs['Last Name']) ?? pickStr(fs.lastName),
     birthday: toDateOnly(fs.Birthday) ?? toDateOnly(fs.birthday),
     teoudat_zeout: pickStr(fs['Teoudat Zeout']) ?? pickStr(fs.teoudatZeout),
-    status: pickStr(fs['Family Member Status']) ?? pickStr(fs.status),
+    status,
+    relationship_type_id: relationshipTypeId,
     is_account_owner: fs.isAccountOwner ?? (memberId === 'account_owner'),
     metadata: {
       firestoreId: memberId,
@@ -276,6 +401,20 @@ export function mapFamilyMemberToSupabase(
     created_at: toIso(fs.createdAt) ?? toIso(fs['Created At']) ?? new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
+}
+
+async function resolveRelationshipTypeFromStatus(status: string | null): Promise<string | null> {
+  if (!status) return null;
+  const s = status.toLowerCase().trim();
+  let slug: string;
+  if (s.includes('account owner')) slug = 'account_owner';
+  else if (['conjoint', 'conjoin', 'spouse', 'partner', 'mari'].includes(s) || s.includes('conjoint')) slug = 'conjoint';
+  else if (['child', 'boy', 'girl', 'daughter', 'fille', 'fils', 'garçon', 'beau fils'].includes(s)) slug = 'child';
+  else if (['father', 'mother', 'mere', 'mère', 'pere', 'père', 'parent'].includes(s) || s.includes('mere') || s.includes('pere')) slug = 'parent';
+  else if (s.includes('grand')) slug = 'grandparent';
+  else if (s.includes('soeur') || s.includes('frere')) slug = 'sibling';
+  else slug = 'other';
+  return resolveRelationshipTypeId(slug);
 }
 
 export function mapAddressToSupabase(
@@ -628,7 +767,7 @@ export async function dualWriteSubscription(
     console.warn(LOG_PREFIX, 'Cannot write subscription: client not found in Supabase', firebaseUid);
     return;
   }
-  const row = mapSubscriptionToSupabase(clientId, fsData);
+  const row = await mapSubscriptionToSupabase(clientId, fsData);
   await dualWriteToSupabase('subscriptions', row, { onConflict: 'client_id' });
 }
 
@@ -639,7 +778,7 @@ export async function dualWriteFamilyMember(
 ): Promise<void> {
   const clientId = await resolveSupabaseClientId(firebaseUid);
   if (!clientId) return;
-  const row = mapFamilyMemberToSupabase(clientId, memberId, fsData);
+  const row = await mapFamilyMemberToSupabase(clientId, memberId, fsData);
   await dualWriteToSupabase('family_members', row, { mode: 'insert' });
 }
 
@@ -651,7 +790,7 @@ export async function dualWriteAddress(
   const clientId = await resolveSupabaseClientId(firebaseUid);
   if (!clientId) return;
   const row = mapAddressToSupabase(clientId, addressId, fsData);
-  await dualWriteToSupabase('client_addresses', row, { mode: 'insert' });
+  await dualWriteToSupabase('client_addresses', row, { onConflict: 'client_id,firestore_id' });
 }
 
 export async function dualWritePaymentCredential(
@@ -825,6 +964,37 @@ export function mapClientLogToSupabase(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Conseiller mapper
+// ---------------------------------------------------------------------------
+
+export function mapConseillerToSupabase(
+  conseillerId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: conseillerId,
+    name: fs.name ?? '',
+    email: fs.email ?? null,
+    is_admin: fs.isAdmin ?? fs.is_admin ?? false,
+    is_super_admin: fs.isSuperAdmin ?? fs.is_super_admin ?? false,
+    is_present: fs.isPresent ?? fs.is_present ?? false,
+    manage_elite: fs.manageElite ?? fs.manage_elite ?? false,
+    languages: fs.languages ?? {},
+    now_request: fs.nowRequest ?? fs.now_request ?? null,
+    metadata: fs.metadata ?? {},
+    updated_at: new Date().toISOString()
+  };
+}
+
+export async function dualWriteConseiller(
+  conseillerId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const row = mapConseillerToSupabase(conseillerId, fsData);
+  await dualWriteToSupabase('conseillers', row, { onConflict: 'firestore_id' });
+}
+
 export async function dualWriteClientLog(
   firebaseUid: string,
   logId: string,
@@ -840,13 +1010,18 @@ export async function dualWriteClientLog(
 // Document Upload mapper
 // ---------------------------------------------------------------------------
 
-export function mapDocumentUploadToSupabase(
+export async function mapDocumentUploadToSupabase(
   clientSupabaseId: string,
   doc: Record<string, any>
-): Record<string, any> {
+): Promise<Record<string, any>> {
+  const rawType = pickStr(doc.documentType) ?? 'personal';
+  const typeSlug = normalizeDocumentTypeSlug(rawType);
+  const documentTypeId = await resolveDocumentTypeId(typeSlug);
+
   return {
     client_id: clientSupabaseId,
-    document_type: pickStr(doc.documentType) ?? 'personal',
+    document_type: rawType,
+    document_type_id: documentTypeId,
     file_url: pickStr(doc.url),
     file_path: pickStr(doc.path),
     file_name: pickStr(doc.originalName),
@@ -863,6 +1038,6 @@ export async function dualWriteDocumentUpload(
 ): Promise<void> {
   const clientId = await resolveSupabaseClientId(firebaseUid);
   if (!clientId) return;
-  const row = mapDocumentUploadToSupabase(clientId, docData);
+  const row = await mapDocumentUploadToSupabase(clientId, docData);
   await dualWriteToSupabase('client_documents', row, { mode: 'insert' });
 }

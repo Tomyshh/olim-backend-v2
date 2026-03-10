@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { admin, getFirestore } from '../config/firebase.js';
 import { runWithConcurrencyLimit } from './concurrencyLimit.service.js';
 import { dualWriteClient } from './dualWrite.service.js';
+import { supabase } from './supabase.service.js';
 
 type ClientActivityStatus = 'inactive' | 'low' | 'medium' | 'high' | 'very_high';
 
@@ -154,10 +155,14 @@ export async function computeClientActivityForClient(params: {
   const clientId = String(params.clientId || '').trim();
   if (!clientId) throw new Error('clientId manquant.');
 
-  const clientRef = db.collection('Clients').doc(clientId);
-  const clientSnap = await clientRef.get();
-  if (!clientSnap.exists) throw new Error(`Client introuvable: ${clientId}`);
+  const { data: clientRow, error: clientError } = await supabase
+    .from('clients')
+    .select('id')
+    .eq('firebase_uid', clientId)
+    .single();
+  if (clientError || !clientRow) throw new Error(`Client introuvable: ${clientId}`);
 
+  const clientRef = db.collection('Clients').doc(clientId);
   const requestsRef = clientRef.collection('Requests');
   const from30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const from90 = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);

@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
-import { getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import { getOrSetJsonWithLock } from '../services/cache.service.js';
 
 export async function getCinemaInfo(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -11,11 +11,14 @@ export async function getCinemaInfo(req: AuthenticatedRequest, res: Response): P
       ttlSeconds: Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : 60,
       lockTtlSeconds: 10,
       fn: async () => {
-        const db = getFirestore();
-        const cinemaSnapshot = await db.collection('iCinema').limit(1).get();
-        if (cinemaSnapshot.empty) return { cinema: null };
-        const cinema = cinemaSnapshot.docs[0].data();
-        return { cinema };
+        const { data: movies, error } = await supabase
+          .from('icinema_movies')
+          .select('*, icinema_seances(*)');
+
+        if (error) throw error;
+        if (!movies || movies.length === 0) return { cinema: null };
+
+        return { cinema: { movies } };
       }
     });
     res.setHeader('X-Cache', cacheStatus);
@@ -33,12 +36,13 @@ export async function getMovies(req: AuthenticatedRequest, res: Response): Promi
       ttlSeconds: Number.isFinite(ttlSeconds) && ttlSeconds > 0 ? ttlSeconds : 60,
       lockTtlSeconds: 10,
       fn: async () => {
-        const db = getFirestore();
-        const cinemaSnapshot = await db.collection('iCinema').limit(1).get();
-        if (cinemaSnapshot.empty) return { movies: [] };
-        const cinemaData = cinemaSnapshot.docs[0].data();
-        const movies = cinemaData.movies || [];
-        return { movies };
+        const { data: movies, error } = await supabase
+          .from('icinema_movies')
+          .select('*, icinema_seances(*)');
+
+        if (error) throw error;
+
+        return { movies: movies || [] };
       }
     });
     res.setHeader('X-Cache', cacheStatus);

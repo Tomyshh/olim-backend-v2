@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import {
   dualWriteToSupabase,
   resolveSupabaseClientId,
@@ -21,17 +22,17 @@ function mapSettingsToSupabase(
 export async function getPreferences(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const prefsDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('settings')
-      .doc('preferences')
-      .get();
+    const { data, error } = await supabase
+      .from('client_settings')
+      .select('*')
+      .eq('client_id', clientId)
+      .maybeSingle();
 
-    const data = prefsDoc.exists ? prefsDoc.data() ?? {} : {};
-    res.json({ preferences: data });
+    if (error) throw error;
+
+    res.json({ preferences: data?.preferences ?? data ?? {} });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

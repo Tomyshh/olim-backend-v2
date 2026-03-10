@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import { dualWriteToSupabase, dualWriteDelete, resolveSupabaseClientId, mapFavoriteRequestToSupabase, dualWriteLegacyRequest } from '../services/dualWrite.service.js';
 
 function computeConseiller(requestType: string, requestCategory: string): string {
@@ -18,20 +19,29 @@ function computeConseiller(requestType: string, requestCategory: string): string
 export async function getRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
     const { status, limit = 50 } = req.query;
 
-    let query = db.collection('Clients').doc(uid).collection('Requests');
+    let query = supabase
+      .from('requests')
+      .select('*')
+      .eq('user_id', uid)
+      .order('request_date', { ascending: false })
+      .limit(Number(limit));
 
     if (status) {
-      query = query.where('Status', '==', status) as any;
+      query = query.eq('status', status);
     }
 
-    const snapshot = await query.orderBy('Request Date', 'desc').limit(Number(limit)).get();
+    const { data, error } = await query;
 
-    const requests = snapshot.docs.map(doc => ({
-      requestId: doc.id,
-      ...doc.data()
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    const requests = (data ?? []).map(r => ({
+      requestId: r.firebase_request_id ?? r.id,
+      ...r
     }));
 
     res.json({ requests });
@@ -44,21 +54,20 @@ export async function getRequestDetail(req: AuthenticatedRequest, res: Response)
   try {
     const uid = req.uid!;
     const { requestId } = req.params;
-    const db = getFirestore();
 
-    const requestDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Requests')
-      .doc(requestId)
-      .get();
+    const { data, error } = await supabase
+      .from('requests')
+      .select('*')
+      .eq('user_id', uid)
+      .or(`firebase_request_id.eq.${requestId},unique_id.eq.${requestId}`)
+      .single();
 
-    if (!requestDoc.exists) {
+    if (error || !data) {
       res.status(404).json({ error: 'Request not found' });
       return;
     }
 
-    res.json({ requestId, ...requestDoc.data() });
+    res.json({ requestId, ...data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -258,16 +267,25 @@ export async function rateRequest(req: AuthenticatedRequest, res: Response): Pro
 export async function getFavoriteRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
-    const favoritesSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('favoriteRequests')
-      .get();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      res.status(404).json({ error: 'Client not found' });
+      return;
+    }
 
-    const favorites = favoritesSnapshot.docs.map(doc => ({
-      favoriteId: doc.id,
-      ...doc.data()
+    const { data, error } = await supabase
+      .from('favorite_requests')
+      .select('*')
+      .eq('client_id', clientId);
+
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    const favorites = (data ?? []).map(f => ({
+      favoriteId: f.firestore_id ?? f.id,
+      ...f
     }));
 
     res.json({ favorites });

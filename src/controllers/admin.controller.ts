@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { admin, getAuth, getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import { dualWriteToSupabase } from '../services/dualWrite.service.js';
 import { spawn } from 'child_process';
 
@@ -152,21 +153,22 @@ export async function publishRemoteConfig(req: AuthenticatedRequest, res: Respon
 
 export async function getRefundRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
     const { status, limit = 100 } = req.query;
 
-    let query = db.collection('RefundRequests').orderBy('createdAt', 'desc');
+    let query = supabase
+      .from('refund_requests')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(Number(limit));
 
     if (status) {
-      query = query.where('status', '==', status) as any;
+      query = query.eq('status', status);
     }
 
-    const snapshot = await query.limit(Number(limit)).get();
+    const { data, error } = await query;
+    if (error) throw error;
 
-    const refunds = snapshot.docs.map(doc => ({
-      refundId: doc.id,
-      ...doc.data()
-    }));
+    const refunds = (data || []).map((r: any) => ({ refundId: r.id, ...r }));
 
     res.json({ refunds });
   } catch (error: any) {
@@ -200,21 +202,22 @@ export async function updateRefundRequest(req: AuthenticatedRequest, res: Respon
 
 export async function getSystemAlerts(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
     const { active, limit = 50 } = req.query;
 
-    let query = db.collection('SystemAlerts').orderBy('createdAt', 'desc');
+    let query = supabase
+      .from('system_alerts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(Number(limit));
 
     if (active === 'true') {
-      query = query.where('active', '==', true) as any;
+      query = query.eq('is_active', true);
     }
 
-    const snapshot = await query.limit(Number(limit)).get();
+    const { data, error } = await query;
+    if (error) throw error;
 
-    const alerts = snapshot.docs.map(doc => ({
-      alertId: doc.id,
-      ...doc.data()
-    }));
+    const alerts = (data || []).map((a: any) => ({ alertId: a.id, ...a }));
 
     res.json({ alerts });
   } catch (error: any) {

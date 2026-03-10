@@ -92,31 +92,38 @@ async function main() {
 
   // 4. Upsert Supabase conseillers table
   console.log('4. Upserting Supabase conseillers table...');
-  // Find directeur role
+  // Find direction role
   const { data: roleData } = await supabase
     .from('roles')
     .select('id')
-    .ilike('slug', '%directeur%')
+    .eq('slug', 'direction')
     .maybeSingle();
 
   const roleId = roleData?.id ?? null;
   if (roleId) {
-    console.log(`   Found role "directeur": ${roleId}`);
+    console.log(`   Found role "direction": ${roleId}`);
   } else {
-    console.log('   ⚠️  No "directeur" role found in roles table, will insert without role_id');
+    console.log('   No "direction" role found in roles table, will insert without role_id');
   }
 
   const { error: upsertErr } = await supabase
     .from('conseillers')
     .upsert({
+      firestore_id: uid,
       firebase_uid: uid,
       name: NAME,
       email: EMAIL,
       role_id: roleId,
       is_active: true,
+      is_admin: true,
+      is_super_admin: true,
+      is_present: true,
+      manage_elite: true,
+      languages: { fr: true, he: true, en: true },
+      metadata: {},
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
-    }, { onConflict: 'firebase_uid' });
+    }, { onConflict: 'firestore_id' });
 
   if (upsertErr) {
     console.error('   ❌ Supabase conseillers error:', upsertErr.message);

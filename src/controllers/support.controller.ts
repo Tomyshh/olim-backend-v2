@@ -1,17 +1,19 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import { dualWriteToSupabase, resolveSupabaseClientId, mapSupportTicketToSupabase, mapContactMessageToSupabase } from '../services/dualWrite.service.js';
 
 export async function getFAQs(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
-    const faqsSnapshot = await db.collection('FAQs').orderBy('order', 'asc').get();
+    const { data, error } = await supabase
+      .from('faqs')
+      .select('*')
+      .order('order', { ascending: true });
 
-    const faqs = faqsSnapshot.docs.map(doc => ({
-      faqId: doc.id,
-      ...doc.data()
-    }));
+    if (error) throw error;
+
+    const faqs = (data || []).map((f: any) => ({ faqId: f.id, ...f }));
 
     res.json({ faqs });
   } catch (error: any) {
@@ -21,13 +23,13 @@ export async function getFAQs(req: AuthenticatedRequest, res: Response): Promise
 
 export async function getSupportContacts(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
-    const contactsSnapshot = await db.collection('SupportContacts').get();
+    const { data, error } = await supabase
+      .from('support_contacts')
+      .select('*');
 
-    const contacts = contactsSnapshot.docs.map(doc => ({
-      contactId: doc.id,
-      ...doc.data()
-    }));
+    if (error) throw error;
+
+    const contacts = (data || []).map((c: any) => ({ contactId: c.id, ...c }));
 
     res.json({ contacts });
   } catch (error: any) {
@@ -67,19 +69,17 @@ export async function sendContactMessage(req: AuthenticatedRequest, res: Respons
 export async function getSupportTickets(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const ticketsSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('support_tickets')
-      .orderBy('createdAt', 'desc')
-      .get();
+    const { data, error } = await supabase
+      .from('support_tickets')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false });
 
-    const tickets = ticketsSnapshot.docs.map(doc => ({
-      ticketId: doc.id,
-      ...doc.data()
-    }));
+    if (error) throw error;
+
+    const tickets = (data || []).map((t: any) => ({ ticketId: t.id, ...t }));
 
     res.json({ tickets });
   } catch (error: any) {
@@ -138,21 +138,23 @@ export async function getSupportTicketDetail(req: AuthenticatedRequest, res: Res
   try {
     const uid = req.uid!;
     const { ticketId } = req.params;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const ticketDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('support_tickets')
-      .doc(ticketId)
-      .get();
+    const { data, error } = await supabase
+      .from('support_tickets')
+      .select('*')
+      .eq('client_id', clientId)
+      .eq('id', ticketId)
+      .maybeSingle();
 
-    if (!ticketDoc.exists) {
+    if (error) throw error;
+
+    if (!data) {
       res.status(404).json({ error: 'Support ticket not found' });
       return;
     }
 
-    res.json({ ticketId, ...ticketDoc.data() });
+    res.json({ ticketId: data.id, ...data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -166,8 +166,9 @@ export async function v1CreateRequestDraft(req: AuthenticatedRequest, res: Respo
     // Limite "max 10" par utilisateur: on évince le plus ancien si besoin.
     const existingSnap = await tx.get(col.orderBy('updated_at', 'desc').limit(MAX_DRAFTS_PER_USER));
     if (existingSnap.size >= MAX_DRAFTS_PER_USER) {
-      const oldest = existingSnap.docs[existingSnap.docs.length - 1];
+      const oldest = existingSnap.docs[existingSnap.docs.length - 1]!;
       tx.delete(oldest.ref);
+      dualWriteDelete('request_drafts', 'firestore_id', oldest.id).catch(() => {});
     }
 
     tx.set(
@@ -229,9 +230,15 @@ export async function v1ListRequestDrafts(req: AuthenticatedRequest, res: Respon
     })
     .map((d) => serializeDraft(d));
 
-  // Nettoyage opportuniste (non bloquant) des drafts expirés
   if (expiredRefs.length) {
-    void Promise.allSettled(expiredRefs.map((r) => r.delete()));
+    void Promise.allSettled(
+      expiredRefs.map((r) => {
+        const expiredId = r.id;
+        return r.delete().then(() => {
+          dualWriteDelete('request_drafts', 'firestore_id', expiredId).catch(() => {});
+        });
+      })
+    );
   }
 
   res.status(200).json({ drafts });

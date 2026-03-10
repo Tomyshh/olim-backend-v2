@@ -29,11 +29,140 @@ CREATE TABLE public.advertisements (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT advertisements_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.announcements (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  title text NOT NULL,
+  content text NOT NULL,
+  is_active boolean NOT NULL DEFAULT true,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT announcements_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.app_config (
   key text NOT NULL,
   value jsonb NOT NULL,
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT app_config_pkey PRIMARY KEY (key)
+);
+CREATE TABLE public.appointments (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid NOT NULL,
+  request_id text,
+  slot_id text,
+  appointment_date text,
+  appointment_time text,
+  status text NOT NULL DEFAULT 'scheduled'::text,
+  notes text DEFAULT ''::text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT appointments_pkey PRIMARY KEY (id),
+  CONSTRAINT appointments_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.available_slots (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text UNIQUE,
+  slot_date text,
+  slot_time text,
+  is_available boolean NOT NULL DEFAULT true,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT available_slots_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.chat_conversations (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text UNIQUE,
+  client_id uuid NOT NULL,
+  request_id text,
+  title text DEFAULT 'Nouvelle conversation'::text,
+  last_message text,
+  last_message_at timestamp with time zone,
+  unread_count integer NOT NULL DEFAULT 0,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT chat_conversations_pkey PRIMARY KEY (id),
+  CONSTRAINT chat_conversations_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.chat_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  conversation_id uuid NOT NULL,
+  sender_id text NOT NULL,
+  sender_name text,
+  content text,
+  type text NOT NULL DEFAULT 'text'::text,
+  attachments jsonb NOT NULL DEFAULT '[]'::jsonb,
+  is_read boolean NOT NULL DEFAULT false,
+  read_at timestamp with time zone,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT chat_messages_pkey PRIMARY KEY (id),
+  CONSTRAINT chat_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.chat_conversations(id)
+);
+CREATE TABLE public.chatcc (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text UNIQUE,
+  client_id text NOT NULL,
+  counselor_id text NOT NULL,
+  counselor_name text,
+  request_id text,
+  is_done boolean NOT NULL DEFAULT false,
+  is_done_by text,
+  last_message text,
+  last_timestamp timestamp with time zone,
+  welcome_shown_to_client boolean DEFAULT false,
+  welcome_shown_at timestamp with time zone,
+  unread_for_client integer DEFAULT 0,
+  unread_for_counselor integer DEFAULT 0,
+  is_favorite boolean DEFAULT false,
+  closed_chat_date timestamp with time zone,
+  satisfaction_score integer,
+  chat_rating integer,
+  chat_rating_date timestamp with time zone,
+  chat_rating_skipped boolean,
+  chat_rating_tags jsonb DEFAULT '[]'::jsonb,
+  evaluation_date timestamp with time zone,
+  evaluation_feedback text,
+  evaluation_strengths text,
+  evaluation_improvements text,
+  evaluation_note text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT chatcc_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.chatcc_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  chatcc_id uuid NOT NULL,
+  client_id text,
+  request_id text,
+  sender_id text NOT NULL,
+  sender_name text,
+  content text,
+  type text NOT NULL DEFAULT 'text'::text,
+  file_url text,
+  is_uploading boolean DEFAULT false,
+  read_by jsonb DEFAULT '[]'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT chatcc_messages_pkey PRIMARY KEY (id),
+  CONSTRAINT chatcc_messages_chatcc_id_fkey FOREIGN KEY (chatcc_id) REFERENCES public.chatcc(id)
+);
+CREATE TABLE public.client_access_credentials (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid,
+  title text,
+  username text,
+  securden_id text,
+  family_members jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  client_firebase_uid text,
+  CONSTRAINT client_access_credentials_pkey PRIMARY KEY (id),
+  CONSTRAINT client_access_credentials_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
 );
 CREATE TABLE public.client_activity_history (
   id bigint NOT NULL DEFAULT nextval('client_activity_history_id_seq'::regclass),
@@ -63,8 +192,25 @@ CREATE TABLE public.client_addresses (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  firestore_id text,
+  name text,
+  additional_info text,
+  details text,
+  is_active boolean NOT NULL DEFAULT true,
+  order_index integer DEFAULT 0,
   CONSTRAINT client_addresses_pkey PRIMARY KEY (id),
   CONSTRAINT client_addresses_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.client_creation_locks (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  lock_key text NOT NULL UNIQUE,
+  email text,
+  firebase_uid text,
+  status text NOT NULL DEFAULT 'in_progress'::text,
+  last_error text,
+  started_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT client_creation_locks_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.client_devices (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -97,6 +243,12 @@ CREATE TABLE public.client_documents (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  firestore_id text,
+  file_url text,
+  file_path text,
+  file_name text,
+  content_type text,
+  file_size integer,
   CONSTRAINT client_documents_pkey PRIMARY KEY (id),
   CONSTRAINT client_documents_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
 );
@@ -112,6 +264,18 @@ CREATE TABLE public.client_fcm_tokens (
   CONSTRAINT client_fcm_tokens_pkey PRIMARY KEY (id),
   CONSTRAINT client_fcm_tokens_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
 );
+CREATE TABLE public.client_logs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid,
+  client_firebase_uid text,
+  action text NOT NULL,
+  description text NOT NULL DEFAULT ''::text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT client_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT client_logs_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
 CREATE TABLE public.client_phones (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   client_id uuid NOT NULL,
@@ -123,6 +287,14 @@ CREATE TABLE public.client_phones (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT client_phones_pkey PRIMARY KEY (id),
   CONSTRAINT client_phones_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.client_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL UNIQUE,
+  preferences jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT client_settings_pkey PRIMARY KEY (id),
+  CONSTRAINT client_settings_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
 );
 CREATE TABLE public.clients (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -143,6 +315,16 @@ CREATE TABLE public.clients (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  membership_type text,
+  membership_status text,
+  is_unpaid boolean NOT NULL DEFAULT false,
+  free_access jsonb,
+  seniority jsonb,
+  created_from text,
+  securden_folder text,
+  promo_code_used text,
+  last_login_at timestamp with time zone,
+  firestore_id text,
   CONSTRAINT clients_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.conseillers (
@@ -156,6 +338,36 @@ CREATE TABLE public.conseillers (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT conseillers_pkey PRIMARY KEY (id),
   CONSTRAINT conseillers_role_id_fkey FOREIGN KEY (role_id) REFERENCES public.roles(id)
+);
+CREATE TABLE public.conseillers_v2 (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text UNIQUE,
+  name text NOT NULL,
+  email text,
+  is_admin boolean NOT NULL DEFAULT false,
+  is_super_admin boolean NOT NULL DEFAULT false,
+  is_present boolean NOT NULL DEFAULT false,
+  manage_elite boolean NOT NULL DEFAULT false,
+  languages jsonb NOT NULL DEFAULT '{}'::jsonb,
+  now_request text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT conseillers_v2_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.contact_messages (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_firebase_uid text,
+  name text,
+  email text,
+  phone text,
+  subject text,
+  message text,
+  status text NOT NULL DEFAULT 'new'::text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT contact_messages_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.daily_platform_stats (
   date date NOT NULL,
@@ -182,6 +394,19 @@ CREATE TABLE public.delete_user_requests (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT delete_user_requests_pkey PRIMARY KEY (id)
 );
+CREATE TABLE public.dual_write_failures (
+  id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
+  target_table text NOT NULL,
+  operation text NOT NULL,
+  payload jsonb NOT NULL,
+  error_message text,
+  error_stack text,
+  retry_count integer NOT NULL DEFAULT 0,
+  resolved boolean NOT NULL DEFAULT false,
+  resolved_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT dual_write_failures_pkey PRIMARY KEY (id)
+);
 CREATE TABLE public.family_members (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   client_id uuid NOT NULL,
@@ -194,8 +419,148 @@ CREATE TABLE public.family_members (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  firestore_id text,
+  father_name text,
+  koupat_holim text,
+  email text,
+  phone text,
+  is_active boolean NOT NULL DEFAULT true,
+  deactivated_at timestamp with time zone,
+  monthly_supplement_cents integer,
+  has_gov_access boolean,
+  is_connected boolean,
+  lives_at_home boolean,
+  service_active boolean,
+  billing_exempt boolean,
+  billing_exempt_reason text,
+  validation_status text,
+  relationship_type text,
+  is_child boolean,
+  service_activated_at timestamp with time zone,
+  reactivated_at timestamp with time zone,
+  selected_card_id text,
   CONSTRAINT family_members_pkey PRIMARY KEY (id),
   CONSTRAINT family_members_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.faqs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  question text NOT NULL,
+  answer text NOT NULL,
+  category text,
+  display_order integer DEFAULT 0,
+  is_active boolean NOT NULL DEFAULT true,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT faqs_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.favorite_requests (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text UNIQUE,
+  client_id uuid NOT NULL,
+  category_id text,
+  sub_category_id text,
+  category_title text,
+  sub_category_title text,
+  request_type text,
+  last_used timestamp with time zone,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT favorite_requests_pkey PRIMARY KEY (id),
+  CONSTRAINT favorite_requests_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.health_configs (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL UNIQUE,
+  config jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT health_configs_pkey PRIMARY KEY (id),
+  CONSTRAINT health_configs_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.health_requests (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid,
+  client_firebase_uid text,
+  request_type text NOT NULL DEFAULT 'general'::text,
+  description text DEFAULT ''::text,
+  data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  status text NOT NULL DEFAULT 'pending'::text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT health_requests_pkey PRIMARY KEY (id),
+  CONSTRAINT health_requests_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.icinema_movies (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text UNIQUE,
+  title text,
+  language text,
+  age_rating text,
+  duration text,
+  genre text,
+  image_large text,
+  image_long text,
+  director text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT icinema_movies_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.icinema_seances (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  movie_id uuid NOT NULL,
+  showtime timestamp with time zone,
+  hall text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT icinema_seances_pkey PRIMARY KEY (id),
+  CONSTRAINT icinema_seances_movie_id_fkey FOREIGN KEY (movie_id) REFERENCES public.icinema_movies(id)
+);
+CREATE TABLE public.idempotency_keys (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  idempotency_key text NOT NULL UNIQUE,
+  request_id text,
+  client_firebase_uid text,
+  result jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  expires_at timestamp with time zone,
+  CONSTRAINT idempotency_keys_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.invoices (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid,
+  client_firebase_uid text,
+  amount_cents integer,
+  currency text NOT NULL DEFAULT 'ILS'::text,
+  description text,
+  invoice_date timestamp with time zone,
+  payment_method text,
+  payme_transaction_id text,
+  status text NOT NULL DEFAULT 'paid'::text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT invoices_pkey PRIMARY KEY (id),
+  CONSTRAINT invoices_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.job_leases (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  job_id text NOT NULL UNIQUE,
+  status text NOT NULL DEFAULT 'idle'::text,
+  last_success_at timestamp with time zone,
+  last_error text,
+  last_error_at timestamp with time zone,
+  locked_by text,
+  locked_at timestamp with time zone,
+  stats jsonb NOT NULL DEFAULT '{}'::jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT job_leases_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.lead_assignment_rules (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -222,6 +587,19 @@ CREATE TABLE public.lead_attachments (
   CONSTRAINT lead_attachments_pkey PRIMARY KEY (id),
   CONSTRAINT lead_attachments_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
 );
+CREATE TABLE public.lead_interaction_edits (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  lead_interaction_id uuid NOT NULL,
+  lead_id uuid NOT NULL,
+  edited_by text NOT NULL,
+  edited_by_name text,
+  old_values jsonb NOT NULL DEFAULT '{}'::jsonb,
+  new_values jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT lead_interaction_edits_pkey PRIMARY KEY (id),
+  CONSTRAINT lead_interaction_edits_lead_interaction_id_fkey FOREIGN KEY (lead_interaction_id) REFERENCES public.lead_interactions(id),
+  CONSTRAINT lead_interaction_edits_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+);
 CREATE TABLE public.lead_interactions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   lead_id uuid NOT NULL,
@@ -232,6 +610,17 @@ CREATE TABLE public.lead_interactions (
   next_action text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  is_draft boolean NOT NULL DEFAULT false,
+  detailed_comment text,
+  lead_answered boolean,
+  reminder_at timestamp with time zone,
+  status_slug text,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_by text,
+  updated_by_name text,
+  validated_at timestamp with time zone,
+  validated_by text,
+  validated_by_name text,
   CONSTRAINT lead_interactions_pkey PRIMARY KEY (id),
   CONSTRAINT lead_interactions_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
 );
@@ -266,7 +655,9 @@ CREATE TABLE public.lead_reminders (
   treated boolean NOT NULL DEFAULT false,
   treated_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  call_interaction_id uuid,
   CONSTRAINT lead_reminders_pkey PRIMARY KEY (id),
+  CONSTRAINT lead_reminders_call_interaction_id_fkey FOREIGN KEY (call_interaction_id) REFERENCES public.lead_interactions(id),
   CONSTRAINT lead_reminders_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
 );
 CREATE TABLE public.lead_score_rules (
@@ -355,6 +746,43 @@ CREATE TABLE public.leads (
   CONSTRAINT leads_status_id_fkey FOREIGN KEY (status_id) REFERENCES public.lead_pipeline_statuses(id),
   CONSTRAINT leads_source_id_fkey FOREIGN KEY (source_id) REFERENCES public.lead_sources(id)
 );
+CREATE TABLE public.news (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text UNIQUE,
+  title text,
+  content text,
+  category text,
+  is_breaking boolean NOT NULL DEFAULT false,
+  is_active boolean NOT NULL DEFAULT true,
+  display_order integer DEFAULT 0,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT news_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.notification_settings (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  client_id uuid NOT NULL UNIQUE,
+  settings jsonb NOT NULL DEFAULT '{}'::jsonb,
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT notification_settings_pkey PRIMARY KEY (id),
+  CONSTRAINT notification_settings_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.notifications (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid NOT NULL,
+  title text,
+  body text,
+  type text,
+  is_read boolean NOT NULL DEFAULT false,
+  read_at timestamp with time zone,
+  data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT notifications_pkey PRIMARY KEY (id),
+  CONSTRAINT notifications_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
 CREATE TABLE public.partners (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   firestore_id text UNIQUE,
@@ -365,13 +793,21 @@ CREATE TABLE public.partners (
   category text,
   partner_type text,
   waze text,
-  is_active boolean,
+  is_active boolean NOT NULL DEFAULT true,
   is_vip boolean,
   keywords ARRAY,
   subtitle ARRAY,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  vip boolean NOT NULL DEFAULT false,
+  categorie text,
+  adresse text,
+  villes jsonb NOT NULL DEFAULT '[]'::jsonb,
+  langues jsonb NOT NULL DEFAULT '[]'::jsonb,
+  images jsonb NOT NULL DEFAULT '[]'::jsonb,
+  icon text,
+  icon_vip text,
   CONSTRAINT partners_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.payment_credentials (
@@ -390,6 +826,7 @@ CREATE TABLE public.payment_credentials (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  firestore_id text,
   CONSTRAINT payment_credentials_pkey PRIMARY KEY (id),
   CONSTRAINT payment_credentials_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
 );
@@ -408,6 +845,21 @@ CREATE TABLE public.phone_otp_codes (
   user_agent text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT phone_otp_codes_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.phone_otp_sessions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  purpose text NOT NULL,
+  phone_number text NOT NULL,
+  firebase_uid text,
+  code_hash text,
+  attempts integer NOT NULL DEFAULT 0,
+  request_count integer NOT NULL DEFAULT 0,
+  expires_at timestamp with time zone NOT NULL,
+  consumed_at timestamp with time zone,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT phone_otp_sessions_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.promo_codes (
   code text NOT NULL,
@@ -435,6 +887,87 @@ CREATE TABLE public.promo_redemptions (
   CONSTRAINT promo_redemptions_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id),
   CONSTRAINT promo_redemptions_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES public.subscriptions(id)
 );
+CREATE TABLE public.promo_reverts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_firebase_uid text NOT NULL,
+  promo_code text,
+  promotion_id text,
+  revert_at timestamp with time zone NOT NULL,
+  base_price_cents integer,
+  discounted_price_cents integer,
+  plan_type text,
+  membership_type text,
+  payme_sub_id text,
+  duration_cycles integer,
+  status text NOT NULL DEFAULT 'pending'::text,
+  source text,
+  completed_at timestamp with time zone,
+  skip_reason text,
+  last_error text,
+  last_error_at timestamp with time zone,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT promo_reverts_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.promotions (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text UNIQUE,
+  code text NOT NULL,
+  code_normalized text,
+  is_valid boolean NOT NULL DEFAULT true,
+  for_everyone boolean NOT NULL DEFAULT false,
+  membership_type text,
+  applicable_memberships jsonb DEFAULT '[]'::jsonb,
+  plan_type text,
+  applicable_plans jsonb DEFAULT '[]'::jsonb,
+  discount_percent integer,
+  discount_amount_cents integer,
+  duration_cycles integer,
+  expiration_date timestamp with time zone,
+  source text,
+  used_by_uid text,
+  used_at timestamp with time zone,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT promotions_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.refund_requests (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid,
+  client_firebase_uid text,
+  amount_cents integer,
+  reason text,
+  status text NOT NULL DEFAULT 'pending'::text,
+  reviewed_by text,
+  reviewed_at timestamp with time zone,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT refund_requests_pkey PRIMARY KEY (id),
+  CONSTRAINT refund_requests_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.request_drafts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid NOT NULL,
+  draft_type text NOT NULL,
+  title text,
+  category text,
+  subcategory text,
+  progress numeric DEFAULT 0,
+  current_step text,
+  snapshot_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+  uploaded_urls jsonb NOT NULL DEFAULT '[]'::jsonb,
+  client_temp_id text,
+  expires_at timestamp with time zone,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT request_drafts_pkey PRIMARY KEY (id),
+  CONSTRAINT request_drafts_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
 CREATE TABLE public.request_files (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   request_id uuid NOT NULL,
@@ -444,6 +977,26 @@ CREATE TABLE public.request_files (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT request_files_pkey PRIMARY KEY (id),
   CONSTRAINT request_files_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id)
+);
+CREATE TABLE public.request_pending_processes (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  request_firestore_id text,
+  client_firebase_uid text,
+  request_type text,
+  date text,
+  description text,
+  missing_doc text,
+  missing_text text,
+  response_text text,
+  waiting_info_from_client boolean DEFAULT false,
+  is_opened boolean DEFAULT false,
+  response_doc jsonb DEFAULT '[]'::jsonb,
+  missing_type text,
+  done boolean DEFAULT false,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT request_pending_processes_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.request_status_events (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
@@ -528,8 +1081,10 @@ CREATE TABLE public.requests (
   sync_date timestamp with time zone,
   client_id uuid,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  assigned_to_conseiller_id uuid,
   CONSTRAINT requests_pkey PRIMARY KEY (id),
-  CONSTRAINT requests_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+  CONSTRAINT requests_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id),
+  CONSTRAINT requests_assigned_to_conseiller_id_fkey FOREIGN KEY (assigned_to_conseiller_id) REFERENCES public.conseillers(id)
 );
 CREATE TABLE public.roles (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -541,6 +1096,16 @@ CREATE TABLE public.roles (
   display_order integer NOT NULL DEFAULT 0,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT roles_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.subscription_change_quotes (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid NOT NULL,
+  quote_data jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  expires_at timestamp with time zone,
+  CONSTRAINT subscription_change_quotes_pkey PRIMARY KEY (id),
+  CONSTRAINT subscription_change_quotes_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
 );
 CREATE TABLE public.subscription_events (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
@@ -584,8 +1149,63 @@ CREATE TABLE public.subscriptions (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  firestore_id text,
+  is_active boolean,
+  is_paused boolean,
+  will_expire boolean,
+  is_annual boolean,
+  family_supplement_cents integer,
   CONSTRAINT subscriptions_pkey PRIMARY KEY (id),
   CONSTRAINT subscriptions_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.support_contacts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  name text NOT NULL,
+  role text,
+  email text,
+  phone text,
+  whatsapp text,
+  is_active boolean NOT NULL DEFAULT true,
+  display_order integer DEFAULT 0,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT support_contacts_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.support_tickets (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  client_id uuid,
+  client_firebase_uid text,
+  subject text NOT NULL,
+  description text,
+  priority text NOT NULL DEFAULT 'normal'::text,
+  status text NOT NULL DEFAULT 'open'::text,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT support_tickets_pkey PRIMARY KEY (id),
+  CONSTRAINT support_tickets_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+);
+CREATE TABLE public.system_alerts (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  firestore_id text,
+  alert_type text NOT NULL,
+  title text,
+  message text,
+  severity text NOT NULL DEFAULT 'info'::text,
+  is_active boolean NOT NULL DEFAULT true,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  resolved_at timestamp with time zone,
+  CONSTRAINT system_alerts_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.tip_likes (
+  id text NOT NULL,
+  tip_id text NOT NULL,
+  client_firebase_uid text NOT NULL,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT tip_likes_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.tip_translations (
   tip_id uuid NOT NULL,
@@ -602,6 +1222,18 @@ CREATE TABLE public.tips (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT tips_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.user_saved_tips (
+  id text NOT NULL,
+  client_id uuid,
+  client_firebase_uid text,
+  tip_id text,
+  title text,
+  content text,
+  saved_at timestamp with time zone NOT NULL DEFAULT now(),
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  CONSTRAINT user_saved_tips_pkey PRIMARY KEY (id),
+  CONSTRAINT user_saved_tips_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
 );
 CREATE TABLE public.voice_requests (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,

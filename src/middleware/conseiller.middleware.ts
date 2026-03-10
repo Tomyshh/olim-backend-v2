@@ -1,10 +1,16 @@
 import type { NextFunction, Response } from 'express';
-import { getFirestore } from '../config/firebase.js';
 import type { AuthenticatedRequest } from './auth.middleware.js';
+import { supabase } from '../services/supabase.service.js';
 
-/**
- * Autorise uniquement les conseillers : doc Firestore Conseillers2/{uid} existant.
- */
+async function getConseillerByFirebaseUid(uid: string) {
+  const { data } = await supabase
+    .from('conseillers')
+    .select('*')
+    .eq('firestore_id', uid)
+    .single();
+  return data;
+}
+
 export async function requireConseiller(
   req: AuthenticatedRequest,
   res: Response,
@@ -17,16 +23,14 @@ export async function requireConseiller(
       return;
     }
 
-    const db = getFirestore();
-    const snap = await db.collection('Conseillers2').doc(uid).get();
-    if (!snap.exists) {
+    const data = await getConseillerByFirebaseUid(uid);
+    if (!data) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas conseiller.", error: "Accès refusé : vous n'êtes pas conseiller." });
       return;
     }
 
-    const data = snap.data() || {};
-    (req as any).isAdmin = data.isAdmin === true;
-    (req as any).conseillerName = data.Name || data.name || '';
+    (req as any).isAdmin = data.is_admin === true;
+    (req as any).conseillerName = data.name || '';
 
     next();
   } catch (err) {
@@ -34,10 +38,6 @@ export async function requireConseiller(
   }
 }
 
-/**
- * Autorise uniquement les admins : doc Firestore Conseillers2/{uid}.isAdmin === true.
- * (Contrat attendu par la page Admin "Config".)
- */
 export async function requireAdmin(
   req: AuthenticatedRequest,
   res: Response,
@@ -50,15 +50,13 @@ export async function requireAdmin(
       return;
     }
 
-    const db = getFirestore();
-    const snap = await db.collection('Conseillers2').doc(uid).get();
-    if (!snap.exists) {
+    const data = await getConseillerByFirebaseUid(uid);
+    if (!data) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas admin.", error: "Accès refusé : vous n'êtes pas admin." });
       return;
     }
 
-    const data = snap.data() || {};
-    if (data.isAdmin !== true) {
+    if (data.is_admin !== true) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas admin.", error: "Accès refusé : vous n'êtes pas admin." });
       return;
     }
@@ -69,10 +67,6 @@ export async function requireAdmin(
   }
 }
 
-/**
- * Autorise uniquement les superAdmin : doc Firestore Conseillers2/{uid}.superAdmin === true.
- * (Spéc: reset password conseiller via Firebase Auth)
- */
 export async function requireSuperAdmin(
   req: AuthenticatedRequest,
   res: Response,
@@ -85,15 +79,14 @@ export async function requireSuperAdmin(
       return;
     }
 
-    const db = getFirestore();
-    const snap = await db.collection('Conseillers2').doc(uid).get();
-    if (!snap.exists) {
+    const data = await getConseillerByFirebaseUid(uid);
+    if (!data) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas superAdmin.", error: "Accès refusé : vous n'êtes pas superAdmin." });
       return;
     }
 
-    const data = snap.data() || {};
-    if (data.superAdmin !== true) {
+    const isSuperAdmin = data.is_super_admin === true || (data.metadata as any)?.superAdmin === true;
+    if (!isSuperAdmin) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas superAdmin.", error: "Accès refusé : vous n'êtes pas superAdmin." });
       return;
     }

@@ -1,5 +1,6 @@
 import { supabase } from './supabase.service.js';
 import { getFirestore } from '../config/firebase.js';
+import { dualWriteConseiller } from './dualWrite.service.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -241,7 +242,9 @@ export async function updateConseiller(conseillerId: string, updates: Record<str
   const db = getFirestore();
   await db.collection('Conseillers2').doc(conseillerId).update(updates);
   const doc = await db.collection('Conseillers2').doc(conseillerId).get();
-  return { id: doc.id, ...doc.data() };
+  const data = doc.data() ?? {};
+  dualWriteConseiller(conseillerId, data).catch(() => {});
+  return { id: doc.id, ...data };
 }
 
 // ---------------------------------------------------------------------------
@@ -250,7 +253,7 @@ export async function updateConseiller(conseillerId: string, updates: Record<str
 
 export async function listPromotions() {
   const { data, error } = await supabase
-    .from('promo_codes')
+    .from('promotions')
     .select('*')
     .order('created_at', { ascending: false });
 
@@ -260,7 +263,7 @@ export async function listPromotions() {
 
 export async function createPromotion(payload: Record<string, unknown>) {
   const { data, error } = await supabase
-    .from('promo_codes')
+    .from('promotions')
     .insert(payload)
     .select()
     .single();
@@ -271,7 +274,7 @@ export async function createPromotion(payload: Record<string, unknown>) {
 
 export async function updatePromotion(promoId: string, updates: Record<string, unknown>) {
   const { data, error } = await supabase
-    .from('promo_codes')
+    .from('promotions')
     .update(updates)
     .eq('id', promoId)
     .select()
@@ -283,7 +286,7 @@ export async function updatePromotion(promoId: string, updates: Record<string, u
 
 export async function deletePromotion(promoId: string) {
   const { error } = await supabase
-    .from('promo_codes')
+    .from('promotions')
     .delete()
     .eq('id', promoId);
 

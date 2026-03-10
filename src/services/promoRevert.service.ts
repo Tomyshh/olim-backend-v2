@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { admin, getFirestore } from '../config/firebase.js';
 import { paymeSetSubscriptionPrice } from './payme.service.js';
 import { dualWriteSubscription, dualWriteToSupabase } from './dualWrite.service.js';
+import { supabase } from './supabase.service.js';
 
 // ---------------------------------------------------------------------------
 // Utilitaires
@@ -304,63 +305,67 @@ async function runPromoRevertJob(): Promise<Record<string, any> | null> {
     const db = getFirestore();
     const now = new Date();
 
-    // Requêter les PromoReverts en attente dont la date de revert est passée
-    const snap = await db
-      .collection('PromoReverts')
-      .where('status', '==', 'pending')
-      .where('revertAt', '<=', now)
-      .limit(100) // Limiter par batch pour éviter les surcharges
-      .get();
+    const { data: promoRows, error: promoError } = await supabase
+      .from('promo_reverts')
+      .select('*')
+      .eq('status', 'pending')
+      .lte('revert_at', now.toISOString())
+      .limit(100);
 
-    if (snap.empty) {
+    if (promoError) {
+      console.error('[promo-revert] Supabase query error:', promoError.message);
+      await releaseJobLeaseOnError(runId, promoError.message);
+      throw new Error(promoError.message);
+    }
+
+    if (!promoRows || promoRows.length === 0) {
       console.log('[promo-revert] Aucun revert à traiter.');
       await releaseJobLease(runId, stats);
       return stats;
     }
 
-    console.log(`[promo-revert] ${snap.size} revert(s) à traiter.`);
+    console.log(`[promo-revert] ${promoRows.length} revert(s) à traiter.`);
 
-    for (const doc of snap.docs) {
-      const data = doc.data() as any;
+    for (const row of promoRows) {
+      const docId = String(row.firestore_id || '');
 
-      const revertAt = toDateOrNull(data.revertAt);
-      if (!revertAt) {
+      const revertAt = toDateOrNull(row.revert_at);
+      if (!revertAt || !docId) {
         stats.skipped++;
         stats.processed++;
         continue;
       }
 
       const promoRevertData: PromoRevertDoc = {
-        uid: pickString(data.uid),
-        promoCode: pickString(data.promoCode),
-        promotionId: pickString(data.promotionId),
+        uid: pickString(row.client_firebase_uid),
+        promoCode: pickString(row.promo_code),
+        promotionId: pickString(row.promotion_id),
         revertAt,
-        basePriceInCents: Number(data.basePriceInCents) || 0,
-        discountedPriceInCents: Number(data.discountedPriceInCents) || 0,
-        planType: data.planType === 'annual' ? 'annual' : 'monthly',
-        membershipType: pickString(data.membershipType),
-        paymeSubId: pickString(data.paymeSubId) || null,
+        basePriceInCents: Number(row.base_price_cents) || 0,
+        discountedPriceInCents: Number(row.discounted_price_cents) || 0,
+        planType: row.plan_type === 'annual' ? 'annual' : 'monthly',
+        membershipType: pickString(row.membership_type),
+        paymeSubId: pickString(row.payme_sub_id) || null,
         status: 'pending'
       };
 
       if (!promoRevertData.uid || !promoRevertData.basePriceInCents) {
         stats.skipped++;
         stats.processed++;
-        await db.collection('PromoReverts').doc(doc.id).set(
+        await db.collection('PromoReverts').doc(docId).set(
           { status: 'skipped', skipReason: 'invalid_data', completedAt: admin.firestore.FieldValue.serverTimestamp() },
           { merge: true }
         ).catch(() => {});
-        dualWriteToSupabase('promo_reverts', { firestore_id: doc.id, status: 'skipped', skip_reason: 'invalid_data', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
+        dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'invalid_data', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
         continue;
       }
 
-      const result = await revertSinglePromo(doc.id, promoRevertData);
+      const result = await revertSinglePromo(docId, promoRevertData);
       stats[result]++;
       stats.processed++;
     }
 
-    // Si on a traité 100 docs, il y en a peut-être d'autres
-    if (snap.size >= 100) {
+    if (promoRows.length >= 100) {
       console.log('[promo-revert] Batch max atteint, les restants seront traités au prochain run.');
     }
 

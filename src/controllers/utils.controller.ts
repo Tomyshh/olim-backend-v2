@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
-import { getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import { getJsonFromCache, setJsonInCache } from '../services/cache.service.js';
 
 const AI_KEY_CACHE_KEY = 'utils:openai:key';
@@ -11,10 +11,15 @@ export async function getMembershipDetails(
   res: Response
 ): Promise<void> {
   try {
-    const db = getFirestore();
-    const doc = await db.collection('Utils').doc('membership_details').get();
-    const data = doc.exists ? doc.data() ?? {} : {};
-    res.json({ details: data });
+    const { data, error } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', 'membership_details')
+      .maybeSingle();
+
+    if (error) throw error;
+
+    res.json({ details: data?.value ?? {} });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -25,10 +30,15 @@ export async function getServiceAvailability(
   res: Response
 ): Promise<void> {
   try {
-    const db = getFirestore();
-    const doc = await db.collection('Utils').doc('urgency').get();
-    const data = doc.exists ? doc.data() ?? {} : {};
-    res.json({ availability: data });
+    const { data, error } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', 'urgency')
+      .maybeSingle();
+
+    if (error) throw error;
+
+    res.json({ availability: data?.value ?? {} });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -42,10 +52,15 @@ export async function getAiKey(req: AuthenticatedRequest, res: Response): Promis
       return;
     }
 
-    const db = getFirestore();
-    const doc = await db.collection('Utils').doc('openai').get();
-    const data = doc.exists ? doc.data() ?? {} : {};
-    const key = (data as any).key ?? null;
+    const { data, error } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', 'openai')
+      .maybeSingle();
+
+    if (error) throw error;
+
+    const key = (data?.value as any)?.key ?? null;
 
     if (key) {
       try {

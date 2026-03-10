@@ -145,32 +145,37 @@ function extractPromoDurationCycles(doc: Record<string, any>): number | null {
 }
 
 export async function loadPromotionByCode(promoCodeNormalized: string): Promise<{ id: string; data: Record<string, any> } | null> {
-  const db = getFirestore();
+  const { supabase } = await import('./supabase.service.js');
 
-  // 1) Tentative docId direct
-  const byId = await db.collection('Promotions').doc(promoCodeNormalized).get().catch(() => null as any);
-  if (byId?.exists) return { id: byId.id, data: (byId.data() || {}) as any };
-
-  // 2) Tentative where("code" == raw)
-  const snap = await db
-    .collection('Promotions')
-    .where('codeNormalized', '==', promoCodeNormalized)
+  const { data } = await supabase
+    .from('promotions')
+    .select('*')
+    .or(`code.eq.${promoCodeNormalized},code_normalized.eq.${promoCodeNormalized},firestore_id.eq.${promoCodeNormalized}`)
     .limit(1)
-    .get()
-    .catch(() => null as any);
-  if (snap && !snap.empty) {
-    const d = snap.docs[0]!;
-    return { id: d.id, data: (d.data() || {}) as any };
-  }
+    .single();
 
-  // 3) Legacy: where("code" == "ABC")
-  const snap2 = await db.collection('Promotions').where('code', '==', promoCodeNormalized).limit(1).get().catch(() => null as any);
-  if (snap2 && !snap2.empty) {
-    const d = snap2.docs[0]!;
-    return { id: d.id, data: (d.data() || {}) as any };
-  }
+  if (!data) return null;
 
-  return null;
+  return {
+    id: data.firestore_id ?? data.id,
+    data: {
+      code: data.code,
+      codeNormalized: data.code_normalized,
+      isValid: data.is_valid,
+      forEveryone: data.for_everyone,
+      membershipType: data.membership_type,
+      applicableMemberships: data.applicable_memberships ?? [],
+      planType: data.plan_type,
+      plans: data.applicable_plans ?? [],
+      percentOff: data.discount_percent,
+      amountOffCents: data.discount_amount_cents,
+      promo_duration: data.duration_cycles,
+      expirationDate: data.expiration_date,
+      source: data.source,
+      usedByUid: data.used_by_uid,
+      usedAt: data.used_at
+    }
+  };
 }
 
 export async function validateAndApplyPromo(params: {

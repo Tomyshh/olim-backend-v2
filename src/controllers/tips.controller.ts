@@ -1,25 +1,26 @@
 import { Response } from 'express';
-import type { QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { admin, getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import { dualWriteToSupabase, resolveSupabaseClientId } from '../services/dualWrite.service.js';
 
 export async function getTips(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
     const { category, search } = req.query as { category?: string; search?: string };
 
-    let query: any = db.collection('Tips');
-    if (category && String(category).trim()) {
-      query = query.where('category', '==', String(category).trim());
-    }
-    query = query.orderBy('createdAt', 'desc');
+    let query = supabase
+      .from('tips')
+      .select('*, tip_translations(*)')
+      .order('created_at', { ascending: false });
 
-    const snapshot = await query.get();
-    let tips = snapshot.docs.map((doc: QueryDocumentSnapshot) => ({
-      tipId: doc.id,
-      ...doc.data(),
-    }));
+    if (category && String(category).trim()) {
+      query = query.eq('category', String(category).trim());
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    let tips = (data || []).map((t: any) => ({ tipId: t.id, ...t }));
 
     if (search && String(search).trim()) {
       const term = String(search).trim().toLowerCase();
@@ -39,17 +40,15 @@ export async function getTips(req: AuthenticatedRequest, res: Response): Promise
 
 export async function getPinnedTips(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
-    const snapshot = await db
-      .collection('Tips')
-      .where('isPinned', '==', true)
-      .orderBy('createdAt', 'desc')
-      .get();
+    const { data, error } = await supabase
+      .from('tips')
+      .select('*, tip_translations(*)')
+      .eq('is_pinned', true)
+      .order('created_at', { ascending: false });
 
-    const tips = snapshot.docs.map((doc) => ({
-      tipId: doc.id,
-      ...doc.data(),
-    }));
+    if (error) throw error;
+
+    const tips = (data || []).map((t: any) => ({ tipId: t.id, ...t }));
 
     res.json({ tips });
   } catch (error: any) {
@@ -126,19 +125,17 @@ export async function unlikeTip(req: AuthenticatedRequest, res: Response): Promi
 export async function getSavedTips(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const snapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Tips')
-      .orderBy('savedAt', 'desc')
-      .get();
+    const { data, error } = await supabase
+      .from('user_saved_tips')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('saved_at', { ascending: false });
 
-    const tips = snapshot.docs.map((doc) => ({
-      tipId: doc.id,
-      ...doc.data(),
-    }));
+    if (error) throw error;
+
+    const tips = (data || []).map((t: any) => ({ tipId: t.tip_id, ...t }));
 
     res.json({ tips });
   } catch (error: any) {
@@ -206,16 +203,14 @@ export async function unsaveTip(req: AuthenticatedRequest, res: Response): Promi
 
 export async function getNews(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
-    const snapshot = await db
-      .collection('News')
-      .orderBy('date', 'desc')
-      .get();
+    const { data, error } = await supabase
+      .from('news')
+      .select('*')
+      .order('date', { ascending: false });
 
-    const news = snapshot.docs.map((doc) => ({
-      newsId: doc.id,
-      ...doc.data(),
-    }));
+    if (error) throw error;
+
+    const news = (data || []).map((n: any) => ({ newsId: n.id, ...n }));
 
     res.json({ news });
   } catch (error: any) {
@@ -225,17 +220,15 @@ export async function getNews(req: AuthenticatedRequest, res: Response): Promise
 
 export async function getBreakingNews(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
-    const snapshot = await db
-      .collection('News')
-      .where('isBreaking', '==', true)
-      .orderBy('date', 'desc')
-      .get();
+    const { data, error } = await supabase
+      .from('news')
+      .select('*')
+      .eq('is_breaking', true)
+      .order('date', { ascending: false });
 
-    const news = snapshot.docs.map((doc) => ({
-      newsId: doc.id,
-      ...doc.data(),
-    }));
+    if (error) throw error;
+
+    const news = (data || []).map((n: any) => ({ newsId: n.id, ...n }));
 
     res.json({ news });
   } catch (error: any) {

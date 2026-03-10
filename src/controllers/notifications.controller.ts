@@ -47,23 +47,27 @@ export async function getNotifications(req: AuthenticatedRequest, res: Response)
   try {
     const uid = req.uid!;
     const { limit = 50, unreadOnly } = req.query;
-    const db = getFirestore();
 
-    let query = db
-      .collection('Clients')
-      .doc(uid)
-      .collection('notifications')
-      .orderBy('createdAt', 'desc');
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.json({ notifications: [] }); return; }
+
+    let query = supabase
+      .from('notifications')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(Number(limit));
 
     if (unreadOnly === 'true') {
-      query = query.where('read', '==', false) as any;
+      query = query.eq('is_read', false);
     }
 
-    const snapshot = await query.limit(Number(limit)).get();
+    const { data, error } = await query;
+    if (error) throw error;
 
-    const notifications = snapshot.docs.map(doc => ({
-      notificationId: doc.id,
-      ...doc.data()
+    const notifications = (data || []).map(n => ({
+      notificationId: n.firestore_id || n.id,
+      ...n
     }));
 
     res.json({ notifications });
@@ -76,21 +80,19 @@ export async function getNotificationDetail(req: AuthenticatedRequest, res: Resp
   try {
     const uid = req.uid!;
     const { notificationId } = req.params;
-    const db = getFirestore();
 
-    const notificationDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('notifications')
-      .doc(notificationId)
-      .get();
+    const { data, error } = await supabase
+      .from('notifications')
+      .select('*')
+      .or(`firestore_id.eq.${notificationId},id.eq.${notificationId}`)
+      .single();
 
-    if (!notificationDoc.exists) {
+    if (error || !data) {
       res.status(404).json({ error: 'Notification not found' });
       return;
     }
 
-    res.json({ notificationId, ...notificationDoc.data() });
+    res.json({ notificationId: data.firestore_id || data.id, ...data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -180,21 +182,22 @@ export async function deleteNotification(req: AuthenticatedRequest, res: Respons
 export async function getNotificationSettings(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
 
-    const settingsDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('settings')
-      .doc('notifications')
-      .get();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.json({ settings: {} }); return; }
 
-    if (!settingsDoc.exists) {
+    const { data, error } = await supabase
+      .from('notification_settings')
+      .select('*')
+      .eq('client_id', clientId)
+      .single();
+
+    if (error || !data) {
       res.json({ settings: {} });
       return;
     }
 
-    res.json({ settings: settingsDoc.data() });
+    res.json({ settings: data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

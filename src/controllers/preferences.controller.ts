@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import {
   dualWriteToSupabase,
   dualWriteDelete,
@@ -11,16 +12,17 @@ import {
 export async function getFavorites(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const snapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('favoriteRequests')
-      .where('type', '==', 'favorite')
-      .get();
+    const { data, error } = await supabase
+      .from('favorite_requests')
+      .select('*')
+      .eq('client_id', clientId)
+      .eq('type', 'favorite');
 
-    const favorites = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    if (error) throw error;
+
+    const favorites = (data || []).map((f: any) => ({ id: f.id, ...f }));
     res.json({ favorites });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -86,18 +88,19 @@ export async function removeFavorite(req: AuthenticatedRequest, res: Response): 
 export async function getRecent(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const snapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('favoriteRequests')
-      .where('type', '==', 'recent')
-      .orderBy('lastUsed', 'desc')
-      .limit(10)
-      .get();
+    const { data, error } = await supabase
+      .from('favorite_requests')
+      .select('*')
+      .eq('client_id', clientId)
+      .eq('type', 'recent')
+      .order('last_used', { ascending: false })
+      .limit(10);
 
-    const recent = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    if (error) throw error;
+
+    const recent = (data || []).map((r: any) => ({ id: r.id, ...r }));
     res.json({ recent });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

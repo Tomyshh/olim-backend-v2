@@ -21,6 +21,7 @@ import {
   tryCreateSecurdenFolderAndCard
 } from '../services/securden.service.js';
 import { dualWriteSubscription, dualWritePaymentCredential, dualWriteDelete, dualWriteToSupabase, dualWritePromoRevert, dualWritePromotion, mapRefundRequestToSupabase, resolveSupabaseClientId } from '../services/dualWrite.service.js';
+import { supabase } from '../services/supabase.service.js';
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -1349,16 +1350,38 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
 export async function getCards(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      res.json({ cards: [] });
+      return;
+    }
 
-    // Source: Payment credentials (aligné CRM / PayMe tokenisation)
-    const paymentSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Payment credentials')
-      .get();
+    const { data, error } = await supabase
+      .from('payment_credentials')
+      .select('*')
+      .eq('client_id', clientId);
 
-    const cards = paymentSnapshot.docs.map((d) => mapPaymentCredentialToCard(d.id, d.data() as any));
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    const cards = (data ?? []).map((d: any) => mapPaymentCredentialToCard(d.firestore_id ?? d.id, {
+      'Card Name': d.card_name,
+      'Card Number': d.card_masked,
+      'Card Holder': d.card_name,
+      'Card Suffix': d.card_masked?.replace(/\D+/g, '').slice(-4) ?? '',
+      'Isracard Key': d.buyer_key,
+      isSubscriptionCard: d.is_subscription_card,
+      isDefault: d.is_default,
+      brand: d.metadata?.brand ?? '',
+      expiryMonth: d.metadata?.expiryMonth ?? null,
+      expiryYear: d.metadata?.expiryYear ?? null,
+      last4: d.card_masked?.replace(/\D+/g, '').slice(-4) ?? '',
+      createdAt: d.created_at,
+      updatedAt: d.updated_at,
+      'Created At': d.created_at,
+    }));
     res.json({ cards });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1640,19 +1663,27 @@ export async function getInvoices(req: AuthenticatedRequest, res: Response): Pro
   try {
     const uid = req.uid!;
     const { limit = 50 } = req.query;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      res.json({ invoices: [] });
+      return;
+    }
 
-    const invoicesSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('invoices')
-      .orderBy('createdAt', 'desc')
-      .limit(Number(limit))
-      .get();
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+      .limit(Number(limit));
 
-    const invoices = invoicesSnapshot.docs.map(doc => ({
-      invoiceId: doc.id,
-      ...doc.data()
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    const invoices = (data ?? []).map(inv => ({
+      invoiceId: inv.firestore_id ?? inv.id,
+      ...inv
     }));
 
     res.json({ invoices });
@@ -1665,21 +1696,21 @@ export async function getInvoiceDetail(req: AuthenticatedRequest, res: Response)
   try {
     const uid = req.uid!;
     const { invoiceId } = req.params;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const invoiceDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('invoices')
-      .doc(invoiceId)
-      .get();
+    const { data, error } = await supabase
+      .from('invoices')
+      .select('*')
+      .eq('client_id', clientId)
+      .or(`firestore_id.eq.${invoiceId},id.eq.${invoiceId}`)
+      .single();
 
-    if (!invoiceDoc.exists) {
+    if (error || !data) {
       res.status(404).json({ error: 'Invoice not found' });
       return;
     }
 
-    res.json({ invoiceId, ...invoiceDoc.data() });
+    res.json({ invoiceId, ...data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1688,18 +1719,26 @@ export async function getInvoiceDetail(req: AuthenticatedRequest, res: Response)
 export async function getRefundRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      res.json({ refunds: [] });
+      return;
+    }
 
-    const refundsSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('refund_requests')
-      .orderBy('createdAt', 'desc')
-      .get();
+    const { data, error } = await supabase
+      .from('refund_requests')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false });
 
-    const refunds = refundsSnapshot.docs.map(doc => ({
-      refundId: doc.id,
-      ...doc.data()
+    if (error) {
+      res.status(500).json({ error: error.message });
+      return;
+    }
+
+    const refunds = (data ?? []).map(r => ({
+      refundId: r.firestore_id ?? r.id,
+      ...r
     }));
 
     res.json({ refunds });
@@ -1746,21 +1785,21 @@ export async function getRefundRequestDetail(req: AuthenticatedRequest, res: Res
   try {
     const uid = req.uid!;
     const { refundId } = req.params;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const refundDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('refund_requests')
-      .doc(refundId)
-      .get();
+    const { data, error } = await supabase
+      .from('refund_requests')
+      .select('*')
+      .eq('client_id', clientId)
+      .or(`firestore_id.eq.${refundId},id.eq.${refundId}`)
+      .single();
 
-    if (!refundDoc.exists) {
+    if (error || !data) {
       res.status(404).json({ error: 'Refund request not found' });
       return;
     }
 
-    res.json({ refundId, ...refundDoc.data() });
+    res.json({ refundId, ...data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -27,7 +27,8 @@
     "script:wipe-supabase-auth-users": "tsx scripts/wipe-supabase-auth-users.ts",
     "script:firebase-auth-to-supabase": "tsx scripts/run-firebase-auth-to-supabase-migration.ts",
     "script:test-supabase-login": "tsx scripts/test-supabase-login.ts",
-    "script:fix-user-password-supabase": "tsx scripts/fix-user-password-supabase.ts"
+    "script:fix-user-password-supabase": "tsx scripts/fix-user-password-supabase.ts",
+    "script:verify-migration": "tsx scripts/verify-migration.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.89.0",

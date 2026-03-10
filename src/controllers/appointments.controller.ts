@@ -2,24 +2,33 @@ import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
 import { dualWriteToSupabase, resolveSupabaseClientId, mapAppointmentToSupabase } from '../services/dualWrite.service.js';
+import { supabase } from '../services/supabase.service.js';
 
 export async function getAppointments(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
     const { status, limit = 50 } = req.query;
 
-    let query = db.collection('Clients').doc(uid).collection('appointments');
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.json({ appointments: [] }); return; }
+
+    let query = supabase
+      .from('appointments')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('date', { ascending: false })
+      .limit(Number(limit));
 
     if (status) {
-      query = query.where('status', '==', status) as any;
+      query = query.eq('status', status as string);
     }
 
-    const snapshot = await query.orderBy('date', 'desc').limit(Number(limit)).get();
+    const { data, error } = await query;
+    if (error) throw error;
 
-    const appointments = snapshot.docs.map(doc => ({
-      appointmentId: doc.id,
-      ...doc.data()
+    const appointments = (data || []).map(a => ({
+      appointmentId: a.firestore_id || a.id,
+      ...a
     }));
 
     res.json({ appointments });
@@ -32,21 +41,19 @@ export async function getAppointmentDetail(req: AuthenticatedRequest, res: Respo
   try {
     const uid = req.uid!;
     const { appointmentId } = req.params;
-    const db = getFirestore();
 
-    const appointmentDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('appointments')
-      .doc(appointmentId)
-      .get();
+    const { data, error } = await supabase
+      .from('appointments')
+      .select('*')
+      .or(`firestore_id.eq.${appointmentId},id.eq.${appointmentId}`)
+      .single();
 
-    if (!appointmentDoc.exists) {
+    if (error || !data) {
       res.status(404).json({ error: 'Appointment not found' });
       return;
     }
 
-    res.json({ appointmentId, ...appointmentDoc.data() });
+    res.json({ appointmentId: data.firestore_id || data.id, ...data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -156,20 +163,26 @@ export async function cancelAppointment(req: AuthenticatedRequest, res: Response
 
 export async function getAvailableSlots(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const db = getFirestore();
     const { date, limit = 100 } = req.query;
 
-    let query = db.collection('AvailableSlots').where('available', '==', true);
+    let query = supabase
+      .from('available_slots')
+      .select('*')
+      .eq('available', true)
+      .order('date', { ascending: true })
+      .order('time', { ascending: true })
+      .limit(Number(limit));
 
     if (date) {
-      query = query.where('date', '==', date) as any;
+      query = query.eq('date', date as string);
     }
 
-    const snapshot = await query.orderBy('date').orderBy('time').limit(Number(limit)).get();
+    const { data, error } = await query;
+    if (error) throw error;
 
-    const slots = snapshot.docs.map(doc => ({
-      slotId: doc.id,
-      ...doc.data()
+    const slots = (data || []).map(s => ({
+      slotId: s.firestore_id || s.id,
+      ...s
     }));
 
     res.json({ slots });

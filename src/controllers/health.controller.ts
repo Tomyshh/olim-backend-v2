@@ -1,24 +1,23 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
 import { dualWriteToSupabase, resolveSupabaseClientId, mapHealthRequestToSupabase } from '../services/dualWrite.service.js';
 
 export async function getHealthRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const requestsSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('health_requests')
-      .orderBy('createdAt', 'desc')
-      .get();
+    const { data, error } = await supabase
+      .from('health_requests')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false });
 
-    const requests = requestsSnapshot.docs.map(doc => ({
-      requestId: doc.id,
-      ...doc.data()
-    }));
+    if (error) throw error;
+
+    const requests = (data || []).map((r: any) => ({ requestId: r.id, ...r }));
 
     res.json({ requests });
   } catch (error: any) {
@@ -30,21 +29,23 @@ export async function getHealthRequestDetail(req: AuthenticatedRequest, res: Res
   try {
     const uid = req.uid!;
     const { requestId } = req.params;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
 
-    const requestDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('health_requests')
-      .doc(requestId)
-      .get();
+    const { data, error } = await supabase
+      .from('health_requests')
+      .select('*')
+      .eq('client_id', clientId)
+      .eq('id', requestId)
+      .maybeSingle();
 
-    if (!requestDoc.exists) {
+    if (error) throw error;
+
+    if (!data) {
       res.status(404).json({ error: 'Health request not found' });
       return;
     }
 
-    res.json({ requestId, ...requestDoc.data() });
+    res.json({ requestId: data.id, ...data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -125,22 +126,15 @@ export async function updateHealthRequest(req: AuthenticatedRequest, res: Respon
 
 export async function getHealthConfig(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const uid = req.uid!;
-    const db = getFirestore();
+    const { data, error } = await supabase
+      .from('app_config')
+      .select('value')
+      .eq('key', 'health')
+      .maybeSingle();
 
-    const configDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('settings')
-      .doc('health_config')
-      .get();
+    if (error) throw error;
 
-    if (!configDoc.exists) {
-      res.json({ config: {} });
-      return;
-    }
-
-    res.json({ config: configDoc.data() });
+    res.json({ config: data?.value ?? {} });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

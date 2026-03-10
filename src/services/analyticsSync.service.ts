@@ -2,6 +2,7 @@ import { getFirestore, admin } from '../config/firebase.js';
 import { supabase } from './supabase.service.js';
 import { randomUUID } from 'node:crypto';
 import { paymeGetSubscriptionStatus } from './payme.service.js';
+import { resolveSupabaseClientId } from './dualWrite.service.js';
 
 /**
  * Service to sync analytical data from Firestore to Supabase.
@@ -79,10 +80,22 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
     async function loadSubscriptionCurrent(clientId: string): Promise<Record<string, any> | null> {
         if (subscriptionCurrentCache.has(clientId)) return subscriptionCurrentCache.get(clientId)!;
         try {
-            const snap = await db.collection('Clients').doc(clientId).collection('subscription').doc('current').get();
-            const value = snap.exists ? ((snap.data() || {}) as Record<string, any>) : null;
-            subscriptionCurrentCache.set(clientId, value);
-            return value;
+            const clientSupabaseId = await resolveSupabaseClientId(clientId);
+            if (!clientSupabaseId) {
+                subscriptionCurrentCache.set(clientId, null);
+                return null;
+            }
+            const { data: subRow, error } = await supabase
+                .from('subscriptions')
+                .select('*')
+                .eq('client_id', clientSupabaseId)
+                .maybeSingle();
+            if (error || !subRow) {
+                subscriptionCurrentCache.set(clientId, null);
+                return null;
+            }
+            subscriptionCurrentCache.set(clientId, subRow);
+            return subRow;
         } catch {
             subscriptionCurrentCache.set(clientId, null);
             return null;
@@ -95,31 +108,12 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
 
     function extractMembershipFromSubscriptionCurrent(s: Record<string, any> | null): string {
         if (!s) return '';
-        // Support plusieurs schémas:
-        // - { plan: { membership: "Pack Elite" } }
-        // - { membership: "Pack Elite" }
-        // - legacy éventuel
-        return (
-            pickString(s?.plan?.membership) ||
-            pickString(s?.plan?.Membership) ||
-            pickString(s?.membership) ||
-            ''
-        );
+        return pickString(s?.membership_type) || '';
     }
 
     function extractSubCodeFromSubscriptionCurrent(s: Record<string, any> | null): number | null {
         if (!s) return null;
-        const candidates = [
-            s?.subCode,
-            s?.sub_payme_code,
-            s?.payme?.subCode,
-            s?.payme?.sub_payme_code
-        ];
-        for (const c of candidates) {
-            const n = coerceSubCode(c);
-            if (n != null) return n;
-        }
-        return null;
+        return coerceSubCode(s?.payme_sub_code);
     }
 
     function coerceSubCode(value: unknown): number | null {
@@ -272,11 +266,9 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
                 return false;
             }
 
-            // Support schémas: states.isActive OU status="active"
-            const statusStr = pickString(data?.status).toLowerCase();
-            const isActive = data?.states?.isActive !== false && (statusStr ? statusStr === 'active' : true);
-            const cancelledDate = parseDateLike(data?.dates?.cancelledDate);
-            const endDate = parseDateLike(data?.dates?.endDate);
+            const isActive = data?.metadata?.isActive !== false;
+            const cancelledDate = parseDateLike(data?.cancelled_at);
+            const endDate = parseDateLike(data?.end_at);
 
             // "Annuel actif" = actif + non annulé + endDate dans le futur
             const ok = Boolean(isActive) && !cancelledDate && !!endDate && endDate.getTime() > now.getTime();
@@ -298,17 +290,15 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
             const s = await loadSubscriptionCurrent(clientId);
             if (!s) return null;
 
-            // Si PayMe subCode existe => mensuel (subscription PayMe)
             const coerced = extractSubCodeFromSubscriptionCurrent(s);
             if (coerced != null) return 'monthly';
 
-            const planType = typeof s?.plan?.type === 'string' ? String(s.plan.type).toLowerCase().trim() : '';
+            const planType = typeof s?.plan_type === 'string' ? String(s.plan_type).toLowerCase().trim() : '';
             if (planType === 'monthly') return 'monthly';
             if (planType === 'annual') return 'annual';
 
-            // Fallback: si endDate existe et est éloigné (~>=300j) on suppose annuel
-            const endDate = parseDateLike(s?.dates?.endDate);
-            const startDate = parseDateLike(s?.dates?.startDate);
+            const endDate = parseDateLike(s?.end_at);
+            const startDate = parseDateLike(s?.start_at);
             if (endDate && startDate) {
                 const days = Math.round((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
                 if (days >= 300) return 'annual';

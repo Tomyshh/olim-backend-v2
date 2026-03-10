@@ -738,11 +738,11 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
       if (securden.folderId) {
         await clientRef.set(
           {
-            // IMPORTANT: selon votre tableau, seul `securden_Folder` est autorisé dans Clients
             securden_Folder: securden.folderId
           },
           { merge: true }
         ).catch(() => {});
+        dualWriteClient(uid!, { securden_Folder: securden.folderId }).catch(() => {});
       }
 
       await paymentRef
@@ -931,6 +931,7 @@ export async function addClientCreditCardPaymentCredential(
 
     if (folderId) {
       await clientRef.set({ securden_Folder: folderId }, { merge: true }).catch(() => {});
+      dualWriteClient(clientId, { securden_Folder: folderId }).catch(() => {});
     }
   }
 

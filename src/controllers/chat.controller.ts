@@ -7,52 +7,43 @@ import { supabase } from '../services/supabase.service.js';
 export async function getConversations(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const db = getFirestore();
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.json({ conversations: [] }); return; }
 
-    // Nouvelle structure: Clients/{uid}/Conversations
-    const conversationsSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Conversations')
-      .get();
+    const { data: conversations, error } = await supabase
+      .from('chat_conversations')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('updated_at', { ascending: false });
 
-    const conversations = await Promise.all(
-      conversationsSnapshot.docs.map(async (doc) => {
-        const convData = doc.data();
-        // Récupérer dernier message
-        const lastMessageSnapshot = await db
-          .collection('Clients')
-          .doc(uid)
-          .collection('Conversations')
-          .doc(doc.id)
-          .collection('Messages')
-          .orderBy('createdAt', 'desc')
-          .limit(1)
-          .get();
+    if (error) throw error;
 
-        const lastMessage = lastMessageSnapshot.docs[0]?.data();
+    const enrichedConversations = await Promise.all(
+      (conversations || []).map(async (conv) => {
+        const { data: lastMessages } = await supabase
+          .from('chat_messages')
+          .select('*')
+          .eq('conversation_id', conv.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
 
-        // Compter messages non lus
-        const unreadSnapshot = await db
-          .collection('Clients')
-          .doc(uid)
-          .collection('Conversations')
-          .doc(doc.id)
-          .collection('Messages')
-          .where('read', '==', false)
-          .where('senderId', '!=', uid)
-          .get();
+        const { count: unreadCount } = await supabase
+          .from('chat_messages')
+          .select('*', { count: 'exact', head: true })
+          .eq('conversation_id', conv.id)
+          .eq('is_read', false)
+          .neq('sender_id', uid);
 
         return {
-          conversationId: doc.id,
-          ...convData,
-          lastMessage,
-          unreadCount: unreadSnapshot.size
+          conversationId: conv.firestore_id || conv.id,
+          ...conv,
+          lastMessage: lastMessages?.[0] || null,
+          unreadCount: unreadCount || 0
         };
       })
     );
 
-    res.json({ conversations });
+    res.json({ conversations: enrichedConversations });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -63,24 +54,30 @@ export async function getMessages(req: AuthenticatedRequest, res: Response): Pro
     const uid = req.uid!;
     const { conversationId } = req.params;
     const { limit = 50 } = req.query;
-    const db = getFirestore();
 
-    const messagesSnapshot = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Conversations')
-      .doc(conversationId)
-      .collection('Messages')
-      .orderBy('createdAt', 'desc')
-      .limit(Number(limit))
-      .get();
+    const { data: convo } = await supabase
+      .from('chat_conversations')
+      .select('id')
+      .or(`firestore_id.eq.${conversationId},id.eq.${conversationId}`)
+      .single();
 
-    const messages = messagesSnapshot.docs.map(doc => ({
-      messageId: doc.id,
-      ...doc.data()
+    if (!convo) { res.status(404).json({ error: 'Conversation not found' }); return; }
+
+    const { data, error } = await supabase
+      .from('chat_messages')
+      .select('*')
+      .eq('conversation_id', convo.id)
+      .order('created_at', { ascending: true })
+      .limit(Number(limit));
+
+    if (error) throw error;
+
+    const messages = (data || []).map(msg => ({
+      messageId: msg.firestore_id || msg.id,
+      ...msg
     }));
 
-    res.json({ messages: messages.reverse() });
+    res.json({ messages });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -2,22 +2,22 @@ import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
 import { HttpError } from '../utils/errors.js';
+import { supabase } from '../services/supabase.service.js';
+import { resolveSupabaseClientId } from '../services/dualWrite.service.js';
 import { dualWriteAcces, dualWriteClientLog, dualWriteDelete } from '../services/dualWrite.service.js';
 
 export async function getAcces(req: AuthenticatedRequest, res: Response) {
   const uid = req.uid!;
-  const db = getFirestore();
+  const clientId = await resolveSupabaseClientId(uid);
 
-  const snapshot = await db
-    .collection('Clients')
-    .doc(uid)
-    .collection('Client Acces')
-    .get();
+  const { data, error } = await supabase
+    .from('client_access_credentials')
+    .select('*')
+    .eq('client_id', clientId);
 
-  const acces = snapshot.docs.map(doc => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
+  if (error) throw error;
+
+  const acces = (data || []).map((a: any) => ({ id: a.id, ...a }));
 
   res.json({ acces });
 }
@@ -89,21 +89,19 @@ export async function createLog(req: AuthenticatedRequest, res: Response) {
 
 export async function getLogs(req: AuthenticatedRequest, res: Response) {
   const uid = req.uid!;
-  const db = getFirestore();
+  const clientId = await resolveSupabaseClientId(uid);
   const limit = Math.min(Number(req.query.limit) || 50, 200);
 
-  const snapshot = await db
-    .collection('Clients')
-    .doc(uid)
-    .collection('Client Logs')
-    .orderBy('createdAt', 'desc')
-    .limit(limit)
-    .get();
+  const { data, error } = await supabase
+    .from('client_logs')
+    .select('*')
+    .eq('client_id', clientId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
 
-  const logs = snapshot.docs.map(doc => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
+  if (error) throw error;
+
+  const logs = (data || []).map((l: any) => ({ id: l.id, ...l }));
 
   res.json({ logs });
 }

@@ -1,6 +1,7 @@
 import type { NextFunction, Response } from 'express';
-import { getFirestore } from '../config/firebase.js';
 import type { AuthenticatedRequest } from './auth.middleware.js';
+import { supabase } from '../services/supabase.service.js';
+import { resolveSupabaseClientId } from '../services/dualWrite.service.js';
 
 function normalizeMembership(raw: unknown): string {
   return typeof raw === 'string' ? raw.trim() : '';
@@ -11,17 +12,6 @@ function isVisitorMembership(membership: string): boolean {
   return m === 'visitor' || m === 'visiteur';
 }
 
-/**
- * Bloque la création de demande si l'utilisateur n'est pas abonné (Visitor),
- * sauf si `Clients/{uid}.freeAccess.isEnabled === true` (exception admin/dev).
- *
- * Source-of-truth:
- * - abonnement: Clients/{uid}/subscription/current
- * - exception: Clients/{uid}.freeAccess
- *
- * Side-effect: stocke le membership retenu sur `req.requestMembership` (string)
- * pour éviter de faire confiance au payload.
- */
 export async function requireActiveMembershipForRequests(
   req: AuthenticatedRequest & { requestMembership?: string },
   res: Response,
@@ -33,18 +23,18 @@ export async function requireActiveMembershipForRequests(
     return;
   }
 
-  const db = getFirestore();
-  const clientRef = db.collection('Clients').doc(uid);
+  const { data: client } = await supabase
+    .from('clients')
+    .select('id, free_access, metadata')
+    .eq('firebase_uid', uid)
+    .single();
 
-  const [clientSnap, subSnap] = await Promise.all([
-    clientRef.get(),
-    clientRef.collection('subscription').doc('current').get()
-  ]);
+  if (!client) {
+    res.status(401).json({ message: 'Client introuvable.' });
+    return;
+  }
 
-  const client = (clientSnap.data() || {}) as Record<string, any>;
-
-  // Exception unique: freeAccess (prioritaire)
-  const freeAccess = (client as any).freeAccess;
+  const freeAccess = client.free_access as any;
   const freeEnabled = freeAccess?.isEnabled === true;
   const freeMembership = normalizeMembership(freeAccess?.membership);
   if (freeEnabled && freeMembership) {
@@ -53,10 +43,14 @@ export async function requireActiveMembershipForRequests(
     return;
   }
 
-  // Abonnement courant: subscription/current (source de vérité)
-  const sub = (subSnap.data() || {}) as Record<string, any>;
-  const membership = normalizeMembership(sub?.plan?.membership ?? sub?.membership);
-  const isActive = sub?.states?.isActive === true;
+  const { data: sub } = await supabase
+    .from('subscriptions')
+    .select('membership_type, is_active, metadata')
+    .eq('client_id', client.id)
+    .single();
+
+  const membership = normalizeMembership(sub?.membership_type);
+  const isActive = sub?.is_active === true || (sub?.metadata as any)?.raw_states?.isActive === true;
 
   if (!membership || isVisitorMembership(membership) || !isActive) {
     res.status(403).json({

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { admin, getFirestore } from '../config/firebase.js';
 import { runWithConcurrencyLimit } from './concurrencyLimit.service.js';
 import { dualWriteClient } from './dualWrite.service.js';
+import { supabase } from './supabase.service.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -134,14 +135,15 @@ export async function computeAndWriteSeniorityForClient(params: {
   const clientId = String(params.clientId || '').trim();
   if (!clientId) return { ok: false, clientId, reason: 'clientId manquant' };
 
-  const clientRef = db.collection('Clients').doc(clientId);
-  const clientSnap = await clientRef.get();
-  if (!clientSnap.exists) return { ok: false, clientId, reason: 'client_not_found' };
+  const { data: clientRow, error: clientError } = await supabase
+    .from('clients')
+    .select('id, created_at')
+    .eq('firebase_uid', clientId)
+    .single();
+  if (clientError || !clientRow) return { ok: false, clientId, reason: 'client_not_found' };
 
-  const data = (clientSnap.data() || {}) as Record<string, any>;
-  const createdAtRaw = data['Created At'] ?? data.createdAt;
-  const createdAt = toDateOrNull(createdAtRaw);
-  if (!createdAt) return { ok: false, clientId, reason: 'no_created_at' };
+  const createdAt = clientRow.created_at ? new Date(clientRow.created_at) : null;
+  if (!createdAt || !Number.isFinite(createdAt.getTime())) return { ok: false, clientId, reason: 'no_created_at' };
 
   const seniority = computeSeniority(createdAt, now);
 
@@ -149,6 +151,7 @@ export async function computeAndWriteSeniorityForClient(params: {
     return { ok: true, clientId, action: 'dry_run', seniority };
   }
 
+  const clientRef = db.collection('Clients').doc(clientId);
   const ts = admin.firestore.Timestamp.fromDate(createdAt);
   await clientRef.set(
     {
