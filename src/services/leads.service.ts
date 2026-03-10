@@ -97,6 +97,133 @@ async function resolveStatusSlug(statusId: string): Promise<string | null> {
   return data?.slug ?? null;
 }
 
+function pickDefined<T extends Record<string, any>>(obj: T): Partial<T> {
+  return Object.fromEntries(
+    Object.entries(obj).filter(([, value]) => value !== undefined),
+  ) as Partial<T>;
+}
+
+function normalizeSummary(summary: string | undefined): string | null {
+  if (summary === undefined) return undefined as any;
+  const trimmed = summary.trim();
+  return trimmed === '' ? null : trimmed;
+}
+
+function buildInteractionSnapshot(row: any) {
+  return {
+    summary: row.summary ?? null,
+    detailed_comment: row.detailed_comment ?? null,
+    lead_answered: row.lead_answered ?? null,
+    status_slug: row.status_slug ?? null,
+    reminder_at: row.reminder_at ?? null,
+    next_action: row.next_action ?? null,
+    is_draft: row.is_draft ?? false,
+  };
+}
+
+async function touchLeadInteraction(leadId: string) {
+  await supabase
+    .from('leads')
+    .update({ last_interaction_at: new Date().toISOString() })
+    .eq('id', leadId);
+}
+
+async function syncLeadStatusFromCall(leadId: string, statusSlug?: string | null) {
+  if (!statusSlug) return;
+  const statusId = await resolveStatusId(statusSlug);
+  if (!statusId) return;
+
+  await supabase
+    .from('leads')
+    .update({
+      status_id: statusId,
+      last_interaction_at: new Date().toISOString(),
+    })
+    .eq('id', leadId);
+}
+
+async function syncReminderFromCall(interaction: any) {
+  const reminderAt = interaction.reminder_at ?? null;
+  const note =
+    interaction.summary && String(interaction.summary).trim() !== ''
+      ? `Rappel suite appel: ${interaction.summary}`
+      : 'Rappel suite appel CRM';
+
+  const { data: existing, error: existingError } = await supabase
+    .from('lead_reminders')
+    .select('id, treated')
+    .eq('call_interaction_id', interaction.id)
+    .maybeSingle();
+
+  if (existingError) throw existingError;
+
+  if (!reminderAt) {
+    if (existing && existing.treated !== true) {
+      const { error } = await supabase
+        .from('lead_reminders')
+        .update({
+          treated: true,
+          treated_at: new Date().toISOString(),
+          note: 'Rappel annulé depuis l’appel CRM',
+        })
+        .eq('id', existing.id);
+      if (error) throw error;
+    }
+    return;
+  }
+
+  if (existing) {
+    const { error } = await supabase
+      .from('lead_reminders')
+      .update({
+        conseiller_id: interaction.conseiller_id,
+        reminder_at: reminderAt,
+        note,
+        treated: false,
+        treated_at: null,
+      })
+      .eq('id', existing.id);
+    if (error) throw error;
+    return;
+  }
+
+  const { error } = await supabase
+    .from('lead_reminders')
+    .insert({
+      lead_id: interaction.lead_id,
+      conseiller_id: interaction.conseiller_id,
+      reminder_at: reminderAt,
+      note,
+      call_interaction_id: interaction.id,
+    });
+  if (error) throw error;
+}
+
+async function insertInteractionEditAudit(params: {
+  interactionId: string;
+  leadId: string;
+  editedBy: string;
+  editedByName?: string;
+  oldValues: Record<string, any>;
+  newValues: Record<string, any>;
+}) {
+  const { oldValues, newValues } = params;
+  if (JSON.stringify(oldValues) === JSON.stringify(newValues)) return;
+
+  const { error } = await supabase
+    .from('lead_interaction_edits')
+    .insert({
+      lead_interaction_id: params.interactionId,
+      lead_id: params.leadId,
+      edited_by: params.editedBy,
+      edited_by_name: params.editedByName ?? null,
+      old_values: oldValues,
+      new_values: newValues,
+    });
+
+  if (error) throw error;
+}
+
 // ---------------------------------------------------------------------------
 // Lead scoring
 // ---------------------------------------------------------------------------
@@ -454,15 +581,53 @@ export async function archiveLead(leadId: string, reason: string, archivedBy: st
 // Interactions
 // ---------------------------------------------------------------------------
 
-export async function listInteractions(leadId: string) {
-  const { data, error } = await supabase
+export async function listInteractions(
+  leadId: string,
+  options?: {
+    includeDrafts?: boolean;
+    draftOnly?: boolean;
+    onlyCalls?: boolean;
+    conseillerId?: string;
+  },
+) {
+  let query = supabase
     .from('lead_interactions')
     .select('*')
     .eq('lead_id', leadId)
     .order('created_at', { ascending: false });
 
+  if (!options?.includeDrafts) {
+    query = query.eq('is_draft', false);
+  }
+
+  if (options?.draftOnly) {
+    query = query.eq('is_draft', true);
+  }
+
+  if (options?.onlyCalls) {
+    query = query.eq('interaction_type', 'call');
+  }
+
+  if (options?.conseillerId) {
+    query = query.eq('conseiller_id', options.conseillerId);
+  }
+
+  const { data, error } = await query;
+
   if (error) throw error;
   return data ?? [];
+}
+
+export async function getInteractionById(leadId: string, interactionId: string) {
+  const { data, error } = await supabase
+    .from('lead_interactions')
+    .select('*')
+    .eq('lead_id', leadId)
+    .eq('id', interactionId)
+    .single();
+
+  if (error) throw error;
+  return data;
 }
 
 export async function addInteraction(leadId: string, payload: {
@@ -481,18 +646,193 @@ export async function addInteraction(leadId: string, payload: {
       interaction_type: payload.interaction_type,
       summary: payload.summary,
       next_action: payload.next_action ?? null,
+      is_draft: false,
+      updated_at: new Date().toISOString(),
+      updated_by: payload.conseiller_id,
+      updated_by_name: payload.conseiller_name ?? null,
     })
     .select()
     .single();
 
   if (error) throw error;
 
-  await supabase
-    .from('leads')
-    .update({ last_interaction_at: new Date().toISOString() })
-    .eq('id', leadId);
+  await touchLeadInteraction(leadId);
 
   return data;
+}
+
+export async function createCallDraft(leadId: string, payload: {
+  conseiller_id: string;
+  conseiller_name?: string;
+}) {
+  const { data, error } = await supabase
+    .from('lead_interactions')
+    .insert({
+      lead_id: leadId,
+      conseiller_id: payload.conseiller_id,
+      conseiller_name: payload.conseiller_name ?? null,
+      interaction_type: 'call',
+      summary: '',
+      is_draft: true,
+      updated_at: new Date().toISOString(),
+      updated_by: payload.conseiller_id,
+      updated_by_name: payload.conseiller_name ?? null,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function listCallDrafts(leadId: string, conseillerId?: string) {
+  return listInteractions(leadId, {
+    includeDrafts: true,
+    draftOnly: true,
+    onlyCalls: true,
+    conseillerId,
+  });
+}
+
+export async function updateCallInteraction(leadId: string, interactionId: string, payload: {
+  summary?: string;
+  detailed_comment?: string;
+  lead_answered?: boolean;
+  reminder_at?: string | null;
+  status_slug?: string | null;
+  next_action?: string | null;
+  is_draft?: boolean;
+  edited_by: string;
+  edited_by_name?: string;
+}) {
+  const existing = await getInteractionById(leadId, interactionId);
+  if (existing.interaction_type !== 'call') {
+    throw new Error('Interaction d’appel introuvable.');
+  }
+
+  const oldSnapshot = buildInteractionSnapshot(existing);
+  const updateData = pickDefined({
+    summary: payload.summary !== undefined ? payload.summary : undefined,
+    detailed_comment: payload.detailed_comment,
+    lead_answered: payload.lead_answered,
+    reminder_at: payload.reminder_at,
+    status_slug: payload.status_slug,
+    next_action: payload.next_action,
+    is_draft: payload.is_draft,
+    updated_at: new Date().toISOString(),
+    updated_by: payload.edited_by,
+    updated_by_name: payload.edited_by_name ?? null,
+  });
+
+  const { data, error } = await supabase
+    .from('lead_interactions')
+    .update(updateData)
+    .eq('lead_id', leadId)
+    .eq('id', interactionId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  const newSnapshot = buildInteractionSnapshot(data);
+  await insertInteractionEditAudit({
+    interactionId,
+    leadId,
+    editedBy: payload.edited_by,
+    editedByName: payload.edited_by_name,
+    oldValues: oldSnapshot,
+    newValues: newSnapshot,
+  });
+
+  if (data.is_draft === false) {
+    await syncLeadStatusFromCall(leadId, data.status_slug);
+    await syncReminderFromCall(data);
+    await touchLeadInteraction(leadId);
+  }
+
+  return data;
+}
+
+export async function validateCallInteraction(leadId: string, interactionId: string, payload: {
+  summary: string;
+  detailed_comment?: string;
+  lead_answered?: boolean;
+  reminder_at?: string | null;
+  status_slug?: string | null;
+  next_action?: string | null;
+  validated_by: string;
+  validated_by_name?: string;
+}) {
+  const existing = await getInteractionById(leadId, interactionId);
+  if (existing.interaction_type !== 'call') {
+    throw new Error('Interaction d’appel introuvable.');
+  }
+
+  const oldSnapshot = buildInteractionSnapshot(existing);
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('lead_interactions')
+    .update({
+      summary: payload.summary,
+      detailed_comment: payload.detailed_comment ?? existing.detailed_comment ?? null,
+      lead_answered: payload.lead_answered ?? existing.lead_answered ?? null,
+      reminder_at: payload.reminder_at ?? null,
+      status_slug: payload.status_slug ?? null,
+      next_action: payload.next_action ?? null,
+      is_draft: false,
+      validated_at: existing.validated_at ?? now,
+      validated_by: payload.validated_by,
+      validated_by_name: payload.validated_by_name ?? null,
+      updated_at: now,
+      updated_by: payload.validated_by,
+      updated_by_name: payload.validated_by_name ?? null,
+    })
+    .eq('lead_id', leadId)
+    .eq('id', interactionId)
+    .select()
+    .single();
+
+  if (error) throw error;
+
+  const newSnapshot = buildInteractionSnapshot(data);
+  await insertInteractionEditAudit({
+    interactionId,
+    leadId,
+    editedBy: payload.validated_by,
+    editedByName: payload.validated_by_name,
+    oldValues: oldSnapshot,
+    newValues: newSnapshot,
+  });
+
+  await syncLeadStatusFromCall(leadId, data.status_slug);
+  await syncReminderFromCall(data);
+  await touchLeadInteraction(leadId);
+
+  return data;
+}
+
+export async function getCallSummarySuggestions(limit = 8) {
+  const { data, error } = await supabase
+    .from('lead_interactions')
+    .select('summary')
+    .eq('interaction_type', 'call')
+    .eq('is_draft', false)
+    .order('created_at', { ascending: false })
+    .limit(500);
+
+  if (error) throw error;
+
+  const counts = new Map<string, number>();
+  for (const row of data ?? []) {
+    const summary = typeof row.summary === 'string' ? row.summary.trim() : '';
+    if (!summary) continue;
+    counts.set(summary, (counts.get(summary) ?? 0) + 1);
+  }
+
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([summary, count]) => ({ summary, count }));
 }
 
 // ---------------------------------------------------------------------------

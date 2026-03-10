@@ -12,6 +12,25 @@ function pickOptionalString(v: unknown): string | undefined {
   return typeof v === 'string' ? v.trim() : undefined;
 }
 
+function pickOptionalBoolean(v: unknown): boolean | undefined {
+  if (typeof v === 'boolean') return v;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  return undefined;
+}
+
+async function ensureLeadAccess(req: AuthenticatedRequest, leadId: string) {
+  const lead = await leadsService.getLeadById(leadId);
+  if (!lead) throw new HttpError(404, 'Lead introuvable.');
+
+  const isAdmin = (req as any).isAdmin === true;
+  if (!isAdmin && lead.conseiller_id !== req.uid) {
+    throw new HttpError(403, 'Accès refusé à ce lead.');
+  }
+
+  return lead;
+}
+
 // ---------------------------------------------------------------------------
 // Leads CRUD
 // ---------------------------------------------------------------------------
@@ -53,14 +72,7 @@ export async function getLeadById(req: AuthenticatedRequest, res: Response): Pro
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
-  const lead = await leadsService.getLeadById(leadId);
-  if (!lead) throw new HttpError(404, 'Lead introuvable.');
-
-  const isAdmin = (req as any).isAdmin === true;
-  if (!isAdmin && lead.conseiller_id !== req.uid) {
-    throw new HttpError(403, 'Accès refusé à ce lead.');
-  }
-
+  const lead = await ensureLeadAccess(req, leadId);
   res.json(lead);
 }
 
@@ -99,13 +111,7 @@ export async function updateLead(req: AuthenticatedRequest, res: Response): Prom
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
-  const existing = await leadsService.getLeadById(leadId);
-  if (!existing) throw new HttpError(404, 'Lead introuvable.');
-
-  const isAdmin = (req as any).isAdmin === true;
-  if (!isAdmin && existing.conseiller_id !== req.uid) {
-    throw new HttpError(403, 'Accès refusé.');
-  }
+  await ensureLeadAccess(req, leadId);
 
   const body = req.body || {};
   const payload: leadsService.LeadUpdatePayload = {
@@ -169,6 +175,7 @@ export async function listInteractions(req: AuthenticatedRequest, res: Response)
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
+  await ensureLeadAccess(req, leadId);
   const data = await leadsService.listInteractions(leadId);
   res.json(data);
 }
@@ -177,6 +184,7 @@ export async function addInteraction(req: AuthenticatedRequest, res: Response): 
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
+  await ensureLeadAccess(req, leadId);
   const body = req.body || {};
   const interactionType = pickString(body.interaction_type);
   const summary = pickString(body.summary);
@@ -193,6 +201,93 @@ export async function addInteraction(req: AuthenticatedRequest, res: Response): 
   res.status(201).json(data);
 }
 
+export async function getCallSummarySuggestions(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const limit = req.query.limit ? Number(req.query.limit) : 8;
+  const data = await leadsService.getCallSummarySuggestions(limit);
+  res.json(data);
+}
+
+export async function listCallDrafts(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const leadId = pickString(req.params.id);
+  if (!leadId) throw new HttpError(400, 'id requis.');
+
+  await ensureLeadAccess(req, leadId);
+  const isAdmin = (req as any).isAdmin === true;
+  const conseillerId = isAdmin ? pickOptionalString(req.query.conseiller_id) : req.uid;
+  const data = await leadsService.listCallDrafts(leadId, conseillerId);
+  res.json(data);
+}
+
+export async function createCallDraft(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const leadId = pickString(req.params.id);
+  if (!leadId) throw new HttpError(400, 'id requis.');
+
+  await ensureLeadAccess(req, leadId);
+  const data = await leadsService.createCallDraft(leadId, {
+    conseiller_id: req.uid!,
+    conseiller_name: (req as any).conseillerName || pickOptionalString(req.body?.conseiller_name),
+  });
+  res.status(201).json(data);
+}
+
+export async function getCallById(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const leadId = pickString(req.params.id);
+  const callId = pickString(req.params.cid);
+  if (!leadId) throw new HttpError(400, 'id requis.');
+  if (!callId) throw new HttpError(400, 'cid requis.');
+
+  await ensureLeadAccess(req, leadId);
+  const data = await leadsService.getInteractionById(leadId, callId);
+  if (data.interaction_type !== 'call') throw new HttpError(404, 'Appel introuvable.');
+  res.json(data);
+}
+
+export async function updateCall(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const leadId = pickString(req.params.id);
+  const callId = pickString(req.params.cid);
+  if (!leadId) throw new HttpError(400, 'id requis.');
+  if (!callId) throw new HttpError(400, 'cid requis.');
+
+  await ensureLeadAccess(req, leadId);
+  const body = req.body || {};
+  const data = await leadsService.updateCallInteraction(leadId, callId, {
+    summary: pickOptionalString(body.summary),
+    detailed_comment: pickOptionalString(body.detailed_comment),
+    lead_answered: pickOptionalBoolean(body.lead_answered),
+    reminder_at: body.reminder_at === null ? null : pickOptionalString(body.reminder_at),
+    status_slug: body.status_slug === null ? null : pickOptionalString(body.status_slug),
+    next_action: body.next_action === null ? null : pickOptionalString(body.next_action),
+    is_draft: pickOptionalBoolean(body.is_draft),
+    edited_by: req.uid!,
+    edited_by_name: (req as any).conseillerName || pickOptionalString(body.edited_by_name),
+  });
+  res.json(data);
+}
+
+export async function validateCall(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const leadId = pickString(req.params.id);
+  const callId = pickString(req.params.cid);
+  if (!leadId) throw new HttpError(400, 'id requis.');
+  if (!callId) throw new HttpError(400, 'cid requis.');
+
+  await ensureLeadAccess(req, leadId);
+  const body = req.body || {};
+  const summary = pickString(body.summary);
+  if (!summary) throw new HttpError(400, 'summary requis.');
+
+  const data = await leadsService.validateCallInteraction(leadId, callId, {
+    summary,
+    detailed_comment: pickOptionalString(body.detailed_comment),
+    lead_answered: pickOptionalBoolean(body.lead_answered),
+    reminder_at: body.reminder_at === null ? null : pickOptionalString(body.reminder_at),
+    status_slug: body.status_slug === null ? null : pickOptionalString(body.status_slug),
+    next_action: body.next_action === null ? null : pickOptionalString(body.next_action),
+    validated_by: req.uid!,
+    validated_by_name: (req as any).conseillerName || pickOptionalString(body.validated_by_name),
+  });
+  res.json(data);
+}
+
 // ---------------------------------------------------------------------------
 // Reminders
 // ---------------------------------------------------------------------------
@@ -201,6 +296,7 @@ export async function listReminders(req: AuthenticatedRequest, res: Response): P
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
+  await ensureLeadAccess(req, leadId);
   const data = await leadsService.listReminders(leadId);
   res.json(data);
 }
@@ -209,6 +305,7 @@ export async function createReminder(req: AuthenticatedRequest, res: Response): 
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
+  await ensureLeadAccess(req, leadId);
   const reminderAt = pickString(req.body?.reminder_at);
   if (!reminderAt) throw new HttpError(400, 'reminder_at requis.');
 
@@ -243,6 +340,7 @@ export async function listTasks(req: AuthenticatedRequest, res: Response): Promi
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
+  await ensureLeadAccess(req, leadId);
   const data = await leadsService.listTasks(leadId);
   res.json(data);
 }
@@ -251,6 +349,7 @@ export async function createTask(req: AuthenticatedRequest, res: Response): Prom
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
+  await ensureLeadAccess(req, leadId);
   const body = req.body || {};
   const taskType = pickString(body.task_type);
   const title = pickString(body.title);
@@ -270,9 +369,12 @@ export async function createTask(req: AuthenticatedRequest, res: Response): Prom
 }
 
 export async function updateTask(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const leadId = pickString(req.params.id);
   const taskId = pickString(req.params.tid);
+  if (!leadId) throw new HttpError(400, 'id requis.');
   if (!taskId) throw new HttpError(400, 'tid requis.');
 
+  await ensureLeadAccess(req, leadId);
   const body = req.body || {};
   const data = await leadsService.updateTask(taskId, {
     status: pickOptionalString(body.status),
@@ -292,14 +394,7 @@ export async function listAttachments(req: AuthenticatedRequest, res: Response):
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
-  const lead = await leadsService.getLeadById(leadId);
-  if (!lead) throw new HttpError(404, 'Lead introuvable.');
-
-  const isAdmin = (req as any).isAdmin === true;
-  if (!isAdmin && lead.conseiller_id !== req.uid) {
-    throw new HttpError(403, 'Accès refusé à ce lead.');
-  }
-
+  await ensureLeadAccess(req, leadId);
   const data = await leadsService.listAttachments(leadId);
   res.json(data);
 }
@@ -308,14 +403,7 @@ export async function addAttachment(req: AuthenticatedRequest, res: Response): P
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
-  const lead = await leadsService.getLeadById(leadId);
-  if (!lead) throw new HttpError(404, 'Lead introuvable.');
-
-  const isAdmin = (req as any).isAdmin === true;
-  if (!isAdmin && lead.conseiller_id !== req.uid) {
-    throw new HttpError(403, 'Accès refusé à ce lead.');
-  }
-
+  await ensureLeadAccess(req, leadId);
   const body = req.body || {};
   const fileUrl = pickString(body.file_url);
   const fileName = pickString(body.file_name);

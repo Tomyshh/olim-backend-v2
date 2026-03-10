@@ -38,6 +38,13 @@ router.get(
   asyncHandler(leadsController.getRoles as any)
 );
 
+router.get(
+  '/call-summary-suggestions',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(leadsController.getCallSummarySuggestions as any)
+);
+
 // ---------------------------------------------------------------------------
 // Stats (admin only)
 // ---------------------------------------------------------------------------
@@ -154,6 +161,41 @@ router.post(
   authenticateToken,
   requireConseiller,
   asyncHandler(leadsController.addInteraction as any)
+);
+
+router.get(
+  '/:id/calls/drafts',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(leadsController.listCallDrafts as any)
+);
+
+router.post(
+  '/:id/calls',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(leadsController.createCallDraft as any)
+);
+
+router.get(
+  '/:id/calls/:cid',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(leadsController.getCallById as any)
+);
+
+router.patch(
+  '/:id/calls/:cid',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(leadsController.updateCall as any)
+);
+
+router.post(
+  '/:id/calls/:cid/validate',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(leadsController.validateCall as any)
 );
 
 // ---------------------------------------------------------------------------
