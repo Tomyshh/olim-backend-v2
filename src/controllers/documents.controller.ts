@@ -20,11 +20,21 @@ export async function getDocuments(req: AuthenticatedRequest, res: Response): Pr
     if (error) throw error;
 
     const allDocs = data || [];
-    const personalDocs = allDocs.filter(d => d.category === 'personal');
-    const legacyDocs = allDocs.filter(d => d.category === 'legacy').map(d => ({
+    const mapDocAliases = (d: any) => ({
       documentId: d.firestore_id || d.id,
-      ...d
-    }));
+      ...d,
+      // Legacy aliases
+      documentType: d.document_type ?? d.type ?? '',
+      fileUrl: d.file_url ?? '',
+      filePath: d.file_path ?? '',
+      fileName: d.file_name ?? '',
+      isValid: d.is_valid ?? false,
+      uploadedAt: d.uploaded_at ?? '',
+      createdAt: d.created_at ?? '',
+      familyMemberId: d.family_member_id ?? null,
+    });
+    const personalDocs = allDocs.filter(d => d.category === 'personal').map(mapDocAliases);
+    const legacyDocs = allDocs.filter(d => d.category === 'legacy').map(mapDocAliases);
 
     res.json({ personalDocs, legacyDocs });
   } catch (error: any) {
@@ -48,7 +58,20 @@ export async function getPersonalDocuments(req: AuthenticatedRequest, res: Respo
 
     if (error) throw error;
 
-    res.json({ documents: data || [] });
+    const documents = (data || []).map((d: any) => ({
+      documentId: d.firestore_id || d.id,
+      ...d,
+      // Legacy aliases
+      documentType: d.document_type ?? d.type ?? '',
+      fileUrl: d.file_url ?? '',
+      filePath: d.file_path ?? '',
+      fileName: d.file_name ?? '',
+      isValid: d.is_valid ?? false,
+      uploadedAt: d.uploaded_at ?? '',
+      createdAt: d.created_at ?? '',
+      familyMemberId: d.family_member_id ?? null,
+    }));
+    res.json({ documents });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -71,7 +94,20 @@ export async function getFamilyMemberDocuments(req: AuthenticatedRequest, res: R
 
     if (error) throw error;
 
-    res.json({ documents: data || [] });
+    const documents = (data || []).map((d: any) => ({
+      documentId: d.firestore_id || d.id,
+      ...d,
+      // Legacy aliases
+      documentType: d.document_type ?? d.type ?? '',
+      fileUrl: d.file_url ?? '',
+      filePath: d.file_path ?? '',
+      fileName: d.file_name ?? '',
+      isValid: d.is_valid ?? false,
+      uploadedAt: d.uploaded_at ?? '',
+      createdAt: d.created_at ?? '',
+      familyMemberId: d.family_member_id ?? null,
+    }));
+    res.json({ documents });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

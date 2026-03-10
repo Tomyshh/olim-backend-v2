@@ -28,7 +28,16 @@ export async function getAppointments(req: AuthenticatedRequest, res: Response):
 
     const appointments = (data || []).map(a => ({
       appointmentId: a.firestore_id || a.id,
-      ...a
+      ...a,
+      // Legacy aliases
+      date: a.date ?? '',
+      time: a.time ?? '',
+      status: a.status ?? '',
+      notes: a.notes ?? '',
+      requestId: a.request_id ?? a.requestId ?? null,
+      slotId: a.slot_id ?? null,
+      createdAt: a.created_at ?? '',
+      updatedAt: a.updated_at ?? '',
     }));
 
     res.json({ appointments });
@@ -53,7 +62,19 @@ export async function getAppointmentDetail(req: AuthenticatedRequest, res: Respo
       return;
     }
 
-    res.json({ appointmentId: data.firestore_id || data.id, ...data });
+    res.json({
+      appointmentId: data.firestore_id || data.id,
+      ...data,
+      // Legacy aliases
+      date: data.date ?? '',
+      time: data.time ?? '',
+      status: data.status ?? '',
+      notes: data.notes ?? '',
+      requestId: data.request_id ?? data.requestId ?? null,
+      slotId: data.slot_id ?? null,
+      createdAt: data.created_at ?? '',
+      updatedAt: data.updated_at ?? '',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -182,7 +203,12 @@ export async function getAvailableSlots(req: AuthenticatedRequest, res: Response
 
     const slots = (data || []).map(s => ({
       slotId: s.firestore_id || s.id,
-      ...s
+      ...s,
+      // Legacy aliases
+      date: s.date ?? '',
+      time: s.time ?? '',
+      available: s.available ?? false,
+      createdAt: s.created_at ?? '',
     }));
 
     res.json({ slots });

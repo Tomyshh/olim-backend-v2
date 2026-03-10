@@ -17,7 +17,17 @@ export async function getHealthRequests(req: AuthenticatedRequest, res: Response
 
     if (error) throw error;
 
-    const requests = (data || []).map((r: any) => ({ requestId: r.id, ...r }));
+    const requests = (data || []).map((r: any) => ({
+      requestId: r.id,
+      ...r,
+      // Legacy aliases
+      type: r.request_type ?? r.type ?? '',
+      description: r.description ?? '',
+      status: r.status ?? '',
+      data: r.data ?? null,
+      createdAt: r.created_at ?? '',
+      updatedAt: r.updated_at ?? '',
+    }));
 
     res.json({ requests });
   } catch (error: any) {
@@ -45,7 +55,17 @@ export async function getHealthRequestDetail(req: AuthenticatedRequest, res: Res
       return;
     }
 
-    res.json({ requestId: data.id, ...data });
+    res.json({
+      requestId: data.id,
+      ...data,
+      // Legacy aliases
+      type: data.request_type ?? data.type ?? '',
+      description: data.description ?? '',
+      status: data.status ?? '',
+      data: data.data ?? null,
+      createdAt: data.created_at ?? '',
+      updatedAt: data.updated_at ?? '',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

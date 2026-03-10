@@ -20,7 +20,19 @@ export async function getTips(req: AuthenticatedRequest, res: Response): Promise
     const { data, error } = await query;
     if (error) throw error;
 
-    let tips = (data || []).map((t: any) => ({ tipId: t.id, ...t }));
+    let tips = (data || []).map((t: any) => ({
+      tipId: t.id,
+      ...t,
+      // Legacy aliases
+      title: t.title ?? '',
+      content: t.content ?? t.body ?? '',
+      category: t.category ?? '',
+      isBreaking: t.is_breaking ?? false,
+      isActive: t.is_active ?? true,
+      isPinned: t.is_pinned ?? false,
+      displayOrder: t.display_order ?? 0,
+      createdAt: t.created_at ?? '',
+    }));
 
     if (search && String(search).trim()) {
       const term = String(search).trim().toLowerCase();
@@ -48,7 +60,19 @@ export async function getPinnedTips(req: AuthenticatedRequest, res: Response): P
 
     if (error) throw error;
 
-    const tips = (data || []).map((t: any) => ({ tipId: t.id, ...t }));
+    const tips = (data || []).map((t: any) => ({
+      tipId: t.id,
+      ...t,
+      // Legacy aliases
+      title: t.title ?? '',
+      content: t.content ?? t.body ?? '',
+      category: t.category ?? '',
+      isBreaking: t.is_breaking ?? false,
+      isActive: t.is_active ?? true,
+      isPinned: t.is_pinned ?? false,
+      displayOrder: t.display_order ?? 0,
+      createdAt: t.created_at ?? '',
+    }));
 
     res.json({ tips });
   } catch (error: any) {
@@ -135,7 +159,13 @@ export async function getSavedTips(req: AuthenticatedRequest, res: Response): Pr
 
     if (error) throw error;
 
-    const tips = (data || []).map((t: any) => ({ tipId: t.tip_id, ...t }));
+    const tips = (data || []).map((t: any) => ({
+      tipId: t.tip_id,
+      ...t,
+      // Legacy aliases
+      savedAt: t.saved_at ?? '',
+      createdAt: t.created_at ?? '',
+    }));
 
     res.json({ tips });
   } catch (error: any) {
@@ -210,7 +240,18 @@ export async function getNews(req: AuthenticatedRequest, res: Response): Promise
 
     if (error) throw error;
 
-    const news = (data || []).map((n: any) => ({ newsId: n.id, ...n }));
+    const news = (data || []).map((n: any) => ({
+      newsId: n.id,
+      ...n,
+      // Legacy aliases
+      title: n.title ?? '',
+      content: n.content ?? n.body ?? '',
+      category: n.category ?? '',
+      isBreaking: n.is_breaking ?? false,
+      isActive: n.is_active ?? true,
+      displayOrder: n.display_order ?? 0,
+      createdAt: n.created_at ?? '',
+    }));
 
     res.json({ news });
   } catch (error: any) {
@@ -228,7 +269,18 @@ export async function getBreakingNews(req: AuthenticatedRequest, res: Response):
 
     if (error) throw error;
 
-    const news = (data || []).map((n: any) => ({ newsId: n.id, ...n }));
+    const news = (data || []).map((n: any) => ({
+      newsId: n.id,
+      ...n,
+      // Legacy aliases
+      title: n.title ?? '',
+      content: n.content ?? n.body ?? '',
+      category: n.category ?? '',
+      isBreaking: n.is_breaking ?? false,
+      isActive: n.is_active ?? true,
+      displayOrder: n.display_order ?? 0,
+      createdAt: n.created_at ?? '',
+    }));
 
     res.json({ news });
   } catch (error: any) {

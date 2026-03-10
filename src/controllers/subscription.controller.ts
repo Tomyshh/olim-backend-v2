@@ -1681,9 +1681,17 @@ export async function getInvoices(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    const invoices = (data ?? []).map(inv => ({
+    const invoices = (data ?? []).map((inv: any) => ({
       invoiceId: inv.firestore_id ?? inv.id,
-      ...inv
+      ...inv,
+      // Legacy aliases
+      invoiceNumber: inv.invoice_number ?? '',
+      amount: inv.amount ?? inv.amount_cents ?? 0,
+      amountCents: inv.amount_cents ?? inv.amount ?? 0,
+      status: inv.status ?? '',
+      paidAt: inv.paid_at ?? null,
+      dueDate: inv.due_date ?? null,
+      createdAt: inv.created_at ?? '',
     }));
 
     res.json({ invoices });
@@ -1710,7 +1718,18 @@ export async function getInvoiceDetail(req: AuthenticatedRequest, res: Response)
       return;
     }
 
-    res.json({ invoiceId, ...data });
+    res.json({
+      invoiceId,
+      ...data,
+      // Legacy aliases
+      invoiceNumber: data.invoice_number ?? '',
+      amount: data.amount ?? data.amount_cents ?? 0,
+      amountCents: data.amount_cents ?? data.amount ?? 0,
+      status: data.status ?? '',
+      paidAt: data.paid_at ?? null,
+      dueDate: data.due_date ?? null,
+      createdAt: data.created_at ?? '',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -1736,9 +1755,17 @@ export async function getRefundRequests(req: AuthenticatedRequest, res: Response
       return;
     }
 
-    const refunds = (data ?? []).map(r => ({
+    const refunds = (data ?? []).map((r: any) => ({
       refundId: r.firestore_id ?? r.id,
-      ...r
+      ...r,
+      // Legacy aliases
+      requestId: r.request_id ?? null,
+      amount: r.amount ?? r.amount_cents ?? 0,
+      amountCents: r.amount_cents ?? r.amount ?? 0,
+      reason: r.reason ?? '',
+      status: r.status ?? '',
+      createdAt: r.created_at ?? '',
+      updatedAt: r.updated_at ?? '',
     }));
 
     res.json({ refunds });
@@ -1799,7 +1826,18 @@ export async function getRefundRequestDetail(req: AuthenticatedRequest, res: Res
       return;
     }
 
-    res.json({ refundId, ...data });
+    res.json({
+      refundId,
+      ...data,
+      // Legacy aliases
+      requestId: data.request_id ?? null,
+      amount: data.amount ?? data.amount_cents ?? 0,
+      amountCents: data.amount_cents ?? data.amount ?? 0,
+      reason: data.reason ?? '',
+      status: data.status ?? '',
+      createdAt: data.created_at ?? '',
+      updatedAt: data.updated_at ?? '',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

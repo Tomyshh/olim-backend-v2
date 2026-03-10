@@ -18,7 +18,27 @@ export async function getCinemaInfo(req: AuthenticatedRequest, res: Response): P
         if (error) throw error;
         if (!movies || movies.length === 0) return { cinema: null };
 
-        return { cinema: { movies } };
+        const mappedMovies = movies.map((m: any) => ({
+          ...m,
+          // Legacy aliases
+          title: m.title ?? '',
+          language: m.language ?? '',
+          ageRating: m.age_rating ?? '',
+          duration: m.duration ?? '',
+          genre: m.genre ?? '',
+          imageLarge: m.image_large ?? '',
+          imageLong: m.image_long ?? '',
+          createdAt: m.created_at ?? '',
+          icinema_seances: (m.icinema_seances ?? []).map((s: any) => ({
+            ...s,
+            movieId: s.movie_id ?? null,
+            cinemaName: s.cinema_name ?? '',
+            hallName: s.hall_name ?? '',
+            screenType: s.screen_type ?? '',
+            createdAt: s.created_at ?? '',
+          })),
+        }));
+        return { cinema: { movies: mappedMovies } };
       }
     });
     res.setHeader('X-Cache', cacheStatus);
@@ -42,7 +62,27 @@ export async function getMovies(req: AuthenticatedRequest, res: Response): Promi
 
         if (error) throw error;
 
-        return { movies: movies || [] };
+        const mappedMovies = (movies || []).map((m: any) => ({
+          ...m,
+          // Legacy aliases
+          title: m.title ?? '',
+          language: m.language ?? '',
+          ageRating: m.age_rating ?? '',
+          duration: m.duration ?? '',
+          genre: m.genre ?? '',
+          imageLarge: m.image_large ?? '',
+          imageLong: m.image_long ?? '',
+          createdAt: m.created_at ?? '',
+          icinema_seances: (m.icinema_seances ?? []).map((s: any) => ({
+            ...s,
+            movieId: s.movie_id ?? null,
+            cinemaName: s.cinema_name ?? '',
+            hallName: s.hall_name ?? '',
+            screenType: s.screen_type ?? '',
+            createdAt: s.created_at ?? '',
+          })),
+        }));
+        return { movies: mappedMovies };
       }
     });
     res.setHeader('X-Cache', cacheStatus);

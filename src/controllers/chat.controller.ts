@@ -34,11 +34,25 @@ export async function getConversations(req: AuthenticatedRequest, res: Response)
           .eq('is_read', false)
           .neq('sender_id', uid);
 
+        const lastMsg = lastMessages?.[0] || null;
         return {
           conversationId: conv.firestore_id || conv.id,
           ...conv,
-          lastMessage: lastMessages?.[0] || null,
-          unreadCount: unreadCount || 0
+          lastMessage: lastMsg ? {
+            ...lastMsg,
+            // Legacy aliases for messages
+            senderName: lastMsg.sender_name ?? '',
+            senderId: lastMsg.sender_id ?? '',
+            isRead: lastMsg.is_read ?? false,
+            readAt: lastMsg.read_at ?? null,
+            createdAt: lastMsg.created_at ?? '',
+          } : null,
+          unreadCount: unreadCount || 0,
+          // Legacy aliases
+          title: conv.title ?? '',
+          requestId: conv.request_id ?? null,
+          createdAt: conv.created_at ?? '',
+          updatedAt: conv.updated_at ?? '',
         };
       })
     );
@@ -74,7 +88,16 @@ export async function getMessages(req: AuthenticatedRequest, res: Response): Pro
 
     const messages = (data || []).map(msg => ({
       messageId: msg.firestore_id || msg.id,
-      ...msg
+      ...msg,
+      // Legacy aliases
+      content: msg.content ?? '',
+      senderName: msg.sender_name ?? '',
+      senderId: msg.sender_id ?? '',
+      type: msg.type ?? 'text',
+      attachments: msg.attachments ?? [],
+      isRead: msg.is_read ?? false,
+      readAt: msg.read_at ?? null,
+      createdAt: msg.created_at ?? '',
     }));
 
     res.json({ messages });

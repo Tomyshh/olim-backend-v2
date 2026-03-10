@@ -67,7 +67,16 @@ export async function getNotifications(req: AuthenticatedRequest, res: Response)
 
     const notifications = (data || []).map(n => ({
       notificationId: n.firestore_id || n.id,
-      ...n
+      ...n,
+      // Legacy aliases
+      title: n.title ?? '',
+      body: n.body ?? '',
+      type: n.type ?? '',
+      read: n.is_read ?? false,
+      isRead: n.is_read ?? false,
+      readAt: n.read_at ?? null,
+      data: n.data ?? null,
+      createdAt: n.created_at ?? '',
     }));
 
     res.json({ notifications });
@@ -92,7 +101,19 @@ export async function getNotificationDetail(req: AuthenticatedRequest, res: Resp
       return;
     }
 
-    res.json({ notificationId: data.firestore_id || data.id, ...data });
+    res.json({
+      notificationId: data.firestore_id || data.id,
+      ...data,
+      // Legacy aliases
+      title: data.title ?? '',
+      body: data.body ?? '',
+      type: data.type ?? '',
+      read: data.is_read ?? false,
+      isRead: data.is_read ?? false,
+      readAt: data.read_at ?? null,
+      data: data.data ?? null,
+      createdAt: data.created_at ?? '',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -197,7 +218,17 @@ export async function getNotificationSettings(req: AuthenticatedRequest, res: Re
       return;
     }
 
-    res.json({ settings: data });
+    res.json({
+      settings: {
+        ...data,
+        // Legacy aliases
+        pushEnabled: data.push_enabled ?? true,
+        emailEnabled: data.email_enabled ?? true,
+        smsEnabled: data.sms_enabled ?? false,
+        createdAt: data.created_at ?? '',
+        updatedAt: data.updated_at ?? '',
+      }
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

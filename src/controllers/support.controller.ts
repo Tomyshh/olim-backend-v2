@@ -13,7 +13,16 @@ export async function getFAQs(req: AuthenticatedRequest, res: Response): Promise
 
     if (error) throw error;
 
-    const faqs = (data || []).map((f: any) => ({ faqId: f.id, ...f }));
+    const faqs = (data || []).map((f: any) => ({
+      faqId: f.id,
+      ...f,
+      // Legacy aliases
+      question: f.question ?? '',
+      answer: f.answer ?? '',
+      category: f.category ?? '',
+      displayOrder: f.display_order ?? f.order ?? 0,
+      createdAt: f.created_at ?? '',
+    }));
 
     res.json({ faqs });
   } catch (error: any) {
@@ -29,7 +38,16 @@ export async function getSupportContacts(req: AuthenticatedRequest, res: Respons
 
     if (error) throw error;
 
-    const contacts = (data || []).map((c: any) => ({ contactId: c.id, ...c }));
+    const contacts = (data || []).map((c: any) => ({
+      contactId: c.id,
+      ...c,
+      // Legacy aliases
+      name: c.name ?? '',
+      role: c.role ?? '',
+      email: c.email ?? '',
+      phone: c.phone ?? '',
+      createdAt: c.created_at ?? '',
+    }));
 
     res.json({ contacts });
   } catch (error: any) {
@@ -79,7 +97,17 @@ export async function getSupportTickets(req: AuthenticatedRequest, res: Response
 
     if (error) throw error;
 
-    const tickets = (data || []).map((t: any) => ({ ticketId: t.id, ...t }));
+    const tickets = (data || []).map((t: any) => ({
+      ticketId: t.id,
+      ...t,
+      // Legacy aliases
+      subject: t.subject ?? '',
+      description: t.description ?? '',
+      status: t.status ?? '',
+      priority: t.priority ?? 'normal',
+      createdAt: t.created_at ?? '',
+      updatedAt: t.updated_at ?? '',
+    }));
 
     res.json({ tickets });
   } catch (error: any) {
@@ -154,7 +182,17 @@ export async function getSupportTicketDetail(req: AuthenticatedRequest, res: Res
       return;
     }
 
-    res.json({ ticketId: data.id, ...data });
+    res.json({
+      ticketId: data.id,
+      ...data,
+      // Legacy aliases
+      subject: data.subject ?? '',
+      description: data.description ?? '',
+      status: data.status ?? '',
+      priority: data.priority ?? 'normal',
+      createdAt: data.created_at ?? '',
+      updatedAt: data.updated_at ?? '',
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
