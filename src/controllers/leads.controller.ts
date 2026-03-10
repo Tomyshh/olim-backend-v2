@@ -292,6 +292,14 @@ export async function listAttachments(req: AuthenticatedRequest, res: Response):
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
+  const lead = await leadsService.getLeadById(leadId);
+  if (!lead) throw new HttpError(404, 'Lead introuvable.');
+
+  const isAdmin = (req as any).isAdmin === true;
+  if (!isAdmin && lead.conseiller_id !== req.uid) {
+    throw new HttpError(403, 'Accès refusé à ce lead.');
+  }
+
   const data = await leadsService.listAttachments(leadId);
   res.json(data);
 }
@@ -300,19 +308,28 @@ export async function addAttachment(req: AuthenticatedRequest, res: Response): P
   const leadId = pickString(req.params.id);
   if (!leadId) throw new HttpError(400, 'id requis.');
 
+  const lead = await leadsService.getLeadById(leadId);
+  if (!lead) throw new HttpError(404, 'Lead introuvable.');
+
+  const isAdmin = (req as any).isAdmin === true;
+  if (!isAdmin && lead.conseiller_id !== req.uid) {
+    throw new HttpError(403, 'Accès refusé à ce lead.');
+  }
+
   const body = req.body || {};
   const fileUrl = pickString(body.file_url);
   const fileName = pickString(body.file_name);
   if (!fileUrl) throw new HttpError(400, 'file_url requis.');
   if (!fileName) throw new HttpError(400, 'file_name requis.');
 
+  const conseillerName = (req as any).conseillerName || '';
   const data = await leadsService.addAttachment(leadId, {
     file_url: fileUrl,
     file_name: fileName,
     file_size: typeof body.file_size === 'number' ? body.file_size : undefined,
     mime_type: pickOptionalString(body.mime_type),
     uploaded_by: req.uid!,
-    uploaded_by_name: pickOptionalString(body.uploaded_by_name),
+    uploaded_by_name: pickOptionalString(body.uploaded_by_name) || conseillerName || undefined,
   });
   res.status(201).json(data);
 }
