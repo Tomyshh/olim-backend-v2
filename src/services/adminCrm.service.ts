@@ -48,7 +48,7 @@ export async function listClients(filters: ClientFilters) {
     .from('clients')
     .select(`
       *,
-      subscriptions(id, plan_type, membership_type, status, price_cents, currency, payme_subscription_id, created_at, updated_at),
+      subscriptions(id, plan_type, membership_type, price_cents, currency, payme_status, is_unpaid, payme_sub_id, start_at, end_at, created_at, updated_at),
       family_members(id, first_name, last_name, status),
       client_addresses(id, label, address1, city, country, is_primary)
     `, { count: 'exact' });
@@ -83,7 +83,7 @@ export async function getClientById(clientId: string) {
       subscriptions(*),
       family_members(*),
       client_addresses(*),
-      payment_credentials(id, card_name, last4, brand, is_subscription_card, created_at),
+      payment_credentials(id, card_name, card_masked, card_type, is_subscription_card, is_default, created_at),
       client_documents(id, document_type, for_who, is_valid, created_at)
     `)
     .eq('id', clientId)
@@ -101,7 +101,7 @@ export async function getClientByFirebaseUid(firebaseUid: string) {
       subscriptions(*),
       family_members(*),
       client_addresses(*),
-      payment_credentials(id, card_name, last4, brand, is_subscription_card, created_at),
+      payment_credentials(id, card_name, card_masked, card_type, is_subscription_card, is_default, created_at),
       client_documents(id, document_type, for_who, is_valid, created_at)
     `)
     .eq('firebase_uid', firebaseUid)
@@ -137,29 +137,56 @@ export async function deleteClient(clientId: string) {
 // ---------------------------------------------------------------------------
 
 export async function listRequestsAdmin(filters: RequestFilters) {
-  const page = filters.page ?? 1;
-  const limit = Math.min(filters.limit ?? 50, 200);
-  const offset = (page - 1) * limit;
-
   const db = getFirestore();
   let query: FirebaseFirestore.Query = db.collectionGroup('Requests');
 
   if (filters.status) query = query.where('Status', '==', filters.status);
   if (filters.request_type) query = query.where('Request Type', '==', filters.request_type);
   if (filters.category) query = query.where('Request Category', '==', filters.category);
-  if (filters.assigned_to) query = query.where('assigned_to', '==', filters.assigned_to);
-  if (filters.urgency) query = query.where('urgency', '==', filters.urgency);
+  if (filters.assigned_to) query = query.where('Assigned to', '==', filters.assigned_to);
 
-  query = query.orderBy('Request Date', 'desc').limit(limit).offset(offset);
+  query = query.orderBy('Request Date', 'desc');
+
+  const limitVal = Math.min(filters.limit ?? 200, 500);
+  query = query.limit(limitVal);
 
   const snapshot = await query.get();
-  const requests = snapshot.docs.map(doc => ({
-    id: doc.id,
-    clientId: doc.ref.parent.parent?.id,
-    ...doc.data(),
-  }));
 
-  return { requests, page, limit };
+  const requests = snapshot.docs.map(doc => {
+    const data = doc.data();
+    const requestDate = data['Request Date']?.toDate?.() ?? data['Request Date'] ?? null;
+    return {
+      id: doc.id,
+      clientId: doc.ref.parent.parent?.id,
+      status: data['Status'] ?? '',
+      requestType: data['Request Type'] ?? '',
+      requestCategory: data['Request Category'] ?? '',
+      assignedTo: data['Assigned to'] ?? '',
+      assignedToUid: data['assigned_to_uid'] ?? null,
+      description: data['Description'] ?? '',
+      requestDate: requestDate instanceof Date ? requestDate.toISOString() : requestDate,
+      isOpened: data['is opened'] ?? false,
+      ...data,
+    };
+  });
+
+  let filtered = requests;
+  if (filters.search) {
+    const s = filters.search.toLowerCase();
+    filtered = filtered.filter(r =>
+      (r.description || '').toLowerCase().includes(s) ||
+      (r.clientId || '').toLowerCase().includes(s) ||
+      (r.assignedTo || '').toLowerCase().includes(s)
+    );
+  }
+
+  const total = filtered.length;
+  const page = filters.page ?? 1;
+  const pageLimit = Math.min(filters.limit ?? 50, 200);
+  const start = (page - 1) * pageLimit;
+  const paginated = filtered.slice(start, start + pageLimit);
+
+  return { requests: paginated, total, page, limit: pageLimit };
 }
 
 // ---------------------------------------------------------------------------
@@ -351,37 +378,53 @@ export async function deleteTip(tipId: string) {
 // ---------------------------------------------------------------------------
 
 export async function getOverviewStats() {
-  const [clientsResult, requestsResult, leadsResult, subResult] = await Promise.all([
+  const db = getFirestore();
+
+  const [clientsResult, leadsResult, subResult] = await Promise.all([
     supabase.from('clients').select('id', { count: 'exact', head: true }),
-    supabase.from('requests').select('id', { count: 'exact', head: true }),
-    supabase.from('leads').select('id', { count: 'exact', head: true }).eq('archived', false),
-    supabase.from('subscriptions').select('id, status, membership_type', { count: 'exact' }).eq('status', 'active'),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null),
+    supabase.from('subscriptions').select('id, membership_type, is_unpaid', { count: 'exact' }).eq('is_unpaid', false),
   ]);
 
+  const requestsSnapshot = await db.collectionGroup('Requests').get();
+  const totalRequests = requestsSnapshot.size;
+
   const now = new Date();
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const { data: recentRequests } = await supabase
-    .from('requests')
-    .select('id, created_at, status')
-    .gte('created_at', thirtyDaysAgo)
-    .order('created_at', { ascending: true });
+  const recentRequests = requestsSnapshot.docs
+    .map(doc => {
+      const data = doc.data();
+      const requestDate = data['Request Date']?.toDate?.() ?? (data['Request Date'] ? new Date(data['Request Date']) : null);
+      return {
+        id: doc.id,
+        clientId: doc.ref.parent.parent?.id,
+        created_at: requestDate?.toISOString() ?? null,
+        status: data['Status'] ?? 'Unknown',
+      };
+    })
+    .filter(r => r.created_at && new Date(r.created_at) >= thirtyDaysAgo)
+    .sort((a, b) => new Date(a.created_at!).getTime() - new Date(b.created_at!).getTime());
 
-  const { data: advisers } = await supabase
-    .from('conseillers')
-    .select('id, name, firebase_uid');
+  const conseillersSnapshot = await db.collection('Conseillers2').get();
+  const advisers = conseillersSnapshot.docs.map(doc => ({
+    id: doc.id,
+    name: doc.data().name ?? '',
+    firebase_uid: doc.id,
+  }));
 
   return {
     totalClients: clientsResult.count ?? 0,
-    totalRequests: requestsResult.count ?? 0,
+    totalRequests,
     totalLeads: leadsResult.count ?? 0,
     activeSubscriptions: subResult.count ?? 0,
     subscriptionsByType: subResult.data?.reduce((acc: Record<string, number>, s: any) => {
-      acc[s.membership_type] = (acc[s.membership_type] || 0) + 1;
+      const mt = s.membership_type ?? 'unknown';
+      acc[mt] = (acc[mt] || 0) + 1;
       return acc;
     }, {}) ?? {},
-    recentRequests: recentRequests ?? [],
-    advisers: advisers ?? [],
+    recentRequests,
+    advisers,
   };
 }
 
