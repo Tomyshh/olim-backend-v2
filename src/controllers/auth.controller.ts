@@ -1,8 +1,19 @@
 import { Response } from 'express';
+import { createClient } from '@supabase/supabase-js';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { sendLoginOtp, verifyLoginOtp, sendLinkPhoneOtp, verifyLinkPhoneOtp, verifyVisitorOtp } from '../services/phoneOtp.service.js';
 import { getClientIp } from '../utils/errors.js';
 import { getAuth, getFirestore } from '../config/firebase.js';
+import { supabase } from '../services/supabase.service.js';
+
+const supabaseUrl = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || '';
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
+const supabaseAuthClient =
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey, {
+        auth: { autoRefreshToken: false, persistSession: false },
+      })
+    : null;
 
 export async function sendPhoneOtp(req: AuthenticatedRequest, res: Response): Promise<void> {
     const uid = req.uid!;
@@ -59,14 +70,84 @@ export async function createVisitorAccount(req: AuthenticatedRequest, res: Respo
 
 export async function loginEmail(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const { email, password } = req.body;
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (!email || !password) {
+      res.status(400).json({ message: 'email et password sont requis.' });
+      return;
+    }
 
-    // TODO: Vérifier credentials (si stockés dans Firestore ou Firebase Auth)
-    // TODO: Générer customToken ou retourner token Firebase
-    
-    res.status(501).json({
-      message: 'Not implemented - loginEmail',
-      note: 'À implémenter selon stratégie auth email/password'
+    if (!supabaseAuthClient) {
+      res.status(503).json({
+        message: 'Supabase auth non configuré côté serveur.',
+        code: 'supabase_auth_not_configured',
+      });
+      return;
+    }
+
+    // Stratégie demandée: Supabase d'abord.
+    const { data: authData, error: authError } = await supabaseAuthClient.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (authError || !authData.user) {
+      res.status(401).json({
+        message: 'Identifiants invalides côté Supabase.',
+        code: 'supabase_login_failed',
+      });
+      return;
+    }
+
+    // Mapping Supabase auth user -> firebase_uid pour rester compatible
+    // avec le reste de l'app (token Firebase côté mobile + middleware backend).
+    let firebaseUid: string | null = null;
+
+    const byAuthUserId = await supabase
+      .from('clients')
+      .select('firebase_uid')
+      .eq('auth_user_id', authData.user.id)
+      .maybeSingle();
+    if (!byAuthUserId.error) {
+      firebaseUid = (byAuthUserId.data as any)?.firebase_uid ?? null;
+    }
+
+    if (!firebaseUid) {
+      const byEmail = await supabase
+        .from('clients')
+        .select('firebase_uid')
+        .eq('email', email)
+        .maybeSingle();
+      if (!byEmail.error) {
+        firebaseUid = (byEmail.data as any)?.firebase_uid ?? null;
+      }
+    }
+
+    if (!firebaseUid) {
+      // Dernier fallback de mapping: Firebase Auth par email.
+      try {
+        const user = await getAuth().getUserByEmail(email);
+        firebaseUid = user.uid;
+      } catch (_) {
+        firebaseUid = null;
+      }
+    }
+
+    if (!firebaseUid) {
+      res.status(404).json({
+        message: 'Compte Supabase trouvé mais mapping Firebase introuvable.',
+        code: 'firebase_mapping_not_found',
+      });
+      return;
+    }
+
+    const customToken = await getAuth().createCustomToken(firebaseUid, {
+      authProvider: 'supabase',
+    });
+
+    res.json({
+      ok: true,
+      provider: 'supabase',
+      customToken,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

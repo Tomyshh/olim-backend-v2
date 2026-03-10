@@ -22,8 +22,8 @@ router.post('/create-visitor-account', asyncHandler(authController.createVisitor
 // Déconnexion serveur (optionnel) : révoquer refresh tokens Firebase
 router.post('/logout', authenticateToken, asyncHandler(authController.logout as any));
 
-// Login email/password (si nécessaire)
-router.post('/login-email', authController.loginEmail);
+// Login email/password (Supabase-first, customToken Firebase)
+router.post('/login-email', asyncHandler(authController.loginEmail as any));
 
 export default router;
 
