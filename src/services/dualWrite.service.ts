@@ -286,6 +286,7 @@ function toDateOnly(value: unknown): string | null {
 export function mapClientToSupabase(uid: string, fs: Record<string, any>): Record<string, any> {
   return {
     firebase_uid: uid,
+    firestore_id: uid,
     email: pickStr(fs.Email) ?? pickStr(fs.email),
     first_name: pickStr(fs['First Name']) ?? pickStr(fs.firstName),
     last_name: pickStr(fs['Last Name']) ?? pickStr(fs.lastName),
@@ -297,19 +298,19 @@ export function mapClientToSupabase(uid: string, fs: Record<string, any>): Recor
     language: pickStr(fs.language) ?? 'fr',
     registration_complete: fs.registrationComplete ?? false,
     registration_completed_at: toIso(fs.registrationCompletedAt),
-    has_gov_access: fs.hasGOVAccess ?? null,
+    has_gov_access: fs.hasGOVAccess ?? fs.hasGOVacces ?? null,
+    membership_type: pickStr(fs.Membership) ?? pickStr(fs.membership?.type) ?? pickStr(fs.membershipType),
+    membership_status: pickStr(fs.membership?.status) ?? pickStr(fs.membershipStatus),
+    is_unpaid: fs.isUnpaid ?? false,
+    free_access: fs.freeAccess ?? null,
+    seniority: fs.seniority ?? null,
+    created_from: pickStr(fs.createdFrom) ?? pickStr(fs['Created From']) ?? pickStr(fs.createdVia),
+    securden_folder: pickStr(fs.securden_Folder) ?? pickStr(fs['Securden folder']),
+    promo_code_used: pickStr(fs.promoCodeUsed),
+    last_login_at: toIso(fs.lastLoginAt),
     metadata: {
       activity: fs.activity ?? null,
       devices: fs.Devices ?? [],
-      membership: pickStr(fs.Membership) ?? pickStr(fs.membership?.type),
-      membershipStatus: pickStr(fs.membership?.status),
-      isUnpaid: fs.isUnpaid ?? false,
-      freeAccess: fs.freeAccess ?? null,
-      seniority: fs.seniority ?? null,
-      createdFrom: pickStr(fs.createdFrom) ?? pickStr(fs['Created From']) ?? pickStr(fs.createdVia),
-      securdenFolder: pickStr(fs['Securden folder']) ?? pickStr(fs.securden_Folder),
-      promoCodeUsed: pickStr(fs.promoCodeUsed),
-      lastLoginAt: toIso(fs.lastLoginAt),
       subscriptionPlan: fs['Subscription Plan'] ?? null,
       israCardSubCode: fs['IsraCard Sub Code'] ?? fs.israCard_subCode ?? null,
       israCardSubId: fs['IsraCard Sub ID'] ?? null
@@ -347,8 +348,13 @@ export async function mapSubscriptionToSupabase(
     payme_sub_id: pickStr(fs.payme?.subID),
     payme_buyer_key: pickStr(fs.payme?.buyerKey),
     payme_status: pickStr(typeof fs.payme?.status === 'number' ? String(fs.payme.status) : fs.payme?.status),
-    payme_sub_status: fs.payme?.subStatus ?? null,
-    is_unpaid: fs.states?.isUnpaid ?? false,
+    payme_sub_status: typeof fs.payme?.status === 'number' ? fs.payme.status : (fs.payme?.subStatus ?? null),
+    is_unpaid: fs.isUnpaid ?? fs.states?.isUnpaid ?? false,
+    is_active: fs.states?.isActive ?? null,
+    is_paused: fs.states?.isPaused ?? null,
+    will_expire: fs.states?.willExpire ?? null,
+    is_annual: fs.states?.isAnnual ?? null,
+    family_supplement_cents: fs.familySupplement?.monthlyCents ?? fs.familySupplementTotalInCents ?? null,
     promo_code: pickStr(fs.promoCode?.code),
     promo_source: pickStr(fs.promoCode?.source),
     promo_applied_at: toIso(fs.promoCode?.appliedDate),
@@ -356,14 +362,10 @@ export async function mapSubscriptionToSupabase(
     start_at: toIso(fs.dates?.startDate),
     end_at: toIso(fs.dates?.endDate),
     cancelled_at: toIso(fs.dates?.cancelledDate),
+    resumed_at: toIso(fs.dates?.resumedDate),
     metadata: {
       source: fs.source ?? null,
       updatedBy: fs.updatedBy ?? null,
-      isActive: fs.states?.isActive ?? null,
-      isPaused: fs.states?.isPaused ?? null,
-      willExpire: fs.states?.willExpire ?? null,
-      isAnnual: fs.states?.isAnnual ?? null,
-      familySupplementCents: fs.familySupplement?.monthlyCents ?? null,
       raw_states: fs.states ?? null
     },
     created_at: toIso(fs.createdAt) ?? new Date().toISOString(),
@@ -381,23 +383,34 @@ export async function mapFamilyMemberToSupabase(
 
   return {
     client_id: clientSupabaseId,
+    firestore_id: memberId,
     first_name: pickStr(fs['First Name']) ?? pickStr(fs.firstName),
     last_name: pickStr(fs['Last Name']) ?? pickStr(fs.lastName),
+    father_name: pickStr(fs['Father Name']) ?? pickStr(fs.fatherName),
     birthday: toDateOnly(fs.Birthday) ?? toDateOnly(fs.birthday),
     teoudat_zeout: pickStr(fs['Teoudat Zeout']) ?? pickStr(fs.teoudatZeout),
+    koupat_holim: pickStr(fs['Koupat Holim']) ?? pickStr(fs.koupatHolim),
+    email: pickStr(fs.Email) ?? pickStr(fs.email),
+    phone: Array.isArray(fs['Phone Number']) ? pickStr(fs['Phone Number'][0]) : pickStr(fs['Phone Number']) ?? pickStr(fs.phone),
     status,
+    relationship_type: pickStr(fs['Family Member Status']) ?? pickStr(fs.relationshipType) ?? status,
     relationship_type_id: relationshipTypeId,
     is_account_owner: fs.isAccountOwner ?? (memberId === 'account_owner'),
-    metadata: {
-      firestoreId: memberId,
-      fatherName: pickStr(fs['Father Name']) ?? pickStr(fs.fatherName),
-      koupatHolim: pickStr(fs['Koupat Holim']) ?? pickStr(fs.koupatHolim),
-      email: pickStr(fs.Email) ?? pickStr(fs.email),
-      phone: pickStr(fs['Phone Number']?.[0]) ?? pickStr(fs.phone),
-      isActive: fs.isActive ?? true,
-      deactivatedAt: toIso(fs.deactivatedAt),
-      monthlySupplementCents: fs.monthlySupplement?.amountCents ?? null
-    },
+    is_active: fs.isActive ?? true,
+    deactivated_at: toIso(fs.deactivatedAt),
+    monthly_supplement_cents: fs.monthlySupplement?.amountCents ?? fs.monthlySupplementCents ?? null,
+    has_gov_access: fs.hasGOVacces ?? fs.hasGovAccess ?? fs.has_gov_access ?? null,
+    is_connected: fs.isConnected ?? null,
+    lives_at_home: fs.livesAtHome ?? null,
+    service_active: fs.serviceActive ?? fs.service_active ?? null,
+    billing_exempt: fs.billingExempt ?? fs.billing_exempt ?? null,
+    billing_exempt_reason: pickStr(fs.billingExemptReason) ?? pickStr(fs.billing_exempt_reason),
+    validation_status: pickStr(fs.validationStatus) ?? pickStr(fs.validation_status),
+    is_child: fs.isChild ?? fs.is_child ?? null,
+    service_activated_at: toIso(fs.serviceActivatedAt),
+    reactivated_at: toIso(fs.reactivatedAt),
+    selected_card_id: pickStr(fs.selectedCardId) ?? pickStr(fs.selected_card_id),
+    metadata: {},
     created_at: toIso(fs.createdAt) ?? toIso(fs['Created At']) ?? new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
@@ -424,13 +437,19 @@ export function mapAddressToSupabase(
 ): Record<string, any> {
   return {
     client_id: clientSupabaseId,
+    firestore_id: addressId,
     label: pickStr(fs.Name) ?? pickStr(fs.name) ?? pickStr(fs.label),
+    name: pickStr(fs.Name) ?? pickStr(fs.name),
     address1: pickStr(fs.Address) ?? pickStr(fs.address),
     address2: pickStr(fs['Additional address']) ?? pickStr(fs.additionalInfo),
+    additional_info: pickStr(fs.additionalInfo) ?? pickStr(fs['Additional address']),
     apartment: pickStr(fs.Appartment) ?? pickStr(fs.apartment),
     floor: pickStr(fs.Etage) ?? pickStr(fs.floor),
+    details: pickStr(fs.details),
     is_primary: addressId === 'primary' || fs.isPrimary === true,
-    metadata: { firestoreId: addressId },
+    is_active: fs.isActive ?? true,
+    order_index: typeof fs.orderIndex === 'number' ? fs.orderIndex : 0,
+    metadata: {},
     created_at: toIso(fs.createdAt) ?? new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
@@ -443,15 +462,23 @@ export function mapPaymentCredentialToSupabase(
 ): Record<string, any> {
   return {
     client_id: clientSupabaseId,
+    firestore_id: credId,
     provider: 'payme',
     buyer_key: pickStr(fs['Isracard Key']) ?? pickStr(fs.buyerKey) ?? pickStr(fs.isracard_key),
     card_masked: pickStr(fs['Card Number']) ?? pickStr(fs.cardNumber),
-    card_type: pickStr(fs['Card Type']) ?? pickStr(fs.cardType),
+    card_type: pickStr(fs['Card Type']) ?? pickStr(fs.cardType) ?? pickStr(fs.brand),
     card_name: pickStr(fs['Card Holder']) ?? pickStr(fs['Card Name']) ?? pickStr(fs.cardName),
     securden_id: pickStr(fs['Securden ID']) ?? pickStr(fs.securdenId),
+    securden_folder: pickStr(fs.securden?.folderId) ?? pickStr(fs.securdenFolder),
     is_default: fs.isDefault ?? false,
     is_subscription_card: fs.isSubscriptionCard ?? false,
-    metadata: { firestoreId: credId },
+    metadata: {
+      brand: pickStr(fs.brand),
+      expiryMonth: fs.expiryMonth ?? null,
+      expiryYear: fs.expiryYear ?? null,
+      last4: pickStr(fs.last4) ?? pickStr(fs['Card Suffix']),
+      createdFrom: pickStr(fs['Created From'])
+    },
     created_at: toIso(fs['Created At']) ?? toIso(fs.createdAt) ?? new Date().toISOString(),
     updated_at: new Date().toISOString()
   };
@@ -779,7 +806,7 @@ export async function dualWriteFamilyMember(
   const clientId = await resolveSupabaseClientId(firebaseUid);
   if (!clientId) return;
   const row = await mapFamilyMemberToSupabase(clientId, memberId, fsData);
-  await dualWriteToSupabase('family_members', row, { mode: 'insert' });
+  await dualWriteToSupabase('family_members', row, { onConflict: 'client_id,firestore_id' });
 }
 
 export async function dualWriteAddress(
@@ -801,7 +828,7 @@ export async function dualWritePaymentCredential(
   const clientId = await resolveSupabaseClientId(firebaseUid);
   if (!clientId) return;
   const row = mapPaymentCredentialToSupabase(clientId, credId, fsData);
-  await dualWriteToSupabase('payment_credentials', row, { mode: 'insert' });
+  await dualWriteToSupabase('payment_credentials', row, { onConflict: 'client_id,firestore_id' });
 }
 
 export async function dualWritePromoRevert(
@@ -974,11 +1001,13 @@ export function mapConseillerToSupabase(
 ): Record<string, any> {
   return {
     firestore_id: conseillerId,
-    name: fs.name ?? '',
+    firebase_uid: conseillerId,
+    name: fs.name ?? fs.Name ?? '',
     email: fs.email ?? null,
     is_admin: fs.isAdmin ?? fs.is_admin ?? false,
-    is_super_admin: fs.isSuperAdmin ?? fs.is_super_admin ?? false,
+    is_super_admin: fs.isSuperAdmin ?? fs.is_super_admin ?? fs.superAdmin ?? false,
     is_present: fs.isPresent ?? fs.is_present ?? false,
+    is_active: fs.isActive ?? fs.is_active ?? true,
     manage_elite: fs.manageElite ?? fs.manage_elite ?? false,
     languages: fs.languages ?? {},
     now_request: fs.nowRequest ?? fs.now_request ?? null,

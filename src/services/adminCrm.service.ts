@@ -165,56 +165,42 @@ export async function deleteClient(clientId: string) {
 // ---------------------------------------------------------------------------
 
 export async function listRequestsAdmin(filters: RequestFilters) {
-  const db = getFirestore();
-  let query: FirebaseFirestore.Query = db.collectionGroup('Requests');
+  const pageLimit = Math.min(filters.limit ?? 50, 200);
+  const page = filters.page ?? 1;
+  const offset = (page - 1) * pageLimit;
 
-  if (filters.status) query = query.where('Status', '==', filters.status);
-  if (filters.request_type) query = query.where('Request Type', '==', filters.request_type);
-  if (filters.category) query = query.where('Request Category', '==', filters.category);
-  if (filters.assigned_to) query = query.where('Assigned to', '==', filters.assigned_to);
+  let query = supabase
+    .from('requests')
+    .select('*', { count: 'exact' })
+    .order('request_date', { ascending: false });
 
-  query = query.orderBy('Request Date', 'desc');
-
-  const limitVal = Math.min(filters.limit ?? 200, 500);
-  query = query.limit(limitVal);
-
-  const snapshot = await query.get();
-
-  const requests = snapshot.docs.map(doc => {
-    const data = doc.data();
-    const requestDate = data['Request Date']?.toDate?.() ?? data['Request Date'] ?? null;
-    return {
-      id: doc.id,
-      clientId: doc.ref.parent.parent?.id,
-      status: data['Status'] ?? '',
-      requestType: data['Request Type'] ?? '',
-      requestCategory: data['Request Category'] ?? '',
-      assignedTo: data['Assigned to'] ?? '',
-      assignedToUid: data['assigned_to_uid'] ?? null,
-      description: data['Description'] ?? '',
-      requestDate: requestDate instanceof Date ? requestDate.toISOString() : requestDate,
-      isOpened: data['is opened'] ?? false,
-      ...data,
-    };
-  });
-
-  let filtered = requests;
+  if (filters.status) query = query.eq('status', filters.status);
+  if (filters.request_type) query = query.eq('request_type', filters.request_type);
+  if (filters.category) query = query.eq('request_category', filters.category);
+  if (filters.assigned_to) query = query.eq('assigned_to', filters.assigned_to);
   if (filters.search) {
-    const s = filters.search.toLowerCase();
-    filtered = filtered.filter(r =>
-      (r.description || '').toLowerCase().includes(s) ||
-      (r.clientId || '').toLowerCase().includes(s) ||
-      (r.assignedTo || '').toLowerCase().includes(s)
-    );
+    query = query.or(`request_description.ilike.%${filters.search}%,user_id.ilike.%${filters.search}%,assigned_to.ilike.%${filters.search}%`);
   }
 
-  const total = filtered.length;
-  const page = filters.page ?? 1;
-  const pageLimit = Math.min(filters.limit ?? 50, 200);
-  const start = (page - 1) * pageLimit;
-  const paginated = filtered.slice(start, start + pageLimit);
+  query = query.range(offset, offset + pageLimit - 1);
+  const { data, error, count } = await query;
+  if (error) throw new Error(`Supabase listRequestsAdmin error: ${error.message}`);
 
-  return { requests: paginated, total, page, limit: pageLimit };
+  const requests = (data ?? []).map(r => ({
+    id: r.firebase_request_id ?? r.id,
+    clientId: r.user_id,
+    status: r.status ?? '',
+    requestType: r.request_type ?? '',
+    requestCategory: r.request_category ?? '',
+    assignedTo: r.assigned_to ?? '',
+    assignedToUid: r.assigned_to ?? null,
+    description: r.request_description ?? '',
+    requestDate: r.request_date,
+    isOpened: r.is_opened ?? false,
+    ...r,
+  }));
+
+  return { requests, total: count ?? 0, page, limit: pageLimit };
 }
 
 // ---------------------------------------------------------------------------
@@ -222,20 +208,24 @@ export async function listRequestsAdmin(filters: RequestFilters) {
 // ---------------------------------------------------------------------------
 
 export async function listConseillers() {
-  const db = getFirestore();
-  const snapshot = await db.collection('Conseillers2').get();
+  const { data, error } = await supabase
+    .from('conseillers')
+    .select('*')
+    .order('name', { ascending: true });
 
-  return snapshot.docs.map(doc => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
+  if (error) throw new Error(`Supabase listConseillers error: ${error.message}`);
+  return (data ?? []).map(c => ({ id: c.firestore_id ?? c.id, ...c }));
 }
 
 export async function getConseillerById(conseillerId: string) {
-  const db = getFirestore();
-  const doc = await db.collection('Conseillers2').doc(conseillerId).get();
-  if (!doc.exists) return null;
-  return { id: doc.id, ...doc.data() };
+  const { data, error } = await supabase
+    .from('conseillers')
+    .select('*')
+    .or(`firestore_id.eq.${conseillerId},id.eq.${conseillerId}`)
+    .single();
+
+  if (error || !data) return null;
+  return { id: data.firestore_id ?? data.id, ...data };
 }
 
 export async function updateConseiller(conseillerId: string, updates: Record<string, unknown>) {
@@ -408,44 +398,37 @@ export async function deleteTip(tipId: string) {
 // ---------------------------------------------------------------------------
 
 export async function getOverviewStats() {
-  const db = getFirestore();
-
-  const [clientsResult, leadsResult, subResult] = await Promise.all([
-    supabase.from('clients').select('id', { count: 'exact', head: true }),
-    supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null),
-    supabase.from('subscriptions').select('id, membership_type, is_unpaid', { count: 'exact' }).eq('is_unpaid', false),
-  ]);
-
-  const requestsSnapshot = await db.collectionGroup('Requests').get();
-  const totalRequests = requestsSnapshot.size;
-
   const now = new Date();
   const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-  const recentRequests = requestsSnapshot.docs
-    .map(doc => {
-      const data = doc.data();
-      const requestDate = data['Request Date']?.toDate?.() ?? (data['Request Date'] ? new Date(data['Request Date']) : null);
-      return {
-        id: doc.id,
-        clientId: doc.ref.parent.parent?.id,
-        created_at: requestDate?.toISOString() ?? null,
-        status: data['Status'] ?? 'Unknown',
-      };
-    })
-    .filter(r => r.created_at && new Date(r.created_at) >= thirtyDaysAgo)
-    .sort((a, b) => new Date(a.created_at!).getTime() - new Date(b.created_at!).getTime());
+  const [clientsResult, leadsResult, subResult, requestsCount, recentReqResult, conseillersResult] = await Promise.all([
+    supabase.from('clients').select('id', { count: 'exact', head: true }),
+    supabase.from('leads').select('id', { count: 'exact', head: true }).is('archived_at', null),
+    supabase.from('subscriptions').select('id, membership_type, is_unpaid', { count: 'exact' }).eq('is_unpaid', false),
+    supabase.from('requests').select('id', { count: 'exact', head: true }),
+    supabase.from('requests')
+      .select('id, firebase_request_id, user_id, request_date, status')
+      .gte('request_date', thirtyDaysAgo.toISOString())
+      .order('request_date', { ascending: true }),
+    supabase.from('conseillers').select('id, firestore_id, name, firebase_uid'),
+  ]);
 
-  const conseillersSnapshot = await db.collection('Conseillers2').get();
-  const advisers = conseillersSnapshot.docs.map(doc => ({
-    id: doc.id,
-    name: doc.data().name ?? '',
-    firebase_uid: doc.id,
+  const recentRequests = (recentReqResult.data ?? []).map(r => ({
+    id: r.firebase_request_id ?? r.id,
+    clientId: r.user_id,
+    created_at: r.request_date,
+    status: r.status ?? 'Unknown',
+  }));
+
+  const advisers = (conseillersResult.data ?? []).map(c => ({
+    id: c.firestore_id ?? c.id,
+    name: c.name ?? '',
+    firebase_uid: c.firebase_uid ?? c.firestore_id,
   }));
 
   return {
     totalClients: clientsResult.count ?? 0,
-    totalRequests,
+    totalRequests: requestsCount.count ?? 0,
     totalLeads: leadsResult.count ?? 0,
     activeSubscriptions: subResult.count ?? 0,
     subscriptionsByType: subResult.data?.reduce((acc: Record<string, number>, s: any) => {

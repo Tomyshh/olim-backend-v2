@@ -58,8 +58,10 @@ CREATE TABLE public.appointments (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  slot_uuid uuid,
   CONSTRAINT appointments_pkey PRIMARY KEY (id),
-  CONSTRAINT appointments_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+  CONSTRAINT appointments_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id),
+  CONSTRAINT appointments_slot_uuid_fkey FOREIGN KEY (slot_uuid) REFERENCES public.available_slots(id)
 );
 CREATE TABLE public.available_slots (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -99,8 +101,10 @@ CREATE TABLE public.chat_messages (
   read_at timestamp with time zone,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  sender_client_id uuid,
   CONSTRAINT chat_messages_pkey PRIMARY KEY (id),
-  CONSTRAINT chat_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.chat_conversations(id)
+  CONSTRAINT chat_messages_conversation_id_fkey FOREIGN KEY (conversation_id) REFERENCES public.chat_conversations(id),
+  CONSTRAINT chat_messages_sender_client_id_fkey FOREIGN KEY (sender_client_id) REFERENCES public.clients(id)
 );
 CREATE TABLE public.chatcc (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -131,7 +135,11 @@ CREATE TABLE public.chatcc (
   evaluation_note text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT chatcc_pkey PRIMARY KEY (id)
+  client_uuid uuid,
+  counselor_uuid uuid,
+  CONSTRAINT chatcc_pkey PRIMARY KEY (id),
+  CONSTRAINT chatcc_client_uuid_fkey FOREIGN KEY (client_uuid) REFERENCES public.clients(id),
+  CONSTRAINT chatcc_counselor_uuid_fkey FOREIGN KEY (counselor_uuid) REFERENCES public.conseillers(id)
 );
 CREATE TABLE public.chatcc_messages (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -147,8 +155,10 @@ CREATE TABLE public.chatcc_messages (
   is_uploading boolean DEFAULT false,
   read_by jsonb DEFAULT '[]'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  client_uuid uuid,
   CONSTRAINT chatcc_messages_pkey PRIMARY KEY (id),
-  CONSTRAINT chatcc_messages_chatcc_id_fkey FOREIGN KEY (chatcc_id) REFERENCES public.chatcc(id)
+  CONSTRAINT chatcc_messages_chatcc_id_fkey FOREIGN KEY (chatcc_id) REFERENCES public.chatcc(id),
+  CONSTRAINT chatcc_messages_client_uuid_fkey FOREIGN KEY (client_uuid) REFERENCES public.clients(id)
 );
 CREATE TABLE public.client_access_credentials (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -175,7 +185,9 @@ CREATE TABLE public.client_activity_history (
   monthly_average double precision,
   last_request_at timestamp with time zone,
   computed_at timestamp with time zone DEFAULT now(),
-  CONSTRAINT client_activity_history_pkey PRIMARY KEY (id)
+  client_uuid uuid,
+  CONSTRAINT client_activity_history_pkey PRIMARY KEY (id),
+  CONSTRAINT client_activity_history_client_uuid_fkey FOREIGN KEY (client_uuid) REFERENCES public.clients(id)
 );
 CREATE TABLE public.client_addresses (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -249,8 +261,12 @@ CREATE TABLE public.client_documents (
   file_name text,
   content_type text,
   file_size integer,
+  document_type_id uuid,
+  family_member_id uuid,
   CONSTRAINT client_documents_pkey PRIMARY KEY (id),
-  CONSTRAINT client_documents_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+  CONSTRAINT client_documents_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id),
+  CONSTRAINT client_documents_document_type_id_fkey FOREIGN KEY (document_type_id) REFERENCES public.document_types(id),
+  CONSTRAINT client_documents_family_member_id_fkey FOREIGN KEY (family_member_id) REFERENCES public.family_members(id)
 );
 CREATE TABLE public.client_fcm_tokens (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -325,21 +341,11 @@ CREATE TABLE public.clients (
   promo_code_used text,
   last_login_at timestamp with time zone,
   firestore_id text,
-  CONSTRAINT clients_pkey PRIMARY KEY (id)
+  membership_type_id uuid,
+  CONSTRAINT clients_pkey PRIMARY KEY (id),
+  CONSTRAINT clients_membership_type_id_fkey FOREIGN KEY (membership_type_id) REFERENCES public.membership_types(id)
 );
 CREATE TABLE public.conseillers (
-  id uuid NOT NULL DEFAULT gen_random_uuid(),
-  firebase_uid text UNIQUE,
-  name text NOT NULL,
-  email text NOT NULL,
-  role_id uuid,
-  is_active boolean NOT NULL DEFAULT true,
-  created_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT conseillers_pkey PRIMARY KEY (id),
-  CONSTRAINT conseillers_role_id_fkey FOREIGN KEY (role_id) REFERENCES public.roles(id)
-);
-CREATE TABLE public.conseillers_v2 (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   firestore_id text UNIQUE,
   name text NOT NULL,
@@ -353,7 +359,11 @@ CREATE TABLE public.conseillers_v2 (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT conseillers_v2_pkey PRIMARY KEY (id)
+  role_id uuid,
+  is_active boolean NOT NULL DEFAULT true,
+  firebase_uid text,
+  CONSTRAINT conseillers_pkey PRIMARY KEY (id),
+  CONSTRAINT conseillers_v2_role_id_fkey FOREIGN KEY (role_id) REFERENCES public.roles(id)
 );
 CREATE TABLE public.contact_messages (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -393,6 +403,17 @@ CREATE TABLE public.delete_user_requests (
   processed_at timestamp with time zone,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT delete_user_requests_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.document_types (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
+  label_he text,
+  description text,
+  display_order integer DEFAULT 0,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT document_types_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.dual_write_failures (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
@@ -439,8 +460,12 @@ CREATE TABLE public.family_members (
   service_activated_at timestamp with time zone,
   reactivated_at timestamp with time zone,
   selected_card_id text,
+  relationship_type_id uuid,
+  selected_card_uuid uuid,
   CONSTRAINT family_members_pkey PRIMARY KEY (id),
-  CONSTRAINT family_members_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+  CONSTRAINT family_members_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id),
+  CONSTRAINT family_members_relationship_type_id_fkey FOREIGN KEY (relationship_type_id) REFERENCES public.relationship_types(id),
+  CONSTRAINT family_members_selected_card_uuid_fkey FOREIGN KEY (selected_card_uuid) REFERENCES public.payment_credentials(id)
 );
 CREATE TABLE public.faqs (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -572,7 +597,9 @@ CREATE TABLE public.lead_assignment_rules (
   is_active boolean NOT NULL DEFAULT true,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT lead_assignment_rules_pkey PRIMARY KEY (id)
+  conseiller_uuid uuid,
+  CONSTRAINT lead_assignment_rules_pkey PRIMARY KEY (id),
+  CONSTRAINT lead_assignment_rules_conseiller_uuid_fkey FOREIGN KEY (conseiller_uuid) REFERENCES public.conseillers(id)
 );
 CREATE TABLE public.lead_attachments (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -584,8 +611,10 @@ CREATE TABLE public.lead_attachments (
   uploaded_by text NOT NULL,
   uploaded_by_name text,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  uploaded_by_uuid uuid,
   CONSTRAINT lead_attachments_pkey PRIMARY KEY (id),
-  CONSTRAINT lead_attachments_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+  CONSTRAINT lead_attachments_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id),
+  CONSTRAINT lead_attachments_uploaded_by_uuid_fkey FOREIGN KEY (uploaded_by_uuid) REFERENCES public.conseillers(id)
 );
 CREATE TABLE public.lead_interaction_edits (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -621,8 +650,10 @@ CREATE TABLE public.lead_interactions (
   validated_at timestamp with time zone,
   validated_by text,
   validated_by_name text,
+  conseiller_uuid uuid,
   CONSTRAINT lead_interactions_pkey PRIMARY KEY (id),
-  CONSTRAINT lead_interactions_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+  CONSTRAINT lead_interactions_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id),
+  CONSTRAINT lead_interactions_conseiller_uuid_fkey FOREIGN KEY (conseiller_uuid) REFERENCES public.conseillers(id)
 );
 CREATE TABLE public.lead_nurturing_sequences (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -656,9 +687,11 @@ CREATE TABLE public.lead_reminders (
   treated_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   call_interaction_id uuid,
+  conseiller_uuid uuid,
   CONSTRAINT lead_reminders_pkey PRIMARY KEY (id),
   CONSTRAINT lead_reminders_call_interaction_id_fkey FOREIGN KEY (call_interaction_id) REFERENCES public.lead_interactions(id),
-  CONSTRAINT lead_reminders_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+  CONSTRAINT lead_reminders_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id),
+  CONSTRAINT lead_reminders_conseiller_uuid_fkey FOREIGN KEY (conseiller_uuid) REFERENCES public.conseillers(id)
 );
 CREATE TABLE public.lead_score_rules (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -710,8 +743,10 @@ CREATE TABLE public.lead_tasks (
   completed_at timestamp with time zone,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  responsible_uuid uuid,
   CONSTRAINT lead_tasks_pkey PRIMARY KEY (id),
-  CONSTRAINT lead_tasks_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id)
+  CONSTRAINT lead_tasks_lead_id_fkey FOREIGN KEY (lead_id) REFERENCES public.leads(id),
+  CONSTRAINT lead_tasks_responsible_uuid_fkey FOREIGN KEY (responsible_uuid) REFERENCES public.conseillers(id)
 );
 CREATE TABLE public.leads (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -742,9 +777,20 @@ CREATE TABLE public.leads (
   archived_at timestamp with time zone,
   archive_reason text,
   comments text,
+  conseiller_uuid uuid,
   CONSTRAINT leads_pkey PRIMARY KEY (id),
   CONSTRAINT leads_status_id_fkey FOREIGN KEY (status_id) REFERENCES public.lead_pipeline_statuses(id),
-  CONSTRAINT leads_source_id_fkey FOREIGN KEY (source_id) REFERENCES public.lead_sources(id)
+  CONSTRAINT leads_source_id_fkey FOREIGN KEY (source_id) REFERENCES public.lead_sources(id),
+  CONSTRAINT leads_conseiller_uuid_fkey FOREIGN KEY (conseiller_uuid) REFERENCES public.conseillers(id)
+);
+CREATE TABLE public.membership_types (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
+  is_paid boolean NOT NULL DEFAULT true,
+  display_order integer DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT membership_types_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.news (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -861,18 +907,12 @@ CREATE TABLE public.phone_otp_sessions (
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT phone_otp_sessions_pkey PRIMARY KEY (id)
 );
-CREATE TABLE public.promo_codes (
-  code text NOT NULL,
-  membership_type text,
-  discount_percent integer,
-  for_everyone boolean NOT NULL DEFAULT false,
-  is_valid boolean NOT NULL DEFAULT true,
-  expires_at timestamp with time zone,
-  source text,
-  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+CREATE TABLE public.plan_types (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
-  updated_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT promo_codes_pkey PRIMARY KEY (code)
+  CONSTRAINT plan_types_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.promo_redemptions (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -883,7 +923,6 @@ CREATE TABLE public.promo_redemptions (
   source text,
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT promo_redemptions_pkey PRIMARY KEY (id),
-  CONSTRAINT promo_redemptions_code_fkey FOREIGN KEY (code) REFERENCES public.promo_codes(code),
   CONSTRAINT promo_redemptions_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id),
   CONSTRAINT promo_redemptions_subscription_id_fkey FOREIGN KEY (subscription_id) REFERENCES public.subscriptions(id)
 );
@@ -946,8 +985,29 @@ CREATE TABLE public.refund_requests (
   metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
+  reviewed_by_uuid uuid,
   CONSTRAINT refund_requests_pkey PRIMARY KEY (id),
-  CONSTRAINT refund_requests_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+  CONSTRAINT refund_requests_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id),
+  CONSTRAINT refund_requests_reviewed_by_uuid_fkey FOREIGN KEY (reviewed_by_uuid) REFERENCES public.conseillers(id)
+);
+CREATE TABLE public.relationship_types (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
+  display_order integer DEFAULT 0,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT relationship_types_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.request_categories (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
+  parent_id uuid,
+  display_order integer DEFAULT 0,
+  is_active boolean NOT NULL DEFAULT true,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT request_categories_pkey PRIMARY KEY (id),
+  CONSTRAINT request_categories_parent_id_fkey FOREIGN KEY (parent_id) REFERENCES public.request_categories(id)
 );
 CREATE TABLE public.request_drafts (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -1009,6 +1069,15 @@ CREATE TABLE public.request_status_events (
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   CONSTRAINT request_status_events_pkey PRIMARY KEY (id),
   CONSTRAINT request_status_events_request_id_fkey FOREIGN KEY (request_id) REFERENCES public.requests(id)
+);
+CREATE TABLE public.request_statuses (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  slug text NOT NULL UNIQUE,
+  label text NOT NULL,
+  display_order integer DEFAULT 0,
+  is_terminal boolean NOT NULL DEFAULT false,
+  created_at timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT request_statuses_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.request_tags (
   request_id uuid NOT NULL,
@@ -1155,8 +1224,12 @@ CREATE TABLE public.subscriptions (
   will_expire boolean,
   is_annual boolean,
   family_supplement_cents integer,
+  membership_type_id uuid,
+  plan_type_id uuid,
   CONSTRAINT subscriptions_pkey PRIMARY KEY (id),
-  CONSTRAINT subscriptions_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id)
+  CONSTRAINT subscriptions_client_id_fkey FOREIGN KEY (client_id) REFERENCES public.clients(id),
+  CONSTRAINT subscriptions_membership_type_id_fkey FOREIGN KEY (membership_type_id) REFERENCES public.membership_types(id),
+  CONSTRAINT subscriptions_plan_type_id_fkey FOREIGN KEY (plan_type_id) REFERENCES public.plan_types(id)
 );
 CREATE TABLE public.support_contacts (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
