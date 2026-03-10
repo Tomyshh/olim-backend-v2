@@ -26,6 +26,8 @@ export async function listClients(req: AuthenticatedRequest, res: Response) {
     page: pickNumber(q.page, 1),
     limit: pickNumber(q.limit, 50),
   });
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
   res.json(result);
 }
 
