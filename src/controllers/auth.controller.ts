@@ -144,6 +144,20 @@ export async function loginEmail(req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
+    // Ensure clients row has firebase_uid and auth_user_id populated.
+    // Handles cases where migration left these columns null.
+    try {
+      await supabase
+        .from('clients')
+        .update({
+          firebase_uid: firebaseUid,
+          auth_user_id: authData.user.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('email', email)
+        .is('firebase_uid', null);
+    } catch (_) { /* best-effort, don't block login */ }
+
     const customToken = await getAuth().createCustomToken(firebaseUid, {
       authProvider: 'supabase',
     });

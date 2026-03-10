@@ -13,6 +13,10 @@ export async function getFavorites(req: AuthenticatedRequest, res: Response): Pr
   try {
     const uid = req.uid!;
     const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      res.json({ favorites: [] });
+      return;
+    }
 
     const { data, error } = await supabase
       .from('favorite_requests')
@@ -89,6 +93,10 @@ export async function getRecent(req: AuthenticatedRequest, res: Response): Promi
   try {
     const uid = req.uid!;
     const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      res.json({ recent: [] });
+      return;
+    }
 
     const { data, error } = await supabase
       .from('favorite_requests')

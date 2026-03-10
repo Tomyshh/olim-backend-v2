@@ -23,6 +23,10 @@ export async function getPreferences(req: AuthenticatedRequest, res: Response): 
   try {
     const uid = req.uid!;
     const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      res.json({ preferences: {} });
+      return;
+    }
 
     const { data, error } = await supabase
       .from('client_settings')
