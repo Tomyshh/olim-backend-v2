@@ -4,6 +4,57 @@ import { getFirestore } from '../config/firebase.js';
 import { supabase } from '../services/supabase.service.js';
 import { dualWriteToSupabase, dualWriteDelete, resolveSupabaseClientId, mapFavoriteRequestToSupabase, dualWriteLegacyRequest } from '../services/dualWrite.service.js';
 
+function mapRequestToLegacy(r: Record<string, any>): Record<string, any> {
+  return {
+    requestId: r.firebase_request_id ?? r.unique_id ?? r.id,
+    ...r,
+    'Request Type': r.request_type ?? '',
+    'Request Category': r.request_category ?? '',
+    'Request Sub-Category': r.request_sub_category ?? '',
+    'Description': r.request_description ?? '',
+    'Request Ref': r.request_ref ?? '',
+    'Status': r.status ?? '',
+    'Priority': r.priority ?? 1,
+    'Difficulty': r.difficulty ?? 1,
+    'Assigned to': r.assigned_to ?? '',
+    'Tags': r.tags ?? [],
+    'Available Days': r.available_days ?? [],
+    'Available Hours': r.available_hours ?? [],
+    'Uploaded Files': r.uploaded_files ?? [],
+    'is opened': r.is_opened ?? false,
+    'Support Response': r.response_text ?? '',
+    'Support Response Date': r.response_date ?? null,
+    '[Response] Attached Files': r.response_files ?? [],
+    'Response urls': r.response_files ?? [],
+    'Support Comment Response': r.response_comment ?? '',
+    'Client comment': r.client_comment ?? '',
+    'Request Date': r.request_date ?? r.created_at,
+    'In Progress Date': r.in_progress_date ?? null,
+    'Closing Date': r.closing_date ?? null,
+    'Active Step': r.status ?? '',
+    "Temps d'attente": r.waiting_time ?? '',
+    'First Name': r.first_name ?? '',
+    'Last Name': r.last_name ?? '',
+    'Email': r.email ?? '',
+    'Membership Type': r.membership_type ?? '',
+    'is rdv': r.is_rdv ?? false,
+    'rdv location': r.rdv_location ?? '',
+    'rdv date': r.rdv_date ?? '',
+    'rdv hours': r.rdv_hours ?? '',
+    'rdv name': r.rdv_name ?? '',
+    'is rdv over': r.is_rdv_over ?? false,
+    'Created By': r.created_by ?? 'APP',
+    'Waiting Info From Client': r.waiting_info_from_client ?? false,
+    'has missing fields': r.has_missing_fields ?? false,
+    'missing fields': r.missing_fields ?? [],
+    'additional information': r.additional_information ?? '',
+    rating: r.rating ?? null,
+    'rating tags': r.rating_tags ?? [],
+    source: r.source ?? '',
+    platform: r.platform ?? 'mobile',
+  };
+}
+
 function computeConseiller(requestType: string, requestCategory: string): string {
   const type = String(requestType || '').trim();
   const category = String(requestCategory || '').trim();
@@ -39,10 +90,7 @@ export async function getRequests(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    const requests = (data ?? []).map(r => ({
-      requestId: r.firebase_request_id ?? r.id,
-      ...r
-    }));
+    const requests = (data ?? []).map(r => mapRequestToLegacy(r));
 
     res.json({ requests });
   } catch (error: any) {
@@ -67,7 +115,7 @@ export async function getRequestDetail(req: AuthenticatedRequest, res: Response)
       return;
     }
 
-    res.json({ requestId, ...data });
+    res.json(mapRequestToLegacy(data));
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
