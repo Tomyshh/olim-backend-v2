@@ -9,6 +9,10 @@ import { dualWriteAcces, dualWriteClientLog, dualWriteDelete } from '../services
 export async function getAcces(req: AuthenticatedRequest, res: Response) {
   const uid = req.uid!;
   const clientId = await resolveSupabaseClientId(uid);
+  if (!clientId) {
+    res.json({ acces: [] });
+    return;
+  }
 
   const { data, error } = await supabase
     .from('client_access_credentials')
@@ -17,7 +21,15 @@ export async function getAcces(req: AuthenticatedRequest, res: Response) {
 
   if (error) throw error;
 
-  const acces = (data || []).map((a: any) => ({ id: a.id, ...a }));
+  const acces = (data || []).map((a: any) => ({
+    id: a.firestore_id ?? a.id,
+    ...a,
+    Title: a.title,
+    Username: a.username,
+    'Family Members': a.family_members,
+    'Company name': a.metadata?.companyName ?? null,
+    createdAt: a.created_at,
+  }));
 
   res.json({ acces });
 }
@@ -90,6 +102,10 @@ export async function createLog(req: AuthenticatedRequest, res: Response) {
 export async function getLogs(req: AuthenticatedRequest, res: Response) {
   const uid = req.uid!;
   const clientId = await resolveSupabaseClientId(uid);
+  if (!clientId) {
+    res.json({ logs: [] });
+    return;
+  }
   const limit = Math.min(Number(req.query.limit) || 50, 200);
 
   const { data, error } = await supabase
