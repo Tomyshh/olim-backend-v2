@@ -23,6 +23,11 @@ import chatRoutes from './routes/chat.routes.js';
 import notificationsRoutes from './routes/notifications.routes.js';
 import subscriptionRoutes from './routes/subscription.routes.js';
 import supportRoutes from './routes/support.routes.js';
+import tipsRoutes from './routes/tips.routes.js';
+import settingsRoutes from './routes/settings.routes.js';
+import preferencesRoutes from './routes/preferences.routes.js';
+import utilsRoutes from './routes/utils.routes.js';
+import accountRoutes from './routes/account.routes.js';
 import healthRoutes from './routes/health.routes.js';
 import partnersRoutes from './routes/partners.routes.js';
 import cinemaRoutes from './routes/cinema.routes.js';
@@ -197,6 +202,15 @@ app.use('/api/notifications', notificationsRoutes);
 app.use('/api/subscription', subscriptionRoutes);
 app.use('/api/promo', promoRoutes);
 app.use('/api/support', supportRoutes);
+app.use('/api', tipsRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/preferences', preferencesRoutes);
+app.use('/api/utils', utilsRoutes);
+// Alias v1 de compatibilité (même handlers) pour absorber les clients
+// qui utilisent encore le préfixe /v1.
+app.use('/v1/preferences', preferencesRoutes);
+app.use('/v1/utils', utilsRoutes);
+app.use('/api/account', accountRoutes);
 app.use('/api/health', healthRoutes);
 app.use('/api/partners', partnersRoutes);
 app.use('/api/cinema', cinemaRoutes);

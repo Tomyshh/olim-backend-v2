@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { admin, getFirestore } from '../config/firebase.js';
 import { runWithConcurrencyLimit } from './concurrencyLimit.service.js';
+import { dualWriteClient } from './dualWrite.service.js';
 
 type ClientActivityStatus = 'inactive' | 'low' | 'medium' | 'high' | 'very_high';
 
@@ -197,6 +198,7 @@ export async function writeClientActivityForClient(params: {
     } as any,
     { merge: true }
   );
+  dualWriteClient(clientId, { activity: params.activity }).catch(() => {});
 }
 
 async function tryAcquireJobLease(params: {
@@ -309,6 +311,7 @@ export async function runDailyClientActivityJob(params?: {
               const patch = { activity: { ...computed, computedAt: admin.firestore.FieldValue.serverTimestamp() } satisfies ClientActivitySnapshot };
 
               writer.set(clientRef, patch as any, { merge: true });
+              dualWriteClient(clientId, { activity: computed }).catch(() => {});
               clientsUpdated += 1;
             } catch (e: any) {
               clientsFailed += 1;

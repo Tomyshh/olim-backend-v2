@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { dualWriteClient, dualWriteFamilyMember, dualWriteAddress, dualWriteDelete } from '../services/dualWrite.service.js';
 
 export async function getProfile(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -31,7 +32,9 @@ export async function updateProfile(req: AuthenticatedRequest, res: Response): P
     });
 
     const updatedDoc = await db.collection('Clients').doc(uid).get();
-    res.json({ uid, ...updatedDoc.data() });
+    const updatedData = updatedDoc.data();
+    if (updatedData) dualWriteClient(uid, updatedData).catch(() => {});
+    res.json({ uid, ...updatedData });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -64,6 +67,7 @@ export async function updateLanguage(req: AuthenticatedRequest, res: Response): 
     const db = getFirestore();
 
     await db.collection('Clients').doc(uid).update({ language });
+    dualWriteClient(uid, { language }).catch(() => {});
 
     res.json({ message: 'Language updated', language });
   } catch (error: any) {
@@ -107,6 +111,7 @@ export async function addFamilyMember(req: AuthenticatedRequest, res: Response):
         createdAt: new Date()
       });
 
+    dualWriteFamilyMember(uid, memberRef.id, { ...memberData, createdAt: new Date() }).catch(() => {});
     res.status(201).json({ memberId: memberRef.id, ...memberData });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -130,6 +135,7 @@ export async function updateFamilyMember(req: AuthenticatedRequest, res: Respons
         updatedAt: new Date()
       });
 
+    dualWriteFamilyMember(uid, memberId, { ...updates, updatedAt: new Date() }).catch(() => {});
     res.json({ message: 'Family member updated', memberId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -149,6 +155,7 @@ export async function deleteFamilyMember(req: AuthenticatedRequest, res: Respons
       .doc(memberId)
       .delete();
 
+    dualWriteDelete('family_members', 'firestore_id', memberId).catch(() => {});
     res.json({ message: 'Family member deleted', memberId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -191,6 +198,7 @@ export async function addAddress(req: AuthenticatedRequest, res: Response): Prom
         createdAt: new Date()
       });
 
+    dualWriteAddress(uid, addressRef.id, { ...addressData, createdAt: new Date() }).catch(() => {});
     res.status(201).json({ addressId: addressRef.id, ...addressData });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -214,6 +222,7 @@ export async function updateAddress(req: AuthenticatedRequest, res: Response): P
         updatedAt: new Date()
       });
 
+    dualWriteAddress(uid, addressId, { ...updates, updatedAt: new Date() }).catch(() => {});
     res.json({ message: 'Address updated', addressId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -233,6 +242,7 @@ export async function deleteAddress(req: AuthenticatedRequest, res: Response): P
       .doc(addressId)
       .delete();
 
+    dualWriteDelete('client_addresses', 'firestore_id', addressId).catch(() => {});
     res.json({ message: 'Address deleted', addressId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

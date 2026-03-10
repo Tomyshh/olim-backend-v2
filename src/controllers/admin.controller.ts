@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { admin, getAuth, getFirestore } from '../config/firebase.js';
+import { dualWriteToSupabase } from '../services/dualWrite.service.js';
+import { spawn } from 'child_process';
 
 // ⚠️ Toutes les routes admin sont stubées pour sécurité
 // TODO: Ajouter middleware vérification rôle admin
@@ -184,6 +186,12 @@ export async function updateRefundRequest(req: AuthenticatedRequest, res: Respon
       updatedAt: new Date()
     });
 
+    dualWriteToSupabase('refund_requests', {
+      status,
+      processed_at: (processedAt || new Date()).toISOString ? (processedAt || new Date()).toISOString() : new Date(processedAt || Date.now()).toISOString(),
+      updated_at: new Date().toISOString()
+    }, { mode: 'update', matchColumn: 'firestore_id', matchValue: refundId }).catch(() => {});
+
     res.json({ message: 'Refund request updated', refundId, status });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -219,13 +227,23 @@ export async function createSystemAlert(req: AuthenticatedRequest, res: Response
     const { title, message, type, active = true } = req.body;
     const db = getFirestore();
 
-    const alertRef = await db.collection('SystemAlerts').add({
+    const alertData = {
       title,
       message,
       type: type || 'info',
       active,
       createdAt: new Date()
-    });
+    };
+    const alertRef = await db.collection('SystemAlerts').add(alertData);
+
+    dualWriteToSupabase('system_alerts', {
+      firestore_id: alertRef.id,
+      title,
+      message,
+      alert_type: type || 'info',
+      is_active: active,
+      created_at: new Date().toISOString()
+    }, { mode: 'insert' }).catch(() => {});
 
     res.status(201).json({
       alertId: alertRef.id,
@@ -309,10 +327,71 @@ export async function createFirebaseAuthUser(req: AuthenticatedRequest, res: Res
 
 // ⚠️ DÉSACTIVÉ - Sync Supabase (manuel)
 export async function syncFirestoreToSupabaseManual(req: AuthenticatedRequest, res: Response): Promise<void> {
-  res.status(501).json({
-    message: 'Not implemented - syncFirestoreToSupabaseManual',
-    note: 'Fonction désactivée pour sécurité. À implémenter avec Supabase client.'
-  });
+  try {
+    const body = (req.body || {}) as {
+      uid?: string;
+      all?: boolean;
+      dryRun?: boolean;
+      batchSize?: number;
+    };
+
+    const uid = typeof body.uid === 'string' ? body.uid.trim() : '';
+    const all = body.all === true;
+    const dryRun = body.dryRun !== false;
+    const batchSize = Number(body.batchSize || 100);
+
+    if (!uid && !all) {
+      res.status(400).json({
+        message: 'uid ou all=true requis',
+        example: { uid: 'firebase_uid' },
+        exampleAll: { all: true, dryRun: true, batchSize: 100 }
+      });
+      return;
+    }
+    if (uid && all) {
+      res.status(400).json({ message: 'Choisir soit uid, soit all=true (pas les deux).' });
+      return;
+    }
+
+    const args = ['tsx', 'scripts/migrate-client-to-supabase.ts'];
+    if (uid) args.push('--uid', uid);
+    if (all) args.push('--all', '--batch-size', String(Number.isFinite(batchSize) ? batchSize : 100));
+    if (dryRun) args.push('--dry-run');
+
+    const proc = spawn('npx', args, {
+      cwd: process.cwd(),
+      env: process.env
+    });
+
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+
+    proc.on('close', (code) => {
+      const payload = {
+        success: code === 0,
+        mode: uid ? 'single' : 'all',
+        uid: uid || null,
+        dryRun,
+        batchSize: all ? batchSize : null,
+        exitCode: code,
+        output: stdout.slice(-12000),
+        errors: stderr.slice(-8000)
+      };
+      if (code === 0) {
+        res.status(200).json(payload);
+      } else {
+        res.status(500).json(payload);
+      }
+    });
+  } catch (error: any) {
+    res.status(500).json({ message: error?.message || 'sync-firestore-to-supabase failed' });
+  }
 }
 
 // ⚠️ DÉSACTIVÉ - Génération token FCM OAuth

@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { dualWriteToSupabase, resolveSupabaseClientId, mapHealthRequestToSupabase } from '../services/dualWrite.service.js';
 
 export async function getHealthRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -77,6 +78,12 @@ export async function createHealthRequest(req: AuthenticatedRequest, res: Respon
       createdAt: new Date()
     });
 
+    resolveSupabaseClientId(uid).then(clientId => {
+      dualWriteToSupabase('health_requests', mapHealthRequestToSupabase(clientId, requestRef.id, uid, {
+        type: type || 'general', description: description || '', data: data || {}, status: 'pending', createdAt: new Date()
+      }), { mode: 'insert' });
+    }).catch(() => {});
+
     res.status(201).json({
       requestId: requestRef.id,
       type,
@@ -104,6 +111,11 @@ export async function updateHealthRequest(req: AuthenticatedRequest, res: Respon
 
     // Mettre à jour copie admin
     await db.collection('HealthRequests').doc(requestId).update(updates);
+
+    dualWriteToSupabase('health_requests', {
+      ...updates,
+      updated_at: new Date().toISOString()
+    }, { mode: 'update', matchColumn: 'firestore_id', matchValue: requestId }).catch(() => {});
 
     res.json({ message: 'Health request updated', requestId });
   } catch (error: any) {
@@ -146,6 +158,16 @@ export async function updateHealthConfig(req: AuthenticatedRequest, res: Respons
       .collection('settings')
       .doc('health_config')
       .set(config, { merge: true });
+
+    resolveSupabaseClientId(uid).then(clientId => {
+      if (!clientId) return;
+      dualWriteToSupabase('health_configs', {
+        client_id: clientId,
+        client_firebase_uid: uid,
+        config_data: config,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'client_id' });
+    }).catch(() => {});
 
     res.json({ message: 'Health config updated', config });
   } catch (error: any) {

@@ -1,0 +1,8 @@
+{
+  "host": "aws-0-eu-central-1.pooler.supabase.com",
+  "port": 5432,
+  "database": "postgres",
+  "user": "postgres.jfkuzrjsouggkofxmyhu",
+  "password": "YOUR_PASSWORD",
+  "password_base64": "base64:..."
+}

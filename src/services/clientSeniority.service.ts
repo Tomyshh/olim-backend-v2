@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { admin, getFirestore } from '../config/firebase.js';
 import { runWithConcurrencyLimit } from './concurrencyLimit.service.js';
+import { dualWriteClient } from './dualWrite.service.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -159,6 +160,7 @@ export async function computeAndWriteSeniorityForClient(params: {
     },
     { merge: true }
   );
+  dualWriteClient(clientId, { seniority: { ...seniority, since: createdAt.toISOString() } }).catch(() => {});
 
   return { ok: true, clientId, action: 'updated', seniority };
 }
@@ -304,6 +306,7 @@ export async function runDailySeniorityJob(params?: {
                 } as any,
                 { merge: true }
               );
+              dualWriteClient(clientId, { seniority: { ...seniority, since: createdAt.toISOString() } }).catch(() => {});
               clientsUpdated += 1;
             } catch (e: any) {
               clientsFailed += 1;

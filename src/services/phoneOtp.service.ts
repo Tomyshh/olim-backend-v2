@@ -5,6 +5,7 @@ import { generateOtpCode6, otpCodeHash, requireOtpSecret, timingSafeEqualHex } f
 import { checkTwilioVerifyCode, hasTwilioVerifyEnabled, sendTwilioVerifySms } from './twilioVerify.service.js';
 import { sendOtp } from './otpSender.service.js';
 import { buildInitialSeniority } from './clientSeniority.service.js';
+import { dualWriteToSupabase, dualWriteClient } from './dualWrite.service.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 3;
@@ -95,6 +96,13 @@ export async function sendLoginOtp(params: {
     },
     { merge: true }
   );
+  dualWriteToSupabase('phone_otp_sessions', {
+    phone_number: norm.e164,
+    purpose: 'login',
+    expires_at: new Date(expiresAt).toISOString(),
+    attempts: 0,
+    created_at: new Date().toISOString()
+  }, { mode: 'insert' }).catch(() => {});
 
   await sendOtp({ phoneNumberE164: norm.e164, languageCode, channels, code });
 }
@@ -222,6 +230,13 @@ export async function verifyLoginOtp(params: {
       },
       { merge: true }
     );
+    dualWriteClient(uid, {
+      'Phone Number': norm.e164,
+      phoneVerified: true,
+      createdVia: 'phoneOtp',
+      createdAt: new Date(),
+      registrationComplete: false
+    }).catch(() => {});
   } else {
     // si doc existant, on peut juste marquer le téléphone comme vérifié
     await clientRef.set(
@@ -233,6 +248,10 @@ export async function verifyLoginOtp(params: {
       },
       { merge: true }
     );
+    dualWriteClient(uid, {
+      'Phone Number': norm.e164,
+      phoneVerified: true
+    }).catch(() => {});
   }
 
   const customToken = await auth.createCustomToken(uid, { phoneNumber: norm.e164 });
@@ -288,6 +307,14 @@ export async function sendLinkPhoneOtp(params: {
       attempts: 0,
       createdAt: admin.firestore.FieldValue.serverTimestamp()
     });
+    dualWriteToSupabase('phone_otp_sessions', {
+      phone_number: norm.e164,
+      purpose: 'link_phone',
+      client_firebase_uid: params.uid,
+      expires_at: new Date(nowMs() + OTP_TTL_MS).toISOString(),
+      attempts: 0,
+      created_at: new Date().toISOString()
+    }, { mode: 'insert' }).catch(() => {});
     const locale = languageCode?.toLowerCase().startsWith('he') ? 'he' : languageCode?.toLowerCase().startsWith('en') ? 'en' : 'fr';
     await sendTwilioVerifySms({ toE164: norm.e164, locale });
     return;
@@ -307,6 +334,14 @@ export async function sendLinkPhoneOtp(params: {
     attempts: 0,
     createdAt: admin.firestore.FieldValue.serverTimestamp()
   });
+  dualWriteToSupabase('phone_otp_sessions', {
+    phone_number: norm.e164,
+    purpose: 'link_phone',
+    client_firebase_uid: params.uid,
+    expires_at: new Date(expiresAt).toISOString(),
+    attempts: 0,
+    created_at: new Date().toISOString()
+  }, { mode: 'insert' }).catch(() => {});
 
   await sendOtp({ phoneNumberE164: norm.e164, languageCode, channels, code });
 }
@@ -430,6 +465,10 @@ export async function verifyLinkPhoneOtp(params: {
     },
     { merge: true }
   );
+  dualWriteClient(params.uid, {
+    'Phone Number': newPhoneField,
+    phoneVerified: true
+  }).catch(() => {});
 
   return { ok: true, merged: false };
 }

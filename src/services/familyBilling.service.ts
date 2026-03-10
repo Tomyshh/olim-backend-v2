@@ -2,6 +2,7 @@ import { admin, getFirestore } from '../config/firebase.js';
 import { HttpError } from '../utils/errors.js';
 import { paymeGetSubscriptionDetails, paymeSetSubscriptionPrice } from './payme.service.js';
 import { getFamilyMemberPricingNis, nisToCents } from './remoteConfigPricing.service.js';
+import { dualWriteSubscription, dualWriteFamilyMember } from './dualWrite.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
 
@@ -370,6 +371,10 @@ export async function recomputeAndApplyFamilyMonthlySupplement(uid: string): Pro
 
   // Commit les flags Firestore avant Payme (cohérence + audit). Payme est ensuite idempotent (set-price).
   await batch.commit();
+  for (const m of members) {
+    const eligible = memberIsEligibleAdultSupplement(m.id, m.data);
+    dualWriteFamilyMember(uid, m.id, { monthlySupplementApplied: eligible, monthlySupplementNis: monthlySupplementNis }).catch(() => {});
+  }
 
   await paymeSetSubscriptionPrice({ subId, priceInCents: targetPriceInCents });
 
@@ -383,6 +388,9 @@ export async function recomputeAndApplyFamilyMonthlySupplement(uid: string): Pro
     },
     { merge: true }
   );
+  dualWriteSubscription(uid, {
+    plan: { price: targetPriceInCents, basePriceInCents, familySupplementCount: eligibleAdultsCount, familySupplementTotalInCents: supplementTotalInCents }
+  }).catch(() => {});
 
   return { eligibleAdultsCount, targetPriceInCents, paymeUpdated: true };
 }

@@ -5,6 +5,7 @@ import { HttpError } from '../../utils/errors.js';
 import { paymeGenerateSale } from '../../services/payme.service.js';
 import { isConjoint, recomputeAndApplyFamilyMonthlySupplement, memberIsEligibleAdultSupplement, assertSubscriptionCanSupportFamilySupplement } from '../../services/familyBilling.service.js';
 import { getFamilyMemberPricingNis, nisToCents } from '../../services/remoteConfigPricing.service.js';
+import { dualWriteFamilyMember, dualWriteDelete } from '../../services/dualWrite.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
 
@@ -569,6 +570,7 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
   }
 
   const ref = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
+  dualWriteFamilyMember(uid, ref.id, doc).catch(() => {});
 
   // Recompute systématique après création (le calcul interne décide si count=0/1/2/...).
   // C'est ce qui garantit le caractère "cumulable" sans dépendre d'un pré-check fragile.
@@ -613,6 +615,7 @@ export async function v1UpdateFamilyMember(req: AuthenticatedRequest, res: Respo
     throw new HttpError(400, 'Aucun champ à modifier.', 'NO_FIELDS_TO_UPDATE');
   }
   await ref.set(stripUndefinedDeep(updates), { merge: true });
+  dualWriteFamilyMember(uid, memberId, updates).catch(() => {});
 
   if (patchAffectsMonthlySupplement(req.body || {})) {
     await recomputeAndApplyFamilyMonthlySupplement(uid);
@@ -640,6 +643,7 @@ export async function v1DeactivateFamilyMember(req: AuthenticatedRequest, res: R
     },
     { merge: true }
   );
+  dualWriteFamilyMember(uid, memberId, { isActive: false, deactivatedAt: new Date().toISOString() }).catch(() => {});
 
   await recomputeAndApplyFamilyMonthlySupplement(uid);
   res.json({ ok: true, memberId });
@@ -733,6 +737,7 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
   // Passer le statut de validation à "validé" (le membre a été activé/payé)
   updates.validationStatus = 'validé';
   await ref.set(stripUndefinedDeep(updates), { merge: true });
+  dualWriteFamilyMember(uid, memberId, updates).catch(() => {});
 
   // Vérification de sécurité: garantir que isActive est bien défini
   const verifySnap = await ref.get();
@@ -780,6 +785,7 @@ export async function v1DeleteFamilyMember(req: AuthenticatedRequest, res: Respo
 
   // Suppression complète du document Firestore (hard delete)
   await ref.delete();
+  dualWriteDelete('family_members', 'firestore_id', memberId).catch(() => {});
 
   // Recalculer pour retirer le supplément (cumulable) si ce membre contribuait
   await recomputeAndApplyFamilyMonthlySupplement(uid);
@@ -829,19 +835,18 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
 
   // Conjoint: gratuit => pas de paiement
   if (isConjoint(status)) {
-    await memberRef.set(
-      {
-        isActive: true,
-        serviceActive: true,
-        serviceActivationPaymentId: null,
-        selectedCardId: cardId,
-        validationStatus: 'validé',
-        serviceActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
+    const conjointUpdates = {
+      isActive: true,
+      serviceActive: true,
+      serviceActivationPaymentId: null,
+      selectedCardId: cardId,
+      validationStatus: 'validé',
+      serviceActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+    await memberRef.set(conjointUpdates, { merge: true });
+    dualWriteFamilyMember(uid, memberId, conjointUpdates).catch(() => {});
     // Vérification de sécurité: garantir que isActive est bien défini
     const verifySnap = await memberRef.get();
     const verifyData = verifySnap.data() || {};
@@ -876,19 +881,18 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
     buyerKey
   });
 
-  await memberRef.set(
-    {
-      isActive: true,
-      serviceActive: true,
-      serviceActivationPaymentId: sale.salePaymeId,
-      selectedCardId: cardId,
-      validationStatus: 'validé',
-      serviceActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp()
-    },
-    { merge: true }
-  );
+  const serviceUpdates = {
+    isActive: true,
+    serviceActive: true,
+    serviceActivationPaymentId: sale.salePaymeId,
+    selectedCardId: cardId,
+    validationStatus: 'validé',
+    serviceActivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    reactivatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  };
+  await memberRef.set(serviceUpdates, { merge: true });
+  dualWriteFamilyMember(uid, memberId, serviceUpdates).catch(() => {});
 
   // Vérification de sécurité: garantir que isActive est bien défini
   // (cas observé: serviceActive=true mais isActive manquant)
@@ -1008,6 +1012,7 @@ async function adminCreateFamilyMember(params: {
   }
 
   const ref = await db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
+  dualWriteFamilyMember(clientUid, ref.id, doc).catch(() => {});
 
   // Recompute: safe (billingExempt/conjoint/enfant => eligible false)
   const shouldRecompute = !isConjoint(status);
@@ -1094,6 +1099,7 @@ export async function v1AdminDeactivateFamilyMember(req: AuthenticatedRequest, r
     },
     { merge: true }
   );
+  dualWriteFamilyMember(clientUid, memberId, { isActive: false, serviceActive: false, deactivatedAt: new Date().toISOString() }).catch(() => {});
 
   const result = await recomputeAndApplyFamilyMonthlySupplement(clientUid);
 
@@ -1215,6 +1221,7 @@ async function adminActivateFamilyMember(params: {
   }
 
   await ref.set(stripUndefinedDeep(updates), { merge: true });
+  dualWriteFamilyMember(clientUid, memberId, updates).catch(() => {});
   await recomputeAndApplyFamilyMonthlySupplement(clientUid);
   return { salePaymeId, attemptedSale, alreadyActive: false };
 }
@@ -1317,6 +1324,7 @@ export async function v1AdminEditFamilyMember(req: AuthenticatedRequest, res: Re
   }
 
   await ref.set(stripUndefinedDeep(updates), { merge: true });
+  dualWriteFamilyMember(clientUid, memberId, updates).catch(() => {});
 
   // Recalcul billing si nécessaire
   let pricingImpact: Record<string, any> | null = null;
@@ -1386,6 +1394,7 @@ export async function v1AdminDeleteFamilyMember(req: AuthenticatedRequest, res: 
   const memberSnapshot = normalizeMemberForResponse(memberId, data);
 
   await ref.delete();
+  dualWriteDelete('family_members', 'firestore_id', memberId).catch(() => {});
 
   // Recalculer le supplément (cumulable) si ce membre contribuait
   await recomputeAndApplyFamilyMonthlySupplement(clientUid);

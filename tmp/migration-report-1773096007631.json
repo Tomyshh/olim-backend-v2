@@ -1,0 +1,13 @@
+{
+  "total": 1,
+  "success": 0,
+  "skipped": 0,
+  "errors": [
+    {
+      "uid": "g8CKSVzzEsMhIw4rJuiivCNBHv33",
+      "error": "migration returned false"
+    }
+  ],
+  "startedAt": "2026-03-09T22:40:05.959Z",
+  "completedAt": "2026-03-09T22:40:07.630Z"
+}

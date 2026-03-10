@@ -19,6 +19,17 @@ import {
 import { isRevolutBin6 } from '../services/revolutCardBins.service.js';
 import { computeMembershipPricing } from '../services/membershipPricing.service.js';
 import { validateAndApplyPromo, type PromoValidationOk } from '../services/promoCode.service.js';
+import {
+  dualWriteClient,
+  dualWriteSubscription,
+  dualWriteAddress,
+  dualWriteFamilyMember,
+  dualWritePaymentCredential,
+  dualWritePromoRevert,
+  dualWritePromotion,
+  dualWriteDelete
+} from '../services/dualWrite.service.js';
+import { ensureSupabaseAuthUser } from '../services/supabaseAuth.service.js';
 
 type CreateClientBody = {
   email?: unknown;
@@ -761,6 +772,43 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
 
     // Marquer lock completed
     await lockRef.set({ status: 'completed', uid, updatedAt: new Date() }, { merge: true }).catch(() => {});
+
+    // --- Dual Write to Supabase (best-effort, non-blocking) ---
+    (async () => {
+      try {
+        const authResult = await ensureSupabaseAuthUser(email, { firebaseUid: uid });
+        const clientPayload = { ...clientDoc, ...(authResult.userId ? {} : {}) };
+        await dualWriteClient(uid!, clientPayload);
+
+        if (authResult.userId) {
+          const { supabase } = await import('../services/supabase.service.js');
+          await supabase.from('clients').update({ auth_user_id: authResult.userId }).eq('firebase_uid', uid);
+        }
+
+        if (hasAddress) {
+          await dualWriteAddress(uid!, 'primary', {
+            name: pickString((clientData as any).addressName) || 'Adresse principale',
+            address: addressRaw, apartment: apartmentRaw, floor: floorRaw,
+            additionalInfo: additionalInfoRaw, createdAt: new Date()
+          });
+        }
+
+        await dualWriteFamilyMember(uid!, 'account_owner', accountOwnerDoc);
+
+        if (isPayingClient) {
+          await dualWritePaymentCredential(uid!, 'first_registration', {
+            'Card Name': pickString((clientData as any).cardName) || `${firstName} ${lastName}`.trim(),
+            'Card Number': null, 'Isracard Key': payme?.buyerKey,
+            isSubscriptionCard: planNumber === 3, 'Created At': new Date(), 'Created From': 'CRM'
+          });
+          const subRef = db.collection('Clients').doc(uid!).collection('subscription').doc('current');
+          const subSnap = await subRef.get();
+          if (subSnap.exists) await dualWriteSubscription(uid!, subSnap.data()!);
+        }
+      } catch (e) {
+        console.error('[createClient] Supabase dual-write failed (non-blocking):', e);
+      }
+    })();
   } catch (err: any) {
     // Si Firestore a échoué après création Auth => rollback user Auth
     if (uid) {
@@ -914,6 +962,8 @@ export async function addClientCreditCardPaymentCredential(
 
   const paymentRef = await clientRef.collection('Payment credentials').add(paymentDoc as any);
 
+  dualWritePaymentCredential(clientId, paymentRef.id, paymentDoc).catch(() => {});
+
   res.status(200).json({
     success: true,
     paymentCredentialId: paymentRef.id,
@@ -966,6 +1016,8 @@ export async function deleteClientCreditCardPaymentCredential(
 
   // Firestore: supprimer principal + fallback legacy (best-effort)
   await paymentRef.delete().catch(() => {});
+
+  dualWriteDelete('payment_credentials', 'firestore_id', paymentCredentialId).catch(() => {});
 
   res.status(200).json({ success: true, paymentCredentialId, securdenId: securdenId || null });
 }

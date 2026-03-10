@@ -1,6 +1,19 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { dualWriteToSupabase, dualWriteDelete, resolveSupabaseClientId, mapFavoriteRequestToSupabase } from '../services/dualWrite.service.js';
+
+function computeConseiller(requestType: string, requestCategory: string): string {
+  const type = String(requestType || '').trim();
+  const category = String(requestCategory || '').trim();
+  if (type === 'CRM Internal System' && category !== 'Vérifier remboursement') {
+    return 'Odelia';
+  }
+  if (type === 'CRM Internal System' && category === 'Vérifier remboursement') {
+    return 'Yaacov';
+  }
+  return 'Marie';
+}
 
 export async function getRequests(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -48,6 +61,22 @@ export async function getRequestDetail(req: AuthenticatedRequest, res: Response)
     res.json({ requestId, ...requestDoc.data() });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
+  }
+}
+
+export async function getConseiller(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const requestType = String(req.query.requestType || '');
+    const requestCategory = String(req.query.requestCategory || '');
+    const conseiller = computeConseiller(requestType, requestCategory);
+    res.json({
+      conseiller,
+      advisor: conseiller,
+      requestType,
+      requestCategory
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error?.message || 'Unable to resolve conseiller' });
   }
 }
 
@@ -237,16 +266,22 @@ export async function addFavoriteRequest(req: AuthenticatedRequest, res: Respons
     const { categoryId, subCategoryId } = req.body;
     const db = getFirestore();
 
+    const favData = {
+      categoryId,
+      subCategoryId,
+      createdAt: new Date()
+    };
+
     await db
       .collection('Clients')
       .doc(uid)
       .collection('favoriteRequests')
       .doc(requestId)
-      .set({
-        categoryId,
-        subCategoryId,
-        createdAt: new Date()
-      });
+      .set(favData);
+
+    resolveSupabaseClientId(uid).then(cid => {
+      if (cid) dualWriteToSupabase('favorite_requests', mapFavoriteRequestToSupabase(cid, requestId, favData), { onConflict: 'firestore_id' });
+    }).catch(() => {});
 
     res.json({ message: 'Favorite added', requestId });
   } catch (error: any) {
@@ -266,6 +301,8 @@ export async function removeFavoriteRequest(req: AuthenticatedRequest, res: Resp
       .collection('favoriteRequests')
       .doc(requestId)
       .delete();
+
+    dualWriteDelete('favorite_requests', 'firestore_id', requestId).catch(() => {});
 
     res.json({ message: 'Favorite removed', requestId });
   } catch (error: any) {

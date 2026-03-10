@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { dualWriteToSupabase, resolveSupabaseClientId, mapAppointmentToSupabase } from '../services/dualWrite.service.js';
 
 export async function getAppointments(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -83,6 +84,10 @@ export async function createAppointment(req: AuthenticatedRequest, res: Response
       .collection('appointments')
       .add(newAppointment);
 
+    resolveSupabaseClientId(uid).then(cid => {
+      if (cid) dualWriteToSupabase('appointments', mapAppointmentToSupabase(cid, appointmentRef.id, newAppointment), { onConflict: 'firestore_id' });
+    }).catch(() => {});
+
     res.status(201).json({ appointmentId: appointmentRef.id, ...newAppointment });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -113,6 +118,10 @@ export async function updateAppointment(req: AuthenticatedRequest, res: Response
       .doc(appointmentId)
       .get();
 
+    resolveSupabaseClientId(uid).then(cid => {
+      if (cid) dualWriteToSupabase('appointments', mapAppointmentToSupabase(cid, appointmentId, updatedDoc.data()!), { onConflict: 'firestore_id' });
+    }).catch(() => {});
+
     res.json({ appointmentId, ...updatedDoc.data() });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -125,6 +134,8 @@ export async function cancelAppointment(req: AuthenticatedRequest, res: Response
     const { appointmentId } = req.params;
     const db = getFirestore();
 
+    const cancelledAt = new Date();
+
     await db
       .collection('Clients')
       .doc(uid)
@@ -132,8 +143,10 @@ export async function cancelAppointment(req: AuthenticatedRequest, res: Response
       .doc(appointmentId)
       .update({
         status: 'cancelled',
-        updatedAt: new Date()
+        updatedAt: cancelledAt
       });
+
+    dualWriteToSupabase('appointments', { status: 'cancelled', updated_at: cancelledAt.toISOString() }, { mode: 'update', matchColumn: 'firestore_id', matchValue: appointmentId }).catch(() => {});
 
     res.json({ message: 'Appointment cancelled', appointmentId });
   } catch (error: any) {

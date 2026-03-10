@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { dualWriteToSupabase, resolveSupabaseClientId, mapSupportTicketToSupabase, mapContactMessageToSupabase } from '../services/dualWrite.service.js';
 
 export async function getFAQs(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -40,7 +41,7 @@ export async function sendContactMessage(req: AuthenticatedRequest, res: Respons
     const uid = req.uid || null;
     const db = getFirestore();
 
-    const messageRef = await db.collection('ContactMessages').add({
+    const messageData = {
       uid: uid || null,
       name,
       email,
@@ -49,7 +50,10 @@ export async function sendContactMessage(req: AuthenticatedRequest, res: Respons
       message,
       createdAt: new Date(),
       status: 'new'
-    });
+    };
+    const messageRef = await db.collection('ContactMessages').add(messageData);
+
+    dualWriteToSupabase('contact_messages', mapContactMessageToSupabase(messageRef.id, messageData), { mode: 'insert' }).catch(() => {});
 
     res.status(201).json({
       messageId: messageRef.id,
@@ -113,6 +117,12 @@ export async function createSupportTicket(req: AuthenticatedRequest, res: Respon
       updatedAt: new Date()
     });
 
+    resolveSupabaseClientId(uid).then(clientId => {
+      dualWriteToSupabase('support_tickets', mapSupportTicketToSupabase(clientId, ticketRef.id, uid, {
+        subject, description, priority, status: 'open', createdAt: new Date(), updatedAt: new Date()
+      }), { mode: 'insert' });
+    }).catch(() => {});
+
     res.status(201).json({
       ticketId: ticketRef.id,
       subject,
@@ -170,6 +180,11 @@ export async function updateSupportTicket(req: AuthenticatedRequest, res: Respon
       ...updates,
       updatedAt: new Date()
     });
+
+    dualWriteToSupabase('support_tickets', {
+      ...updates,
+      updated_at: new Date().toISOString()
+    }, { mode: 'update', matchColumn: 'firestore_id', matchValue: ticketId }).catch(() => {});
 
     res.json({ message: 'Support ticket updated', ticketId });
   } catch (error: any) {

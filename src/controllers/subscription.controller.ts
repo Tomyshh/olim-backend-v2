@@ -20,6 +20,7 @@ import {
   normalizeCardNumberDigitsOnly,
   tryCreateSecurdenFolderAndCard
 } from '../services/securden.service.js';
+import { dualWriteSubscription, dualWritePaymentCredential, dualWriteDelete, dualWriteToSupabase, dualWritePromoRevert, dualWritePromotion, mapRefundRequestToSupabase, resolveSupabaseClientId } from '../services/dualWrite.service.js';
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -271,6 +272,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
             },
             { merge: true }
           );
+          dualWriteSubscription(uid, { ...subData, plan: { ...subData.plan, price: Math.floor(basePriceInCents) }, pricing: { discountInCents: 0, chargedPriceInCents: Math.floor(basePriceInCents), pricingSource: 'promo_reverted' } }).catch(() => {});
           // Recharge local pour répondre avec l'état post-réversion
           const refreshed = await currentSubscriptionRef.get();
           if (refreshed.exists) {
@@ -421,6 +423,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       }
 
       await currentSubscriptionRef.set(patch, { merge: true }).catch(() => {});
+      dualWriteSubscription(uid, { ...subObj, ...patch }).catch(() => {});
     }
 
     // ---- Conversion Visitor when truly expired (recommended) ----
@@ -448,6 +451,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
           { merge: true }
         )
         .catch(() => {});
+      dualWriteSubscription(uid, { ...subObj, plan: { ...subObj.plan, membership: 'Visitor' }, states: { isActive: false, willExpire: false }, dates: { ...subObj.dates, endDate: accessUntil } }).catch(() => {});
     }
 
     const entitlement = {
@@ -1239,6 +1243,17 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
 
     await batch.commit();
 
+    // Dual-write: subscription/current
+    dualWriteSubscription(uid, subscriptionDoc).catch(() => {});
+    // Dual-write: inline card (if created)
+    if (createdCard) {
+      dualWritePaymentCredential(uid, createdCard.id, createdCard.paymentDoc).catch(() => {});
+    }
+    // Dual-write: isSubscriptionCard flags on all payment credentials
+    credsSnap.docs.forEach((d) => {
+      dualWritePaymentCredential(uid, d.id, { ...d.data(), isSubscriptionCard: d.id === cardIdToMarkAsSubscription }).catch(() => {});
+    });
+
     // Désactivation des codes promo à usage unique (forEveryone === false => isValid = false)
     // Effectué après le commit pour ne pas bloquer la souscription en cas d'erreur
     if (promoResult?.ok && !promoResult.forEveryone && promoResult.promotionId) {
@@ -1247,6 +1262,7 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
           { isValid: false, usedByUid: uid, usedAt: admin.firestore.FieldValue.serverTimestamp() },
           { merge: true }
         );
+        dualWritePromotion(promoResult.promotionId, { isValid: false, usedByUid: uid, usedAt: new Date() }).catch(() => {});
       } catch (e: any) {
         console.error('[subscribe] Échec désactivation code promo à usage unique:', {
           promotionId: promoResult.promotionId,
@@ -1260,7 +1276,7 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     // Planifier la réversion automatique de la promo si promo_duration > 0
     if (promoResult?.ok && promoDurationCycles && promoDurationCycles > 0 && promoRevertAt) {
       try {
-        await db.collection('PromoReverts').add({
+        const promoRevertRef = await db.collection('PromoReverts').add({
           uid,
           promoCode: promoResult.promoCodeNormalized,
           promotionId: promoResult.promotionId,
@@ -1274,6 +1290,20 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
           status: 'pending',
           createdAt: admin.firestore.FieldValue.serverTimestamp()
         });
+        dualWritePromoRevert(promoRevertRef.id, {
+          uid,
+          promoCode: promoResult.promoCodeNormalized,
+          promotionId: promoResult.promotionId,
+          revertAt: promoRevertAt,
+          basePriceInCents,
+          discountedPriceInCents: finalPriceInCents,
+          planType: pricing.planNormalized,
+          membershipType: membership,
+          paymeSubId: subID || null,
+          durationCycles: promoDurationCycles,
+          status: 'pending',
+          createdAt: new Date()
+        }).catch(() => {});
       } catch (e: any) {
         console.error('[subscribe] Échec écriture PromoReverts:', {
           uid,
@@ -1482,6 +1512,7 @@ export async function addCard(req: AuthenticatedRequest, res: Response): Promise
     };
 
     const paymentRef = await clientRef.collection('Payment credentials').add(paymentDoc as any);
+    dualWritePaymentCredential(uid, paymentRef.id, paymentDoc).catch(() => {});
 
     // Contrat mobile: retourner les identifiants PayMe + l'id Firestore créé.
     // Compat: inclure aussi une vue "card" (ancien format).
@@ -1521,6 +1552,7 @@ export async function updateCard(req: AuthenticatedRequest, res: Response): Prom
         },
         { merge: true }
       );
+      dualWritePaymentCredential(uid, cardId, { ...(snap.data() || {}), ...updates }).catch(() => {});
       res.json({ message: 'Card updated', cardId });
       return;
     }
@@ -1560,6 +1592,11 @@ export async function deleteCard(req: AuthenticatedRequest, res: Response): Prom
 
     // Supprimer dans Payment credentials (principal)
     await paymentRef.delete().catch(() => {});
+    resolveSupabaseClientId(uid).then(clientSupabaseId => {
+      if (clientSupabaseId) {
+        dualWriteDelete('payment_credentials', 'firestore_id', cardId).catch(() => {});
+      }
+    }).catch(() => {});
 
     res.json({ message: 'Card deleted', cardId });
   } catch (error: any) {
@@ -1589,6 +1626,9 @@ export async function setDefaultCard(req: AuthenticatedRequest, res: Response): 
     batch.set(clientRef.collection('Payment credentials').doc(cardId), { isDefault: true }, { merge: true });
 
     await batch.commit();
+    credsSnap.docs.forEach((d) => {
+      dualWritePaymentCredential(uid, d.id, { ...(d.data() || {}), isDefault: d.id === cardId }).catch(() => {});
+    });
 
     res.json({ message: 'Default card set', cardId });
   } catch (error: any) {
@@ -1674,20 +1714,21 @@ export async function createRefundRequest(req: AuthenticatedRequest, res: Respon
     const { requestId, amount, reason } = req.body;
     const db = getFirestore();
 
+    const refundData = {
+      requestId: requestId || null,
+      amount: Number(amount),
+      reason: reason || '',
+      status: 'pending',
+      createdAt: new Date()
+    };
     const refundRef = await db
       .collection('Clients')
       .doc(uid)
       .collection('refund_requests')
-      .add({
-        requestId: requestId || null,
-        amount: Number(amount),
-        reason: reason || '',
-        status: 'pending',
-        createdAt: new Date()
-      });
-
-    // ⚠️ TODO: Créer aussi dans RefundRequests global (admin)
-    // ⚠️ TODO: Déclencher trigger onRefundRequestCreated (si activé)
+      .add(refundData);
+    resolveSupabaseClientId(uid).then(clientSupabaseId => {
+      dualWriteToSupabase('refund_requests', mapRefundRequestToSupabase(clientSupabaseId, refundRef.id, uid, { ...refundData, amountCents: refundData.amount }), { mode: 'insert' }).catch(() => {});
+    }).catch(() => {});
 
     res.status(201).json({
       refundId: refundRef.id,

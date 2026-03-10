@@ -1,0 +1,45 @@
+{
+  "total": 2798,
+  "success": 2789,
+  "skipped": 0,
+  "errors": [
+    {
+      "uid": "AvLtI1FDVVcE0rg1XEccN2v9HJV2",
+      "error": "migration returned false"
+    },
+    {
+      "uid": "D7iHus8EsgOq7O8nj9LlpsuwZcA3",
+      "error": "migration returned false"
+    },
+    {
+      "uid": "U1aeg5YTNNW3STJOvZiBv2ugzed2",
+      "error": "migration returned false"
+    },
+    {
+      "uid": "XxnCfd4lRMfEJEQcuIeUr0niAJw2",
+      "error": "migration returned false"
+    },
+    {
+      "uid": "YRr3OB8CZGVeYRggQ1WUkm9v8yh1",
+      "error": "migration returned false"
+    },
+    {
+      "uid": "Ygh0gELK0XVYEsD9HkpgMoyTJYf1",
+      "error": "migration returned false"
+    },
+    {
+      "uid": "lqFHLbJRxuPFkiqRuszfpgpGKsv2",
+      "error": "migration returned false"
+    },
+    {
+      "uid": "xc5RxhhNjEMak3WA9AYvuVR2NxB2",
+      "error": "migration returned false"
+    },
+    {
+      "uid": "yQ4bnjvFNubrGy4dffNC2RNtFbI2",
+      "error": "migration returned false"
+    }
+  ],
+  "startedAt": "2026-03-10T10:14:55.432Z",
+  "completedAt": "2026-03-10T12:57:35.958Z"
+}

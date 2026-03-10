@@ -7,11 +7,11 @@ const router = Router();
 // Liste des partenaires (peut être public avec auth optionnelle)
 router.get('/', optionalAuth, partnersController.getPartners);
 
-// Détails d'un partenaire
-router.get('/:partnerId', optionalAuth, partnersController.getPartnerDetail);
-
 // Partenaires VIP
 router.get('/vip/list', optionalAuth, partnersController.getVIPPartners);
+
+// Détails d'un partenaire
+router.get('/:partnerId', optionalAuth, partnersController.getPartnerDetail);
 
 export default router;
 

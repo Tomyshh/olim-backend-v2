@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore, getAuth } from '../config/firebase.js';
+import { dualWriteToSupabase, dualWriteClient, dualWriteDelete, resolveSupabaseClientId } from '../services/dualWrite.service.js';
+import { supabase } from '../services/supabase.service.js';
 
 export async function registerFCMToken(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -25,11 +27,14 @@ export async function registerFCMToken(req: AuthenticatedRequest, res: Response)
     const existingTokens = clientData.fcmTokens || [];
 
     if (!existingTokens.includes(token)) {
-      await clientRef.update({
+      const updatedData = {
         fcmTokens: [...existingTokens, token],
         lastFcmToken: token,
         fcmTokenUpdatedAt: new Date()
-      });
+      };
+      await clientRef.update(updatedData);
+
+      dualWriteClient(uid!, { ...clientData, ...updatedData }).catch(() => {});
     }
 
     res.json({ message: 'FCM token registered', token });
@@ -97,6 +102,8 @@ export async function markAsRead(req: AuthenticatedRequest, res: Response): Prom
     const { notificationId } = req.params;
     const db = getFirestore();
 
+    const readAt = new Date();
+
     await db
       .collection('Clients')
       .doc(uid)
@@ -104,8 +111,10 @@ export async function markAsRead(req: AuthenticatedRequest, res: Response): Prom
       .doc(notificationId)
       .update({
         read: true,
-        readAt: new Date()
+        readAt
       });
+
+    dualWriteToSupabase('notifications', { is_read: true, read_at: readAt.toISOString() }, { mode: 'update', matchColumn: 'firestore_id', matchValue: notificationId }).catch(() => {});
 
     res.json({ message: 'Notification marked as read', notificationId });
   } catch (error: any) {
@@ -125,11 +134,21 @@ export async function markAllAsRead(req: AuthenticatedRequest, res: Response): P
       .where('read', '==', false)
       .get();
 
+    const readAt = new Date();
     const batch = db.batch();
     unreadNotifications.docs.forEach(doc => {
-      batch.update(doc.ref, { read: true, readAt: new Date() });
+      batch.update(doc.ref, { read: true, readAt });
     });
     await batch.commit();
+
+    if (unreadNotifications.size > 0) {
+      const notifIds = unreadNotifications.docs.map(d => d.id);
+      Promise.resolve(
+        supabase.from('notifications')
+          .update({ is_read: true, read_at: readAt.toISOString() })
+          .in('firestore_id', notifIds)
+      ).catch(() => {});
+    }
 
     res.json({ message: 'All notifications marked as read', count: unreadNotifications.size });
   } catch (error: any) {
@@ -149,6 +168,8 @@ export async function deleteNotification(req: AuthenticatedRequest, res: Respons
       .collection('notifications')
       .doc(notificationId)
       .delete();
+
+    dualWriteDelete('notifications', 'firestore_id', notificationId).catch(() => {});
 
     res.json({ message: 'Notification deleted', notificationId });
   } catch (error: any) {
@@ -191,6 +212,10 @@ export async function updateNotificationSettings(req: AuthenticatedRequest, res:
       .collection('settings')
       .doc('notifications')
       .set(settings, { merge: true });
+
+    resolveSupabaseClientId(uid).then(cid => {
+      if (cid) dualWriteToSupabase('notification_settings', { client_id: cid, ...settings, updated_at: new Date().toISOString() }, { onConflict: 'client_id' });
+    }).catch(() => {});
 
     res.json({ message: 'Notification settings updated', settings });
   } catch (error: any) {

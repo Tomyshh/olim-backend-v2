@@ -47,16 +47,24 @@ export async function getPartnerDetail(req: AuthenticatedRequest, res: Response)
 export async function getVIPPartners(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const db = getFirestore();
+    const { limit = 200 } = req.query;
+    // Certains documents historiques utilisent VIP / isVip / categories[].
+    // On charge puis on filtre côté serveur pour éviter les trous de mapping.
+    const snapshot = await db.collection('Partenaires').limit(Number(limit)).get();
 
-    const vipSnapshot = await db
-      .collection('Partenaires')
-      .where('isVIP', '==', true)
-      .get();
-
-    const partners = vipSnapshot.docs.map(doc => ({
-      partnerId: doc.id,
-      ...doc.data()
-    }));
+    const partners = snapshot.docs
+      .map(doc => ({ partnerId: doc.id, ...doc.data() }))
+      .filter((partner: any) => {
+        if (partner == null || typeof partner !== 'object') return false;
+        if (partner.isVIP === true || partner.isVip === true || partner.VIP === true) {
+          return true;
+        }
+        const tier = String(partner.tier || partner.type || partner.level || '').toLowerCase();
+        if (tier.includes('vip')) return true;
+        const tags = Array.isArray(partner.tags) ? partner.tags.map((x: any) => String(x).toLowerCase()) : [];
+        const categories = Array.isArray(partner.categories) ? partner.categories.map((x: any) => String(x).toLowerCase()) : [];
+        return tags.includes('vip') || categories.includes('vip');
+      });
 
     res.json({ partners });
   } catch (error: any) {

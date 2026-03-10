@@ -2,6 +2,8 @@ import type { Response } from 'express';
 import { admin, getFirestore } from '../config/firebase.js';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { buildInitialSeniority } from '../services/clientSeniority.service.js';
+import { dualWriteClient } from '../services/dualWrite.service.js';
+import { ensureSupabaseAuthUser } from '../services/supabaseAuth.service.js';
 
 /**
  * POST /users/init
@@ -43,6 +45,14 @@ export async function initUser(req: AuthenticatedRequest, res: Response): Promis
       { merge: true }
     );
 
+    const mergedData = { ...existing, ...(email ? { Email: email } : {}), ...(phoneNumber ? { 'Phone Number': phoneNumber } : {}) };
+    (async () => {
+      try {
+        if (email) await ensureSupabaseAuthUser(email, { firebaseUid: uid });
+        await dualWriteClient(uid, mergedData);
+      } catch (e) { console.error('[initUser] dual-write failed:', e); }
+    })();
+
     res.json({ ok: true, created: false, uid });
     return;
   }
@@ -63,6 +73,16 @@ export async function initUser(req: AuthenticatedRequest, res: Response): Promis
     },
     { merge: true }
   );
+
+  (async () => {
+    try {
+      if (email) await ensureSupabaseAuthUser(email, { firebaseUid: uid });
+      await dualWriteClient(uid, {
+        Email: email, 'Phone Number': phoneNumber, createdVia: 'firebaseAuth',
+        registrationComplete: false, seniority: buildInitialSeniority(), createdAt: new Date()
+      });
+    } catch (e) { console.error('[initUser] dual-write failed:', e); }
+  })();
 
   res.status(201).json({ ok: true, created: true, uid });
 }

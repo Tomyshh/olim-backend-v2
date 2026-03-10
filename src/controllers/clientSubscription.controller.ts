@@ -16,6 +16,7 @@ import {
 } from '../services/payme.service.js';
 import { validateAndApplyPromo, type PromoValidationOk } from '../services/promoCode.service.js';
 import { computeMembershipPricing } from '../services/membershipPricing.service.js';
+import { dualWriteSubscription, dualWriteClient, dualWritePaymentCredential, dualWriteToSupabase, dualWritePromoRevert, dualWritePromotion, resolveSupabaseClientId } from '../services/dualWrite.service.js';
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -83,7 +84,7 @@ async function writeAdminAuditLog(params: {
 }): Promise<void> {
   try {
     const db = getFirestore();
-    await db.collection('AdminAuditLogs').add({
+    const auditData = {
       action: params.action,
       callerUid: params.callerUid,
       clientId: params.clientId,
@@ -92,7 +93,18 @@ async function writeAdminAuditLog(params: {
       ip: params.req.ip || null,
       userAgent: params.req.get('user-agent') || null,
       timestamp: admin.firestore.FieldValue.serverTimestamp()
-    });
+    };
+    const auditRef = await db.collection('AdminAuditLogs').add(auditData);
+    dualWriteToSupabase('admin_audit_logs', {
+      firestore_id: auditRef.id,
+      action: params.action,
+      caller_uid: params.callerUid,
+      client_firebase_uid: params.clientId,
+      payload: params.payload ?? null,
+      ip: params.req.ip || null,
+      user_agent: params.req.get('user-agent') || null,
+      created_at: new Date().toISOString()
+    }, { mode: 'insert' }).catch(() => {});
   } catch (error: any) {
     console.error('AdminAuditLogs failed', { message: error?.message || String(error) });
   }
@@ -659,6 +671,15 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
 
   await batch.commit();
 
+  // Dual-write: subscription/current + client
+  dualWriteSubscription(clientId, subscriptionDoc).catch(() => {});
+  dualWriteClient(clientId, {
+    Membership: membership,
+    subPlan: planNumber,
+    isUnpaid: false,
+    ...(promoCode ? { promoCodeUsed: promoCode } : {})
+  }).catch(() => {});
+
   // Post-commit: gestion promo (désactivation usage unique + PromoReverts)
   if (promoResult) {
     const db2 = getFirestore();
@@ -669,6 +690,7 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
           { isValid: false, usedByUid: clientId, usedAt: admin.firestore.FieldValue.serverTimestamp() },
           { merge: true }
         );
+        dualWritePromotion(promoResult.promotionId, { isValid: false, usedByUid: clientId, usedAt: new Date() }).catch(() => {});
       } catch (e: any) {
         console.error('[createOrReplaceClientSubscription] Échec désactivation code promo:', e?.message);
       }
@@ -679,7 +701,7 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
     if (promoDurationCycles && promoDurationCycles > 0) {
       const promoRevertAt = addMonths(nextPaymentDate || new Date(), promoDurationCycles);
       try {
-        await db2.collection('PromoReverts').add({
+        const promoRevertRef = await db2.collection('PromoReverts').add({
           uid: clientId,
           promoCode: promoResult.promoCodeNormalized,
           promotionId: promoResult.promotionId,
@@ -694,6 +716,21 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
           source: 'crm_createOrReplace'
         });
+        dualWritePromoRevert(promoRevertRef.id, {
+          uid: clientId,
+          promoCode: promoResult.promoCodeNormalized,
+          promotionId: promoResult.promotionId,
+          revertAt: promoRevertAt,
+          basePriceInCents: basePriceBeforePromo,
+          discountedPriceInCents: priceInCents,
+          planType: plan,
+          membershipType: membership,
+          paymeSubId: subID || null,
+          durationCycles: promoDurationCycles,
+          status: 'pending',
+          createdAt: new Date(),
+          source: 'crm_createOrReplace'
+        }).catch(() => {});
       } catch (e: any) {
         console.error('[createOrReplaceClientSubscription] Échec écriture PromoReverts:', e?.message);
       }
@@ -907,6 +944,9 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
       );
       await batch.commit();
 
+      // Dual-write: subscription set-price update
+      dualWriteSubscription(clientId, { ...subscription, ...setPriceSubUpdate }).catch(() => {});
+
       // Post-commit: gestion promo (désactivation usage unique + PromoReverts)
       if (modifyPromoResult) {
         if (!modifyPromoResult.forEveryone && modifyPromoResult.promotionId) {
@@ -915,6 +955,7 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
               { isValid: false, usedByUid: clientId, usedAt: admin.firestore.FieldValue.serverTimestamp() },
               { merge: true }
             );
+            dualWritePromotion(modifyPromoResult.promotionId, { isValid: false, usedByUid: clientId, usedAt: new Date() }).catch(() => {});
           } catch (e: any) {
             console.error('[modifyClientSubscription] Échec désactivation code promo:', e?.message);
           }
@@ -924,7 +965,7 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
         if (promoDurationCycles && promoDurationCycles > 0) {
           const promoRevertAt = addMonths(new Date(), promoDurationCycles);
           try {
-            await db.collection('PromoReverts').add({
+            const promoRevertRef = await db.collection('PromoReverts').add({
               uid: clientId,
               promoCode: modifyPromoResult.promoCodeNormalized,
               promotionId: modifyPromoResult.promotionId,
@@ -939,6 +980,21 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
               createdAt: admin.firestore.FieldValue.serverTimestamp(),
               source: 'crm_modify_setPrice'
             });
+            dualWritePromoRevert(promoRevertRef.id, {
+              uid: clientId,
+              promoCode: modifyPromoResult.promoCodeNormalized,
+              promotionId: modifyPromoResult.promotionId,
+              revertAt: promoRevertAt,
+              basePriceInCents: modifyBasePriceBeforePromo,
+              discountedPriceInCents: requestedPrice,
+              planType: requestedPlan,
+              membershipType: requestedMembership,
+              paymeSubId: subId || null,
+              durationCycles: promoDurationCycles,
+              status: 'pending',
+              createdAt: new Date(),
+              source: 'crm_modify_setPrice'
+            }).catch(() => {});
           } catch (e: any) {
             console.error('[modifyClientSubscription] Échec écriture PromoReverts:', e?.message);
           }
@@ -1027,6 +1083,7 @@ export async function adminPatchSubscriptionMembershipFirestoreOnly(req: Authent
     { merge: true }
   );
   await batch.commit();
+  dualWriteSubscription(clientId, { ...subscription, plan: { ...subscription?.plan, membership } }).catch(() => {});
 
   await writeAdminAuditLog({
     action: 'CLIENT_SUBSCRIPTION_ADMIN_PATCH_MEMBERSHIP_FIRESTORE_ONLY',
@@ -1168,6 +1225,7 @@ export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedReq
     { merge: true }
   );
   await batch.commit();
+  dualWriteSubscription(clientId, { ...subscription, plan: { ...subscription?.plan, membership } }).catch(() => {});
 
   await writeAdminAuditLog({
     action: 'CLIENT_SUBSCRIPTION_ADMIN_PATCH_MEMBERSHIP_AND_SET_PAYME_PRICE',
@@ -1249,6 +1307,7 @@ export async function adminPatchMembershipAndSetPaymeDescription(req: Authentica
     { merge: true }
   );
   await batch.commit();
+  dualWriteSubscription(clientId, { ...subscription, plan: { ...subscription?.plan, membership } }).catch(() => {});
 
   await writeAdminAuditLog({
     action: 'CLIENT_SUBSCRIPTION_ADMIN_PATCH_MEMBERSHIP_AND_SET_PAYME_DESCRIPTION',
@@ -1273,6 +1332,7 @@ async function updateSubscriptionStateDoc(params: {
 }): Promise<void> {
   const db = getFirestore();
   await db.collection('Clients').doc(params.clientId).collection('subscription').doc('current').set(stripUndefinedDeep(params.patch), { merge: true });
+  dualWriteSubscription(params.clientId, params.patch).catch(() => {});
 }
 
 export async function pauseClientSubscription(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -1384,6 +1444,9 @@ export async function setClientSubscriptionCard(req: AuthenticatedRequest, res: 
     batch.set(doc.ref, { isSubscriptionCard: doc.id === paymentCredentialId }, { merge: true });
   }
   await batch.commit();
+  for (const doc of credsSnap.docs) {
+    dualWritePaymentCredential(clientId, doc.id, { ...(doc.data() || {}), isSubscriptionCard: doc.id === paymentCredentialId }).catch(() => {});
+  }
 
   await writeAdminAuditLog({
     action: 'CLIENT_SUBSCRIPTION_SET_CARD',

@@ -1,0 +1,726 @@
+import { supabase } from './supabase.service.js';
+
+const LOG_PREFIX = '[dualWrite]';
+
+// ---------------------------------------------------------------------------
+// Core dual-write engine
+// ---------------------------------------------------------------------------
+
+type DualWriteMode = 'upsert' | 'insert' | 'update' | 'delete';
+
+interface DualWriteOptions {
+  onConflict?: string;
+  mode?: DualWriteMode;
+  matchColumn?: string;
+  matchValue?: unknown;
+}
+
+async function logFailure(table: string, operation: string, payload: unknown, err: unknown): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  const stack = err instanceof Error ? err.stack : undefined;
+  try {
+    await supabase.from('dual_write_failures').insert({
+      target_table: table,
+      operation,
+      payload: typeof payload === 'object' ? payload : { value: payload },
+      error_message: message,
+      error_stack: stack ?? null
+    });
+  } catch (logErr) {
+    console.error(LOG_PREFIX, 'Failed to log dual-write failure', logErr);
+  }
+}
+
+export async function dualWriteToSupabase(
+  table: string,
+  data: Record<string, any>,
+  options: DualWriteOptions = {}
+): Promise<void> {
+  const mode = options.mode ?? 'upsert';
+  try {
+    for (const k of Object.keys(data)) {
+      if (data[k] === undefined) delete data[k];
+    }
+
+    let result: { error: any };
+
+    switch (mode) {
+      case 'insert':
+        result = await supabase.from(table).insert(data);
+        break;
+      case 'update':
+        if (!options.matchColumn || options.matchValue === undefined) {
+          throw new Error('update mode requires matchColumn and matchValue');
+        }
+        result = await supabase.from(table).update(data).eq(options.matchColumn, options.matchValue);
+        break;
+      case 'delete':
+        if (!options.matchColumn || options.matchValue === undefined) {
+          throw new Error('delete mode requires matchColumn and matchValue');
+        }
+        result = await supabase.from(table).delete().eq(options.matchColumn, options.matchValue);
+        break;
+      case 'upsert':
+      default:
+        result = await supabase.from(table).upsert(data, {
+          onConflict: options.onConflict ?? 'id'
+        });
+        break;
+    }
+
+    if (result.error) {
+      console.error(LOG_PREFIX, `${mode} on ${table} failed:`, result.error.message);
+      await logFailure(table, mode, data, result.error);
+    }
+  } catch (err) {
+    console.error(LOG_PREFIX, `${mode} on ${table} threw:`, err);
+    await logFailure(table, mode, data, err);
+  }
+}
+
+export async function dualWriteDelete(
+  table: string,
+  column: string,
+  value: unknown
+): Promise<void> {
+  return dualWriteToSupabase(table, {}, { mode: 'delete', matchColumn: column, matchValue: value });
+}
+
+// ---------------------------------------------------------------------------
+// Helper: resolve Supabase client UUID from firebase_uid
+// ---------------------------------------------------------------------------
+
+let clientIdCache = new Map<string, string>();
+
+export async function resolveSupabaseClientId(firebaseUid: string): Promise<string | null> {
+  const cached = clientIdCache.get(firebaseUid);
+  if (cached) return cached;
+
+  const { data } = await supabase
+    .from('clients')
+    .select('id')
+    .eq('firebase_uid', firebaseUid)
+    .maybeSingle();
+
+  if (data?.id) {
+    clientIdCache.set(firebaseUid, data.id);
+    return data.id;
+  }
+  return null;
+}
+
+export function clearClientIdCache(): void {
+  clientIdCache = new Map();
+}
+
+// ---------------------------------------------------------------------------
+// Helper: safe timestamp conversion
+// ---------------------------------------------------------------------------
+
+function toIso(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && 'toDate' in (value as any)) {
+    try { return (value as any).toDate().toISOString(); } catch { return null; }
+  }
+  if (typeof value === 'number') return new Date(value).toISOString();
+  return null;
+}
+
+function pickStr(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+/**
+ * Converts date strings like "22/01/1996" (DD/MM/YYYY) or "1996-01-22"
+ * to PostgreSQL-compatible "YYYY-MM-DD". Returns null on invalid input.
+ */
+function toDateOnly(value: unknown): string | null {
+  if (!value) return null;
+  if (typeof value === 'object' && 'toDate' in (value as any)) {
+    try {
+      const d = (value as any).toDate() as Date;
+      return d.toISOString().slice(0, 10);
+    } catch { return null; }
+  }
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value !== 'string') return null;
+  const s = value.trim();
+  if (!s) return null;
+
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmy = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
+  if (dmy) {
+    const [, dd, mm, yyyy] = dmy;
+    const d = Number(dd), m = Number(mm), y = Number(yyyy);
+    if (m >= 1 && m <= 12 && d >= 1 && d <= 31 && y >= 1900 && y <= 2100) {
+      return `${yyyy}-${mm!.padStart(2, '0')}-${dd!.padStart(2, '0')}`;
+    }
+  }
+
+  // Already YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // ISO datetime → extract date part
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s.slice(0, 10);
+
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Entity mappers: Firestore doc data → Supabase row
+// ---------------------------------------------------------------------------
+
+export function mapClientToSupabase(uid: string, fs: Record<string, any>): Record<string, any> {
+  return {
+    firebase_uid: uid,
+    email: pickStr(fs.Email) ?? pickStr(fs.email),
+    first_name: pickStr(fs['First Name']) ?? pickStr(fs.firstName),
+    last_name: pickStr(fs['Last Name']) ?? pickStr(fs.lastName),
+    father_name: pickStr(fs['Father Name']) ?? pickStr(fs.fatherName),
+    civility: pickStr(fs.Civility) ?? pickStr(fs.civility),
+    birthday: toDateOnly(fs.Birthday) ?? toDateOnly(fs.birthday),
+    teoudat_zeout: pickStr(fs['Teoudat Zeout']) ?? pickStr(fs.teoudatZeout),
+    koupat_holim: pickStr(fs['Koupat Holim']) ?? pickStr(fs.koupatHolim),
+    language: pickStr(fs.language) ?? 'fr',
+    registration_complete: fs.registrationComplete ?? false,
+    registration_completed_at: toIso(fs.registrationCompletedAt),
+    has_gov_access: fs.hasGOVAccess ?? null,
+    metadata: {
+      activity: fs.activity ?? null,
+      devices: fs.Devices ?? [],
+      membership: pickStr(fs.Membership) ?? pickStr(fs.membership?.type),
+      membershipStatus: pickStr(fs.membership?.status),
+      isUnpaid: fs.isUnpaid ?? false,
+      freeAccess: fs.freeAccess ?? null,
+      seniority: fs.seniority ?? null,
+      createdFrom: pickStr(fs.createdFrom) ?? pickStr(fs['Created From']) ?? pickStr(fs.createdVia),
+      securdenFolder: pickStr(fs['Securden folder']) ?? pickStr(fs.securden_Folder),
+      promoCodeUsed: pickStr(fs.promoCodeUsed),
+      lastLoginAt: toIso(fs.lastLoginAt),
+      subscriptionPlan: fs['Subscription Plan'] ?? null,
+      israCardSubCode: fs['IsraCard Sub Code'] ?? fs.israCard_subCode ?? null,
+      israCardSubId: fs['IsraCard Sub ID'] ?? null
+    },
+    created_at: toIso(fs['Created At']) ?? toIso(fs.createdAt),
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function mapSubscriptionToSupabase(
+  clientSupabaseId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    client_id: clientSupabaseId,
+    plan_type: pickStr(fs.plan?.type) ?? pickStr(fs.planType),
+    membership_type: pickStr(fs.plan?.membership) ?? pickStr(fs.membershipType),
+    price_cents: fs.plan?.price ?? fs.priceInCents ?? null,
+    currency: pickStr(fs.plan?.currency) ?? 'ILS',
+    payment_method: pickStr(fs.payment?.method),
+    installments: fs.payment?.installments ?? null,
+    next_payment_at: toIso(fs.payment?.nextPaymentDate),
+    last_payment_at: toIso(fs.payment?.lastPaymentDate),
+    payme_sub_code: fs.payme?.subCode ?? null,
+    payme_sub_id: pickStr(fs.payme?.subID),
+    payme_buyer_key: pickStr(fs.payme?.buyerKey),
+    payme_status: pickStr(typeof fs.payme?.status === 'number' ? String(fs.payme.status) : fs.payme?.status),
+    payme_sub_status: fs.payme?.subStatus ?? null,
+    is_unpaid: fs.states?.isUnpaid ?? false,
+    promo_code: pickStr(fs.promoCode?.code),
+    promo_source: pickStr(fs.promoCode?.source),
+    promo_applied_at: toIso(fs.promoCode?.appliedDate),
+    promo_expires_at: toIso(fs.promoCode?.expiresAt),
+    start_at: toIso(fs.dates?.startDate),
+    end_at: toIso(fs.dates?.endDate),
+    cancelled_at: toIso(fs.dates?.cancelledDate),
+    metadata: {
+      source: fs.source ?? null,
+      updatedBy: fs.updatedBy ?? null,
+      isActive: fs.states?.isActive ?? null,
+      isPaused: fs.states?.isPaused ?? null,
+      willExpire: fs.states?.willExpire ?? null,
+      isAnnual: fs.states?.isAnnual ?? null,
+      familySupplementCents: fs.familySupplement?.monthlyCents ?? null,
+      raw_states: fs.states ?? null
+    },
+    created_at: toIso(fs.createdAt) ?? new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function mapFamilyMemberToSupabase(
+  clientSupabaseId: string,
+  memberId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    client_id: clientSupabaseId,
+    first_name: pickStr(fs['First Name']) ?? pickStr(fs.firstName),
+    last_name: pickStr(fs['Last Name']) ?? pickStr(fs.lastName),
+    birthday: toDateOnly(fs.Birthday) ?? toDateOnly(fs.birthday),
+    teoudat_zeout: pickStr(fs['Teoudat Zeout']) ?? pickStr(fs.teoudatZeout),
+    status: pickStr(fs['Family Member Status']) ?? pickStr(fs.status),
+    is_account_owner: fs.isAccountOwner ?? (memberId === 'account_owner'),
+    metadata: {
+      firestoreId: memberId,
+      fatherName: pickStr(fs['Father Name']) ?? pickStr(fs.fatherName),
+      koupatHolim: pickStr(fs['Koupat Holim']) ?? pickStr(fs.koupatHolim),
+      email: pickStr(fs.Email) ?? pickStr(fs.email),
+      phone: pickStr(fs['Phone Number']?.[0]) ?? pickStr(fs.phone),
+      isActive: fs.isActive ?? true,
+      deactivatedAt: toIso(fs.deactivatedAt),
+      monthlySupplementCents: fs.monthlySupplement?.amountCents ?? null
+    },
+    created_at: toIso(fs.createdAt) ?? toIso(fs['Created At']) ?? new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function mapAddressToSupabase(
+  clientSupabaseId: string,
+  addressId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    client_id: clientSupabaseId,
+    label: pickStr(fs.Name) ?? pickStr(fs.name) ?? pickStr(fs.label),
+    address1: pickStr(fs.Address) ?? pickStr(fs.address),
+    address2: pickStr(fs['Additional address']) ?? pickStr(fs.additionalInfo),
+    apartment: pickStr(fs.Appartment) ?? pickStr(fs.apartment),
+    floor: pickStr(fs.Etage) ?? pickStr(fs.floor),
+    is_primary: addressId === 'primary' || fs.isPrimary === true,
+    metadata: { firestoreId: addressId },
+    created_at: toIso(fs.createdAt) ?? new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function mapPaymentCredentialToSupabase(
+  clientSupabaseId: string,
+  credId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    client_id: clientSupabaseId,
+    provider: 'payme',
+    buyer_key: pickStr(fs['Isracard Key']) ?? pickStr(fs.buyerKey) ?? pickStr(fs.isracard_key),
+    card_masked: pickStr(fs['Card Number']) ?? pickStr(fs.cardNumber),
+    card_type: pickStr(fs['Card Type']) ?? pickStr(fs.cardType),
+    card_name: pickStr(fs['Card Holder']) ?? pickStr(fs['Card Name']) ?? pickStr(fs.cardName),
+    securden_id: pickStr(fs['Securden ID']) ?? pickStr(fs.securdenId),
+    is_default: fs.isDefault ?? false,
+    is_subscription_card: fs.isSubscriptionCard ?? false,
+    metadata: { firestoreId: credId },
+    created_at: toIso(fs['Created At']) ?? toIso(fs.createdAt) ?? new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function mapChatConversationToSupabase(
+  clientSupabaseId: string,
+  convoId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: convoId,
+    client_id: clientSupabaseId,
+    request_id: pickStr(fs.requestId),
+    title: pickStr(fs.title) ?? 'Nouvelle conversation',
+    metadata: {},
+    created_at: toIso(fs.createdAt),
+    updated_at: toIso(fs.updatedAt) ?? new Date().toISOString()
+  };
+}
+
+export function mapChatMessageToSupabase(
+  conversationSupabaseId: string,
+  msgId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: msgId,
+    conversation_id: conversationSupabaseId,
+    sender_id: pickStr(fs.senderId) ?? '',
+    sender_name: pickStr(fs.senderName),
+    content: pickStr(fs.content),
+    type: pickStr(fs.type) ?? 'text',
+    attachments: fs.attachments ?? [],
+    is_read: fs.read ?? false,
+    read_at: toIso(fs.readAt),
+    created_at: toIso(fs.createdAt)
+  };
+}
+
+export function mapAppointmentToSupabase(
+  clientSupabaseId: string,
+  apptId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: apptId,
+    client_id: clientSupabaseId,
+    request_id: pickStr(fs.requestId),
+    slot_id: pickStr(fs.slotId),
+    appointment_date: pickStr(fs.date),
+    appointment_time: pickStr(fs.time),
+    status: pickStr(fs.status) ?? 'scheduled',
+    notes: pickStr(fs.notes) ?? '',
+    metadata: {},
+    created_at: toIso(fs.createdAt),
+    updated_at: toIso(fs.updatedAt) ?? new Date().toISOString()
+  };
+}
+
+export function mapNotificationToSupabase(
+  clientSupabaseId: string,
+  notifId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: notifId,
+    client_id: clientSupabaseId,
+    title: pickStr(fs.title),
+    body: pickStr(fs.body),
+    type: pickStr(fs.type),
+    is_read: fs.read ?? false,
+    read_at: toIso(fs.readAt),
+    data: fs.data ?? {},
+    metadata: {},
+    created_at: toIso(fs.createdAt)
+  };
+}
+
+export function mapSupportTicketToSupabase(
+  clientSupabaseId: string | null,
+  ticketId: string,
+  uid: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: ticketId,
+    client_id: clientSupabaseId,
+    client_firebase_uid: uid,
+    subject: pickStr(fs.subject) ?? '',
+    description: pickStr(fs.description),
+    priority: pickStr(fs.priority) ?? 'normal',
+    status: pickStr(fs.status) ?? 'open',
+    metadata: {},
+    created_at: toIso(fs.createdAt),
+    updated_at: toIso(fs.updatedAt) ?? new Date().toISOString()
+  };
+}
+
+export function mapContactMessageToSupabase(
+  msgId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: msgId,
+    client_firebase_uid: pickStr(fs.uid),
+    name: pickStr(fs.name),
+    email: pickStr(fs.email),
+    phone: pickStr(fs.phone),
+    subject: pickStr(fs.subject),
+    message: pickStr(fs.message),
+    status: pickStr(fs.status) ?? 'new',
+    created_at: toIso(fs.createdAt)
+  };
+}
+
+export function mapHealthRequestToSupabase(
+  clientSupabaseId: string | null,
+  reqId: string,
+  uid: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: reqId,
+    client_id: clientSupabaseId,
+    client_firebase_uid: uid,
+    request_type: pickStr(fs.type) ?? 'general',
+    description: pickStr(fs.description) ?? '',
+    data: fs.data ?? {},
+    status: pickStr(fs.status) ?? 'pending',
+    metadata: {},
+    created_at: toIso(fs.createdAt),
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function mapRequestDraftToSupabase(
+  clientSupabaseId: string,
+  draftId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: draftId,
+    client_id: clientSupabaseId,
+    draft_type: pickStr(fs.type) ?? 'manual_conversational',
+    title: pickStr(fs.title),
+    category: pickStr(fs.category),
+    subcategory: pickStr(fs.subcategory),
+    progress: typeof fs.progress === 'number' ? fs.progress : 0,
+    current_step: pickStr(fs.current_step),
+    snapshot_json: fs.snapshot_json ?? {},
+    uploaded_urls: fs.uploaded_urls ?? [],
+    client_temp_id: pickStr(fs.client_temp_id),
+    expires_at: toIso(fs.expires_at),
+    created_at: toIso(fs.created_at),
+    updated_at: toIso(fs.updated_at) ?? new Date().toISOString()
+  };
+}
+
+export function mapRefundRequestToSupabase(
+  clientSupabaseId: string | null,
+  refundId: string,
+  uid: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: refundId,
+    client_id: clientSupabaseId,
+    client_firebase_uid: uid,
+    amount_cents: fs.amountCents ?? fs.amount_cents ?? null,
+    reason: pickStr(fs.reason),
+    status: pickStr(fs.status) ?? 'pending',
+    metadata: fs.metadata ?? {},
+    created_at: toIso(fs.createdAt),
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function mapPromoRevertToSupabase(
+  revertId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: revertId,
+    client_firebase_uid: pickStr(fs.uid) ?? '',
+    promo_code: pickStr(fs.promoCode),
+    promotion_id: pickStr(fs.promotionId),
+    revert_at: toIso(fs.revertAt),
+    base_price_cents: fs.basePriceInCents ?? null,
+    discounted_price_cents: fs.discountedPriceInCents ?? null,
+    plan_type: pickStr(fs.planType),
+    membership_type: pickStr(fs.membershipType),
+    payme_sub_id: pickStr(fs.paymeSubId),
+    duration_cycles: fs.durationCycles ?? null,
+    status: pickStr(fs.status) ?? 'pending',
+    source: pickStr(fs.source),
+    completed_at: toIso(fs.completedAt),
+    skip_reason: pickStr(fs.skipReason),
+    last_error: pickStr(fs.lastError),
+    last_error_at: toIso(fs.lastErrorAt),
+    created_at: toIso(fs.createdAt)
+  };
+}
+
+export function mapPromotionToSupabase(
+  promoId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: promoId,
+    code: pickStr(fs.code) ?? promoId,
+    code_normalized: pickStr(fs.codeNormalized),
+    is_valid: fs.isValid ?? true,
+    for_everyone: fs.forEveryone ?? false,
+    membership_type: pickStr(fs.membershipType) ?? pickStr(fs.membership),
+    applicable_memberships: fs.applicableMemberships ?? fs.membershipTypes ?? [],
+    plan_type: pickStr(fs.plan) ?? pickStr(fs.planType),
+    applicable_plans: fs.plans ?? fs.planTypes ?? [],
+    discount_percent: fs.percentOff ?? fs.discountPercent ?? fs.reductionPercent ?? fs.reduction ?? null,
+    discount_amount_cents: fs.amountOffCents ?? fs.discountInCents ?? fs.reductionInCents ?? null,
+    duration_cycles: fs.promo_duration ?? fs.promoDuration ?? fs.durationCycles ?? fs.duration ?? null,
+    expiration_date: toIso(fs.expirationDate) ?? toIso(fs.expiresAt) ?? toIso(fs.expiryDate),
+    source: pickStr(fs.source),
+    used_by_uid: pickStr(fs.usedByUid),
+    used_at: toIso(fs.usedAt),
+    metadata: {},
+    created_at: toIso(fs.created_at),
+    updated_at: new Date().toISOString()
+  };
+}
+
+export function mapFavoriteRequestToSupabase(
+  clientSupabaseId: string,
+  favId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: favId,
+    client_id: clientSupabaseId,
+    category_id: pickStr(fs.categoryId),
+    sub_category_id: pickStr(fs.subCategoryId),
+    category_title: pickStr(fs.categoryTitle),
+    sub_category_title: pickStr(fs.subCategoryTitle),
+    request_type: pickStr(fs.type),
+    last_used: toIso(fs.lastUsed),
+    created_at: new Date().toISOString()
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Settings mapper
+// ---------------------------------------------------------------------------
+
+export function mapSettingsToSupabase(
+  clientSupabaseId: string,
+  preferences: Record<string, any>
+): Record<string, any> {
+  return {
+    client_id: clientSupabaseId,
+    preferences: preferences ?? {},
+    updated_at: new Date().toISOString()
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Tip like / saved tip mappers
+// ---------------------------------------------------------------------------
+
+export function mapTipLikeToSupabase(
+  tipId: string,
+  firebaseUid: string
+): Record<string, any> {
+  return {
+    id: `${tipId}_${firebaseUid}`,
+    tip_id: tipId,
+    client_firebase_uid: firebaseUid,
+    created_at: new Date().toISOString()
+  };
+}
+
+export function mapUserSavedTipToSupabase(
+  clientSupabaseId: string | null,
+  tipId: string,
+  firebaseUid: string,
+  data: Record<string, any> = {}
+): Record<string, any> {
+  return {
+    id: `${tipId}_${firebaseUid}`,
+    tip_id: tipId,
+    client_id: clientSupabaseId,
+    client_firebase_uid: firebaseUid,
+    content: pickStr(data.content),
+    title: pickStr(data.title),
+    saved_at: toIso(data.savedAt) ?? new Date().toISOString()
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Convenience wrappers for common dual-write patterns
+// ---------------------------------------------------------------------------
+
+export async function dualWriteClient(uid: string, fsData: Record<string, any>): Promise<void> {
+  const row = mapClientToSupabase(uid, fsData);
+  await dualWriteToSupabase('clients', row, { onConflict: 'firebase_uid' });
+}
+
+export async function dualWriteSubscription(
+  firebaseUid: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  if (!clientId) {
+    console.warn(LOG_PREFIX, 'Cannot write subscription: client not found in Supabase', firebaseUid);
+    return;
+  }
+  const row = mapSubscriptionToSupabase(clientId, fsData);
+  await dualWriteToSupabase('subscriptions', row, { onConflict: 'client_id' });
+}
+
+export async function dualWriteFamilyMember(
+  firebaseUid: string,
+  memberId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  if (!clientId) return;
+  const row = mapFamilyMemberToSupabase(clientId, memberId, fsData);
+  await dualWriteToSupabase('family_members', row, { mode: 'insert' });
+}
+
+export async function dualWriteAddress(
+  firebaseUid: string,
+  addressId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  if (!clientId) return;
+  const row = mapAddressToSupabase(clientId, addressId, fsData);
+  await dualWriteToSupabase('client_addresses', row, { mode: 'insert' });
+}
+
+export async function dualWritePaymentCredential(
+  firebaseUid: string,
+  credId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  if (!clientId) return;
+  const row = mapPaymentCredentialToSupabase(clientId, credId, fsData);
+  await dualWriteToSupabase('payment_credentials', row, { mode: 'insert' });
+}
+
+export async function dualWritePromoRevert(
+  revertId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const row = mapPromoRevertToSupabase(revertId, fsData);
+  await dualWriteToSupabase('promo_reverts', row, { mode: 'insert' });
+}
+
+export async function dualWritePromotion(
+  promoId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const row = mapPromotionToSupabase(promoId, fsData);
+  await dualWriteToSupabase('promotions', row, { onConflict: 'firestore_id' });
+}
+
+export async function dualWriteSettings(
+  firebaseUid: string,
+  preferences: Record<string, any>
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  if (!clientId) return;
+  const row = mapSettingsToSupabase(clientId, preferences);
+  await dualWriteToSupabase('client_settings', row, { onConflict: 'client_id' });
+}
+
+export async function dualWriteTipLike(
+  tipId: string,
+  firebaseUid: string
+): Promise<void> {
+  const row = mapTipLikeToSupabase(tipId, firebaseUid);
+  await dualWriteToSupabase('tip_likes', row, { mode: 'insert' });
+}
+
+export async function dualDeleteTipLike(
+  tipId: string,
+  firebaseUid: string
+): Promise<void> {
+  const rowId = `${tipId}_${firebaseUid}`;
+  await dualWriteDelete('tip_likes', 'id', rowId);
+}
+
+export async function dualWriteSavedTip(
+  firebaseUid: string,
+  tipId: string,
+  data: Record<string, any> = {}
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  const row = mapUserSavedTipToSupabase(clientId, tipId, firebaseUid, data);
+  await dualWriteToSupabase('user_saved_tips', row, { mode: 'insert' });
+}
+
+export async function dualDeleteSavedTip(
+  tipId: string,
+  firebaseUid: string
+): Promise<void> {
+  const rowId = `${tipId}_${firebaseUid}`;
+  await dualWriteDelete('user_saved_tips', 'id', rowId);
+}

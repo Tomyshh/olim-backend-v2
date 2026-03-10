@@ -23,6 +23,8 @@ tags:
   - name: Subscription
   - name: Support
   - name: Health
+  - name: Preferences
+  - name: Utils
   - name: Partners
   - name: Cinema
   - name: Admin
@@ -72,6 +74,72 @@ paths:
           description: OK
         '401':
           description: Non authentifié (token manquant/invalide)
+  /api/preferences/favorites:
+    get:
+      tags: [Preferences]
+      summary: Récupérer les catégories favorites
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK (tableau éventuellement vide)
+    post:
+      tags: [Preferences]
+      summary: Ajouter une catégorie favorite (legacy alias)
+      description: Utiliser de préférence `POST /api/preferences/favorites/{categoryId}`.
+      security:
+        - bearerAuth: []
+      responses:
+        '405':
+          description: Méthode non supportée sur cette ressource.
+  /api/preferences/recent:
+    get:
+      tags: [Preferences]
+      summary: Récupérer les sous-catégories récentes
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK (tableau éventuellement vide)
+  /api/utils/service-availability:
+    get:
+      tags: [Utils]
+      summary: Récupérer l'état de disponibilité du service
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/preferences/favorites:
+    get:
+      tags: [Preferences]
+      summary: Alias compat de /api/preferences/favorites
+      deprecated: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/preferences/recent:
+    get:
+      tags: [Preferences]
+      summary: Alias compat de /api/preferences/recent
+      deprecated: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
+  /v1/utils/service-availability:
+    get:
+      tags: [Utils]
+      summary: Alias compat de /api/utils/service-availability
+      deprecated: true
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: OK
   /health:
     get:
       tags: [System]

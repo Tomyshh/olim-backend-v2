@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { admin, getFirestore } from '../config/firebase.js';
 import { paymeListSubscriptions, type PaymeSubscriptionListItem } from './payme.service.js';
+import { dualWriteSubscription } from './dualWrite.service.js';
 
 type TimestampLike = { toDate: () => Date };
 
@@ -379,6 +380,7 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
           batch.set(subRef, patch, { merge: true });
           writes++;
           await commitBatchIfNeeded(false);
+          dualWriteSubscription(clientId, patch).catch(() => {});
         } else {
           console.log('[payme-monthly-sync][DRY-RUN] would cleanup legacy status fields', {
             clientId,
@@ -552,6 +554,7 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         batch.set(subRef, patch, { merge: true });
         writes++;
         await commitBatchIfNeeded(false);
+        dualWriteSubscription(clientId, patch).catch(() => {});
       } else {
         console.log('[payme-monthly-sync][DRY-RUN] would update', {
           clientId,

@@ -1,6 +1,8 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
+import { dualWriteToSupabase, resolveSupabaseClientId, mapChatConversationToSupabase, mapChatMessageToSupabase } from '../services/dualWrite.service.js';
+import { supabase } from '../services/supabase.service.js';
 
 export async function getConversations(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -87,24 +89,52 @@ export async function getMessages(req: AuthenticatedRequest, res: Response): Pro
 export async function createConversation(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const uid = req.uid!;
-    const { requestId, title } = req.body;
+    const {
+      requestId,
+      title,
+      subject,
+      message,
+      initialMessage
+    } = req.body || {};
     const db = getFirestore();
+    const conversationTitle = title || subject || 'Nouvelle conversation';
+
+    const convoData = {
+      requestId: requestId || null,
+      title: conversationTitle,
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
 
     const conversationRef = await db
       .collection('Clients')
       .doc(uid)
       .collection('Conversations')
-      .add({
-        requestId: requestId || null,
-        title: title || 'Nouvelle conversation',
-        createdAt: new Date(),
-        updatedAt: new Date()
+      .add(convoData);
+
+    const firstMessage = (message || initialMessage || '').toString().trim();
+    if (firstMessage) {
+      const clientDoc = await db.collection('Clients').doc(uid).get();
+      const clientData = clientDoc.data() || {};
+      await conversationRef.collection('Messages').add({
+        senderId: uid,
+        senderName: `${clientData['First Name'] || ''} ${clientData['Last Name'] || ''}`.trim(),
+        content: firstMessage,
+        type: 'text',
+        attachments: [],
+        read: false,
+        createdAt: new Date()
       });
+    }
+
+    resolveSupabaseClientId(uid).then(cid => {
+      if (cid) dualWriteToSupabase('chat_conversations', mapChatConversationToSupabase(cid, conversationRef.id, convoData), { onConflict: 'firestore_id' });
+    }).catch(() => {});
 
     res.status(201).json({
       conversationId: conversationRef.id,
       requestId,
-      title
+      title: conversationTitle
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -115,12 +145,27 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
   try {
     const uid = req.uid!;
     const { conversationId } = req.params;
-    const { content, type = 'text', attachments } = req.body;
+    const { content, message, type = 'text', attachments } = req.body || {};
     const db = getFirestore();
+    const messageContent = (content || message || '').toString();
+    if (!messageContent.trim()) {
+      res.status(400).json({ error: 'Message content is required' });
+      return;
+    }
 
     // Récupérer infos client
     const clientDoc = await db.collection('Clients').doc(uid).get();
     const clientData = clientDoc.data()!;
+
+    const msgData = {
+      senderId: uid,
+      senderName: `${clientData['First Name']} ${clientData['Last Name']}`,
+      content: messageContent,
+      type,
+      attachments: attachments || [],
+      read: false,
+      createdAt: new Date()
+    };
 
     const messageRef = await db
       .collection('Clients')
@@ -128,15 +173,9 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
       .collection('Conversations')
       .doc(conversationId)
       .collection('Messages')
-      .add({
-        senderId: uid,
-        senderName: `${clientData['First Name']} ${clientData['Last Name']}`,
-        content,
-        type,
-        attachments: attachments || [],
-        read: false,
-        createdAt: new Date()
-      });
+      .add(msgData);
+
+    const convoUpdateTime = new Date();
 
     // Mettre à jour conversation
     await db
@@ -145,8 +184,17 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
       .collection('Conversations')
       .doc(conversationId)
       .update({
-        updatedAt: new Date()
+        updatedAt: convoUpdateTime
       });
+
+    resolveSupabaseClientId(uid).then(async (cid) => {
+      if (!cid) return;
+      const { data: convoRow } = await supabase.from('chat_conversations').select('id').eq('firestore_id', conversationId).maybeSingle();
+      if (convoRow?.id) {
+        dualWriteToSupabase('chat_messages', mapChatMessageToSupabase(convoRow.id, messageRef.id, msgData), { onConflict: 'firestore_id' }).catch(() => {});
+        dualWriteToSupabase('chat_conversations', { updated_at: convoUpdateTime.toISOString() }, { mode: 'update', matchColumn: 'firestore_id', matchValue: conversationId }).catch(() => {});
+      }
+    }).catch(() => {});
 
     const messageDoc = await messageRef.get();
     res.status(201).json({ messageId: messageRef.id, ...messageDoc.data() });
@@ -173,10 +221,20 @@ export async function markAsRead(req: AuthenticatedRequest, res: Response): Prom
       .get();
 
     const batch = db.batch();
+    const readAt = new Date();
     unreadMessages.docs.forEach(doc => {
-      batch.update(doc.ref, { read: true, readAt: new Date() });
+      batch.update(doc.ref, { read: true, readAt });
     });
     await batch.commit();
+
+    if (unreadMessages.size > 0) {
+      const messageFirestoreIds = unreadMessages.docs.map(d => d.id);
+      Promise.resolve(
+        supabase.from('chat_messages')
+          .update({ is_read: true, read_at: readAt.toISOString() })
+          .in('firestore_id', messageFirestoreIds)
+      ).catch(() => {});
+    }
 
     res.json({ message: 'Messages marked as read', count: unreadMessages.size });
   } catch (error: any) {

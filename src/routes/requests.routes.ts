@@ -12,6 +12,9 @@ router.use(authenticateToken);
 // Liste des demandes
 router.get('/', requestsController.getRequests);
 
+// Règle d'assignation conseiller (sans créer de demande)
+router.get('/conseiller', requestsController.getConseiller);
+
 // Détails d'une demande
 router.get('/:requestId', requestsController.getRequestDetail);
 

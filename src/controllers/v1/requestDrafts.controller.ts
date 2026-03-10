@@ -1,6 +1,7 @@
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { admin, getFirestore } from '../../config/firebase.js';
+import { dualWriteToSupabase, dualWriteDelete, resolveSupabaseClientId, mapRequestDraftToSupabase } from '../../services/dualWrite.service.js';
 
 type DraftType = 'manual_conversational' | 'voice_stepflow' | 'housing_inscription';
 
@@ -190,6 +191,15 @@ export async function v1CreateRequestDraft(req: AuthenticatedRequest, res: Respo
     );
   });
 
+  resolveSupabaseClientId(uid).then(clientId => {
+    if (!clientId) return;
+    dualWriteToSupabase('request_drafts', mapRequestDraftToSupabase(clientId, ref.id, {
+      type, title, category, subcategory, progress, current_step,
+      snapshot_json: snapshot_json ?? {}, uploaded_urls, client_temp_id: clientTempId,
+      expires_at: expiresAt.toDate(), created_at: now, updated_at: now
+    }), { mode: 'insert' });
+  }).catch(() => {});
+
   res.status(201).json({ id: ref.id, draftId: ref.id });
 }
 
@@ -304,6 +314,11 @@ export async function v1PatchRequestDraft(req: AuthenticatedRequest, res: Respon
 
   await ref.set(update, { merge: true });
 
+  dualWriteToSupabase('request_drafts', {
+    ...update,
+    updated_at: new Date().toISOString()
+  }, { mode: 'update', matchColumn: 'firestore_id', matchValue: draftId }).catch(() => {});
+
   res.status(200).json({ success: true });
 }
 
@@ -329,6 +344,9 @@ export async function v1DeleteRequestDraft(req: AuthenticatedRequest, res: Respo
   }
 
   await ref.delete();
+
+  dualWriteDelete('request_drafts', 'firestore_id', draftId).catch(() => {});
+
   res.status(200).json({ success: true });
 }
 
