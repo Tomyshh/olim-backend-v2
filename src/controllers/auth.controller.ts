@@ -154,6 +154,140 @@ export async function loginEmail(req: AuthenticatedRequest, res: Response): Prom
   }
 }
 
+// ── Password Reset (Supabase OTP) ──────────────────────────────────────────
+
+const resetTokens = new Map<string, { email: string; expiresAt: number }>();
+
+function cleanExpiredResetTokens() {
+  const now = Date.now();
+  for (const [token, data] of resetTokens) {
+    if (data.expiresAt < now) resetTokens.delete(token);
+  }
+}
+
+export async function forgotPassword(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    if (!email) {
+      res.status(400).json({ message: 'Email requis.' });
+      return;
+    }
+
+    if (!supabaseAuthClient) {
+      res.status(503).json({ message: 'Supabase auth non configuré.' });
+      return;
+    }
+
+    const { error } = await supabaseAuthClient.auth.resetPasswordForEmail(email);
+    if (error) {
+      console.error('[forgotPassword] Supabase error:', error.message);
+      res.status(400).json({ message: error.message });
+      return;
+    }
+
+    res.json({ ok: true });
+  } catch (error: any) {
+    console.error('[forgotPassword] Error:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+}
+
+export async function verifyResetOtp(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const otp = String(req.body?.otp || '').trim();
+
+    if (!email || !otp) {
+      res.status(400).json({ message: 'Email et code OTP requis.' });
+      return;
+    }
+
+    if (!supabaseAuthClient) {
+      res.status(503).json({ message: 'Supabase auth non configuré.' });
+      return;
+    }
+
+    const { data, error } = await supabaseAuthClient.auth.verifyOtp({
+      email,
+      token: otp,
+      type: 'recovery',
+    });
+
+    if (error || !data.session) {
+      res.status(401).json({ message: error?.message || 'Code invalide ou expiré.' });
+      return;
+    }
+
+    cleanExpiredResetTokens();
+    const resetToken = crypto.randomUUID();
+    resetTokens.set(resetToken, {
+      email,
+      expiresAt: Date.now() + 10 * 60 * 1000,
+    });
+
+    res.json({ ok: true, resetToken });
+  } catch (error: any) {
+    console.error('[verifyResetOtp] Error:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+}
+
+export async function resetPassword(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const resetToken = String(req.body?.resetToken || '').trim();
+    const newPassword = String(req.body?.newPassword || '');
+
+    if (!resetToken || !newPassword) {
+      res.status(400).json({ message: 'resetToken et newPassword requis.' });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      res.status(400).json({ message: 'Le mot de passe doit contenir au moins 6 caractères.' });
+      return;
+    }
+
+    cleanExpiredResetTokens();
+    const tokenData = resetTokens.get(resetToken);
+    if (!tokenData) {
+      res.status(401).json({ message: 'Token invalide ou expiré. Veuillez recommencer.' });
+      return;
+    }
+
+    const email = tokenData.email;
+    resetTokens.delete(resetToken);
+
+    // 1) Update Supabase password
+    const { data: listData } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    const supabaseUser = listData?.users?.find(
+      (u) => u.email?.toLowerCase() === email
+    );
+
+    if (supabaseUser) {
+      const { error: updateError } = await supabase.auth.admin.updateUserById(
+        supabaseUser.id,
+        { password: newPassword }
+      );
+      if (updateError) {
+        console.error('[resetPassword] Supabase update error:', updateError.message);
+      }
+    }
+
+    // 2) Update Firebase password
+    try {
+      const firebaseUser = await getAuth().getUserByEmail(email);
+      await getAuth().updateUser(firebaseUser.uid, { password: newPassword });
+    } catch (fbErr: any) {
+      console.warn('[resetPassword] Firebase update skipped:', fbErr.message);
+    }
+
+    res.json({ ok: true });
+  } catch (error: any) {
+    console.error('[resetPassword] Error:', error.message);
+    res.status(500).json({ message: error.message });
+  }
+}
+
 /**
  * GET /api/auth/session
  * Simple "login check" côté backend : le token est validé par authenticateToken,
