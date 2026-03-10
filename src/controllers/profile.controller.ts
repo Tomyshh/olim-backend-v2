@@ -18,7 +18,26 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
-    res.json({ uid, ...data });
+    res.json({
+      uid,
+      ...data,
+      // Legacy aliases for Flutter app backward compatibility
+      'First Name': data.first_name,
+      'Last Name': data.last_name,
+      'Father Name': data.father_name,
+      'Email': data.email,
+      'Birthday': data.birthday,
+      'Teoudat Zeout': data.teoudat_zeout,
+      'Koupat Holim': data.koupat_holim,
+      'Civility': data.civility,
+      'Created At': data.created_at,
+      'Created From': data.created_from,
+      'Membership': data.membership_type,
+      registrationComplete: data.registration_complete,
+      hasGOVAccess: data.has_gov_access,
+      freeAccess: data.free_access,
+      isUnpaid: data.is_unpaid,
+    });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -58,7 +77,8 @@ export async function checkProfileComplete(req: AuthenticatedRequest, res: Respo
       return;
     }
 
-    const isComplete = data.registration_complete === true;
+    const isComplete = data.registration_complete === true ||
+      (!!data.first_name?.trim() && !!data.last_name?.trim());
     res.json({ isComplete, profile: data });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -99,8 +119,24 @@ export async function getFamilyMembers(req: AuthenticatedRequest, res: Response)
       return;
     }
 
-    const members = (data ?? []).map(m => ({ memberId: m.firestore_id ?? m.id, ...m }));
-    res.json({ members });
+    const members = (data ?? []).map(m => ({
+      memberId: m.firestore_id ?? m.id,
+      ...m,
+      'First Name': m.first_name,
+      'Last Name': m.last_name,
+      'Father Name': m.father_name,
+      'Birthday': m.birthday,
+      'Teoudat Zeout': m.teoudat_zeout,
+      'Koupat Holim': m.koupat_holim,
+      'Family Member Status': m.status ?? m.relationship_type,
+      firstName: m.first_name,
+      lastName: m.last_name,
+      isAccountOwner: m.is_account_owner,
+      hasGOVacces: m.has_gov_access,
+      hasGovAccess: m.has_gov_access,
+      isActive: m.is_active,
+    }));
+    res.json({ members, familyMembers: members });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
