@@ -173,12 +173,7 @@ export async function forgotPassword(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    if (!supabaseAuthClient) {
-      res.status(503).json({ message: 'Supabase auth non configuré.' });
-      return;
-    }
-
-    const { error } = await supabaseAuthClient.auth.resetPasswordForEmail(email);
+    const { error } = await supabase.auth.resetPasswordForEmail(email);
     if (error) {
       console.error('[forgotPassword] Supabase error:', error.message);
       res.status(400).json({ message: error.message });
@@ -202,12 +197,7 @@ export async function verifyResetOtp(req: AuthenticatedRequest, res: Response): 
       return;
     }
 
-    if (!supabaseAuthClient) {
-      res.status(503).json({ message: 'Supabase auth non configuré.' });
-      return;
-    }
-
-    const { data, error } = await supabaseAuthClient.auth.verifyOtp({
+    const { data, error } = await supabase.auth.verifyOtp({
       email,
       token: otp,
       type: 'recovery',
