@@ -18,6 +18,87 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
       return;
     }
 
+    // Fetch subscription data from Supabase subscriptions table
+    let subscription: Record<string, any> | null = null;
+    try {
+      const { data: subData } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .eq('client_id', data.id)
+        .single();
+
+      if (subData) {
+        subscription = {
+          plan: {
+            membership: subData.membership_type,
+            type: subData.plan_type,
+            price: subData.price_cents,
+            basePriceInCents: subData.price_cents,
+            currency: subData.currency ?? 'ILS',
+            familySupplementCount: 0,
+            familySupplementTotalInCents: subData.family_supplement_cents ?? 0,
+          },
+          states: {
+            isActive: subData.is_active ?? false,
+            willExpire: subData.will_expire ?? false,
+            isAnnual: subData.is_annual ?? false,
+            isPaused: subData.is_paused ?? false,
+            isUnpaid: subData.is_unpaid ?? false,
+          },
+          pricing: {
+            basePriceInCents: subData.price_cents,
+            chargedPriceInCents: subData.price_cents,
+            discountInCents: 0,
+          },
+          isUnpaid: subData.is_unpaid ?? false,
+          payme: {
+            subCode: subData.payme_sub_code,
+            subId: subData.payme_sub_id,
+            subID: subData.payme_sub_id,
+            buyerKey: subData.payme_buyer_key,
+            status: subData.payme_sub_status,
+            sub_status: subData.payme_sub_status,
+            nextPaymentDate: subData.payme_next_payment_date ?? subData.next_payment_at,
+            next_payment_date: subData.payme_next_payment_date ?? subData.next_payment_at,
+          },
+          promoCode: subData.promo_code ? {
+            code: subData.promo_code,
+            source: subData.promo_source,
+            appliedDate: subData.promo_applied_at,
+            expiresAt: subData.promo_expires_at,
+          } : null,
+          dates: {
+            startDate: subData.start_at,
+            endDate: subData.end_at,
+            cancelledDate: subData.cancelled_at,
+            resumedDate: subData.resumed_at,
+          },
+          familySupplement: {
+            monthlyCents: subData.family_supplement_cents,
+          },
+          payment: {
+            method: subData.payment_method,
+            installments: subData.installments,
+            nextPaymentDate: subData.next_payment_at,
+            lastPaymentDate: subData.last_payment_at,
+          },
+          metadata: subData.metadata,
+        };
+
+        // Count family members with monthly_supplement_cents > 0 for familySupplementCount
+        try {
+          const { count } = await supabase
+            .from('family_members')
+            .select('*', { count: 'exact', head: true })
+            .eq('client_id', data.id)
+            .gt('monthly_supplement_cents', 0);
+          if (count != null && subscription.plan) {
+            subscription.plan.familySupplementCount = count;
+          }
+        } catch (_) { /* best-effort */ }
+      }
+    } catch (_) { /* best-effort: don't fail profile if subscription lookup fails */ }
+
     res.json({
       uid,
       ...data,
@@ -38,6 +119,7 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
       hasGOVAccess: data.has_gov_access,
       freeAccess: data.free_access,
       isUnpaid: data.is_unpaid,
+      subscription,
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

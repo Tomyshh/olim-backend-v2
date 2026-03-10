@@ -1,7 +1,6 @@
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { supabase } from '../../services/supabase.service.js';
-import { resolveSupabaseClientId } from '../../services/dualWrite.service.js';
 
 export async function v1GetMeMembership(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = req.uid!;
@@ -17,24 +16,6 @@ export async function v1GetMeMembership(req: AuthenticatedRequest, res: Response
     return;
   }
 
-  let subscription: any = null;
-
-  if (clientData.free_access && (clientData.free_access as any)?.isEnabled) {
-    subscription = {
-      type: 'freeAccess',
-      status: 'active',
-      expiresAt: (clientData.free_access as any).expiresAt,
-      membership: (clientData.free_access as any).membership
-    };
-  } else if (clientData.membership_type) {
-    subscription = {
-      type: 'membership',
-      status: clientData.is_unpaid ? 'unpaid' : 'active',
-      plan: clientData.metadata?.subscriptionPlan ?? null,
-      legacy: true
-    };
-  }
-
   const clientId = clientData.id;
 
   const { data: subData } = await supabase
@@ -43,8 +24,52 @@ export async function v1GetMeMembership(req: AuthenticatedRequest, res: Response
     .eq('client_id', clientId)
     .single();
 
+  let subscription: any = null;
+
   if (subData) {
-    subscription = { ...subscription, ...subData };
+    subscription = {
+      plan: {
+        membership: subData.membership_type,
+        type: subData.plan_type,
+        price: subData.price_cents,
+        basePriceInCents: subData.price_cents,
+        currency: subData.currency ?? 'ILS',
+      },
+      states: {
+        isActive: subData.is_active ?? false,
+        willExpire: subData.will_expire ?? false,
+        isAnnual: subData.is_annual ?? false,
+        isPaused: subData.is_paused ?? false,
+        isUnpaid: subData.is_unpaid ?? false,
+      },
+      isUnpaid: subData.is_unpaid ?? false,
+      payme: {
+        subCode: subData.payme_sub_code,
+        subId: subData.payme_sub_id,
+        status: subData.payme_sub_status,
+      },
+      raw: subData,
+    };
+  } else if (clientData.free_access && (clientData.free_access as any)?.isEnabled) {
+    subscription = {
+      plan: {
+        membership: (clientData.free_access as any).membership ?? clientData.membership_type,
+        type: 'freeAccess',
+      },
+      states: { isActive: true },
+      freeAccess: clientData.free_access,
+    };
+  } else if (clientData.membership_type) {
+    subscription = {
+      plan: {
+        membership: clientData.membership_type,
+      },
+      states: {
+        isActive: !clientData.is_unpaid,
+        isUnpaid: clientData.is_unpaid ?? false,
+      },
+      isUnpaid: clientData.is_unpaid ?? false,
+    };
   }
 
   const { data: membersData } = await supabase
