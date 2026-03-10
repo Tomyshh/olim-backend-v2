@@ -29,6 +29,7 @@ export async function getProfile(req: AuthenticatedRequest, res: Response): Prom
       'Birthday': data.birthday,
       'Teoudat Zeout': data.teoudat_zeout,
       'Koupat Holim': data.koupat_holim,
+      koupatHolim: data.koupat_holim,
       'Civility': data.civility,
       'Created At': data.created_at,
       'Created From': data.created_from,
@@ -119,7 +120,7 @@ export async function getFamilyMembers(req: AuthenticatedRequest, res: Response)
       return;
     }
 
-    const members = (data ?? []).map(m => ({
+    const members = (data ?? []).map((m: any) => ({
       memberId: m.firestore_id ?? m.id,
       ...m,
       'First Name': m.first_name,
@@ -129,6 +130,12 @@ export async function getFamilyMembers(req: AuthenticatedRequest, res: Response)
       'Teoudat Zeout': m.teoudat_zeout,
       'Koupat Holim': m.koupat_holim,
       'Family Member Status': m.status ?? m.relationship_type,
+      'Prénom': m.first_name,
+      'Nom': m.last_name,
+      'Père': m.father_name,
+      'Civilité': m.civility,
+      'Teudat zeout': m.teoudat_zeout,
+      'Date de naissance': m.birthday,
       firstName: m.first_name,
       lastName: m.last_name,
       isAccountOwner: m.is_account_owner,
@@ -227,7 +234,18 @@ export async function getAddresses(req: AuthenticatedRequest, res: Response): Pr
       return;
     }
 
-    const addresses = (data ?? []).map(a => ({ addressId: a.firestore_id ?? a.id, ...a }));
+    const addresses = (data ?? []).map((a: any) => ({
+      addressId: a.firestore_id ?? a.id,
+      ...a,
+      Name: a.name ?? a.label,
+      Address: a.address1,
+      address: a.address1,
+      fullAddress: a.address1,
+      'Additional address': a.additional_info ?? a.address2,
+      Appartment: a.apartment,
+      Etage: a.floor,
+      isPrimary: a.is_primary,
+    }));
     res.json({ addresses });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
