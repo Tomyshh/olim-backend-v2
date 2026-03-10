@@ -596,12 +596,10 @@ export async function listInteractions(
     .eq('lead_id', leadId)
     .order('created_at', { ascending: false });
 
-  if (!options?.includeDrafts) {
-    query = query.eq('is_draft', false);
-  }
-
   if (options?.draftOnly) {
     query = query.eq('is_draft', true);
+  } else if (!options?.includeDrafts) {
+    query = query.or('is_draft.eq.false,is_draft.is.null');
   }
 
   if (options?.onlyCalls) {
@@ -614,7 +612,20 @@ export async function listInteractions(
 
   const { data, error } = await query;
 
-  if (error) throw error;
+  if (error) {
+    // Fallback: if is_draft column doesn't exist yet, retry without the filter
+    if (String(error.message).includes('is_draft')) {
+      const { data: fallback, error: fallbackErr } = await supabase
+        .from('lead_interactions')
+        .select('*')
+        .eq('lead_id', leadId)
+        .order('created_at', { ascending: false });
+
+      if (fallbackErr) throw fallbackErr;
+      return fallback ?? [];
+    }
+    throw error;
+  }
   return data ?? [];
 }
 
@@ -686,12 +697,16 @@ export async function createCallDraft(leadId: string, payload: {
 }
 
 export async function listCallDrafts(leadId: string, conseillerId?: string) {
-  return listInteractions(leadId, {
-    includeDrafts: true,
-    draftOnly: true,
-    onlyCalls: true,
-    conseillerId,
-  });
+  try {
+    return await listInteractions(leadId, {
+      includeDrafts: true,
+      draftOnly: true,
+      onlyCalls: true,
+      conseillerId,
+    });
+  } catch {
+    return [];
+  }
 }
 
 export async function updateCallInteraction(leadId: string, interactionId: string, payload: {
