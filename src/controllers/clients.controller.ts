@@ -776,7 +776,7 @@ export async function createClient(req: AuthenticatedRequest, res: Response): Pr
     // --- Dual Write to Supabase (best-effort, non-blocking) ---
     (async () => {
       try {
-        const authResult = await ensureSupabaseAuthUser(email, { firebaseUid: uid });
+        const authResult = await ensureSupabaseAuthUser(email, { firebaseUid: uid, password });
         const clientPayload = { ...clientDoc, ...(authResult.userId ? {} : {}) };
         await dualWriteClient(uid!, clientPayload);
 

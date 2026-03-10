@@ -1,7 +1,7 @@
 import { Response } from 'express';
 import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
-import { dualWriteToSupabase, dualWriteDelete, resolveSupabaseClientId, mapFavoriteRequestToSupabase } from '../services/dualWrite.service.js';
+import { dualWriteToSupabase, dualWriteDelete, resolveSupabaseClientId, mapFavoriteRequestToSupabase, dualWriteLegacyRequest } from '../services/dualWrite.service.js';
 
 function computeConseiller(requestType: string, requestCategory: string): string {
   const type = String(requestType || '').trim();
@@ -120,6 +120,8 @@ export async function createRequest(req: AuthenticatedRequest, res: Response): P
       .collection('Requests')
       .add(newRequest);
 
+    dualWriteLegacyRequest(uid, requestRef.id, newRequest).catch(() => {});
+
     res.status(201).json({ requestId: requestRef.id, ...newRequest });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -150,6 +152,8 @@ export async function updateRequest(req: AuthenticatedRequest, res: Response): P
       .doc(requestId)
       .get();
 
+    dualWriteLegacyRequest(uid, requestId, updatedDoc.data()!).catch(() => {});
+
     res.json({ requestId, ...updatedDoc.data() });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -168,6 +172,8 @@ export async function deleteRequest(req: AuthenticatedRequest, res: Response): P
       .collection('Requests')
       .doc(requestId)
       .delete();
+
+    dualWriteDelete('requests', 'firebase_request_id', requestId).catch(() => {});
 
     res.json({ message: 'Request deleted', requestId });
   } catch (error: any) {
@@ -208,6 +214,11 @@ export async function assignAdvisor(req: AuthenticatedRequest, res: Response): P
         'Updated At': new Date()
       });
 
+    dualWriteToSupabase('requests', {
+      assigned_to: advisorId,
+      sync_date: new Date().toISOString()
+    }, { mode: 'update', matchColumn: 'firebase_request_id', matchValue: requestId }).catch(() => {});
+
     res.json({ message: 'Advisor assigned', requestId, advisorId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -231,6 +242,12 @@ export async function rateRequest(req: AuthenticatedRequest, res: Response): Pro
         ratingComment: comment,
         'Updated At': new Date()
       });
+
+    dualWriteToSupabase('requests', {
+      rating: Number(rating),
+      client_comment: comment ?? null,
+      sync_date: new Date().toISOString()
+    }, { mode: 'update', matchColumn: 'firebase_request_id', matchValue: requestId }).catch(() => {});
 
     res.json({ message: 'Rating saved', requestId, rating });
   } catch (error: any) {

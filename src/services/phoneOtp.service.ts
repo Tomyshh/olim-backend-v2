@@ -6,6 +6,7 @@ import { checkTwilioVerifyCode, hasTwilioVerifyEnabled, sendTwilioVerifySms } fr
 import { sendOtp } from './otpSender.service.js';
 import { buildInitialSeniority } from './clientSeniority.service.js';
 import { dualWriteToSupabase, dualWriteClient } from './dualWrite.service.js';
+import { ensureSupabaseAuthUserByPhone } from './supabaseAuth.service.js';
 
 const OTP_TTL_MS = 5 * 60 * 1000;
 const OTP_MAX_ATTEMPTS = 3;
@@ -208,6 +209,8 @@ export async function verifyLoginOtp(params: {
     uid = created.uid;
     isNewUser = true;
   }
+
+  ensureSupabaseAuthUserByPhone(norm.e164, { firebaseUid: uid }).catch(() => {});
 
   // S’assurer qu’un doc Clients existe (minimal, non destructif)
   const clientRef = db.collection('Clients').doc(uid);
@@ -501,6 +504,14 @@ export async function verifyVisitorOtp(params: {
     },
     { merge: true }
   );
+
+  dualWriteClient(uid, {
+    language,
+    createdVia: 'visitorPhoneOtp',
+    isVisitor: true,
+    'Phone Number': phoneNumberE164,
+    phoneVerified: true
+  }).catch(() => {});
 
   return { customToken, isNewUser };
 }

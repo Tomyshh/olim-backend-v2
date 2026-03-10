@@ -2,6 +2,7 @@ import type { Response } from 'express';
 import crypto from 'node:crypto';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { getStorage } from '../../config/firebase.js';
+import { dualWriteDocumentUpload, dualWriteClient } from '../../services/dualWrite.service.js';
 
 type UploadResult = {
   url: string;
@@ -83,6 +84,10 @@ export async function v1UploadDocumentFiles(req: AuthenticatedRequest, res: Resp
 
     const url = buildFirebaseDownloadUrl(bucketName, objectPath, token);
     uploaded.push({ url, path: objectPath, contentType, size: f.size || 0, originalName });
+
+    dualWriteDocumentUpload(uid, {
+      url, path: objectPath, contentType, size: f.size || 0, originalName, documentType: 'personal'
+    }).catch(() => {});
   }
 
   res.json({ files: uploaded });
@@ -127,6 +132,12 @@ export async function v1UploadProfilePhoto(req: AuthenticatedRequest, res: Respo
   });
 
   const url = buildFirebaseDownloadUrl(bucketName, objectPath, token);
+
+  dualWriteDocumentUpload(uid, {
+    url, path: objectPath, contentType, size: file.size || 0, originalName, documentType: 'profile_photo'
+  }).catch(() => {});
+  dualWriteClient(uid, { profilePhotoUrl: url }).catch(() => {});
+
   res.json({
     files: [{ url, path: objectPath, contentType, size: file.size || 0, originalName }]
   });
@@ -183,6 +194,10 @@ export async function v1UploadRequestFiles(req: AuthenticatedRequest, res: Respo
       size: f.size || 0,
       originalName
     });
+
+    dualWriteDocumentUpload(uid, {
+      url, path: objectPath, contentType, size: f.size || 0, originalName, documentType: 'request_attachment'
+    }).catch(() => {});
   }
 
   res.json({ files: uploaded });

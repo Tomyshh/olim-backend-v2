@@ -21,7 +21,7 @@ export interface SupabaseAuthResult {
 
 export async function ensureSupabaseAuthUser(
   email: string,
-  options?: { firebaseUid?: string }
+  options?: { firebaseUid?: string; password?: string }
 ): Promise<SupabaseAuthResult> {
   if (!authClient) {
     console.warn(LOG_PREFIX, 'Supabase auth client not configured');
@@ -47,11 +47,11 @@ export async function ensureSupabaseAuthUser(
       return { userId: existingByEmail.id, created: false };
     }
 
-    const randomPassword = crypto.randomUUID() + crypto.randomUUID();
+    const userPassword = options?.password || (crypto.randomUUID() + crypto.randomUUID());
 
     const { data, error } = await authClient.auth.admin.createUser({
       email: normalizedEmail,
-      password: randomPassword,
+      password: userPassword,
       email_confirm: true,
       user_metadata: {
         firebase_uid: options?.firebaseUid ?? null,
@@ -77,6 +77,64 @@ export async function ensureSupabaseAuthUser(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(LOG_PREFIX, 'ensureSupabaseAuthUser threw:', message);
+    return { userId: null, created: false, error: message };
+  }
+}
+
+export async function ensureSupabaseAuthUserByPhone(
+  phone: string,
+  options?: { firebaseUid?: string }
+): Promise<SupabaseAuthResult> {
+  if (!authClient) {
+    console.warn(LOG_PREFIX, 'Supabase auth client not configured');
+    return { userId: null, created: false, error: 'not_configured' };
+  }
+
+  const normalizedPhone = phone.trim();
+  if (!normalizedPhone || !normalizedPhone.startsWith('+')) {
+    return { userId: null, created: false, error: 'invalid_phone' };
+  }
+
+  try {
+    const { data: listData } = await authClient.auth.admin.listUsers({ page: 1, perPage: 50 });
+    const existingByPhone = listData?.users?.find(
+      (u) => u.phone === normalizedPhone
+    );
+
+    if (existingByPhone) {
+      return { userId: existingByPhone.id, created: false };
+    }
+
+    const randomPassword = crypto.randomUUID() + crypto.randomUUID();
+
+    const { data, error } = await authClient.auth.admin.createUser({
+      phone: normalizedPhone,
+      password: randomPassword,
+      phone_confirm: true,
+      user_metadata: {
+        firebase_uid: options?.firebaseUid ?? null,
+        migrated_from: 'firebase',
+        migrated_at: new Date().toISOString()
+      }
+    });
+
+    if (error) {
+      if (error.message?.includes('already been registered') ||
+          error.message?.includes('already exists')) {
+        const { data: retryList } = await authClient.auth.admin.listUsers({ page: 1, perPage: 50 });
+        const found = retryList?.users?.find(u => u.phone === normalizedPhone);
+        if (found) {
+          return { userId: found.id, created: false };
+        }
+      }
+      console.error(LOG_PREFIX, 'createUser (phone) failed:', error.message);
+      return { userId: null, created: false, error: error.message };
+    }
+
+    return { userId: data.user?.id ?? null, created: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(LOG_PREFIX, 'ensureSupabaseAuthUserByPhone threw:', message);
     return { userId: null, created: false, error: message };
   }
 }

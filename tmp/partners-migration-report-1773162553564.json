@@ -1,0 +1,805 @@
+{
+  "startedAt": "2026-03-10T17:09:12.335Z",
+  "dryRun": true,
+  "onlyVip": false,
+  "batchSize": 200,
+  "totalDocsScanned": 39,
+  "totalMigrated": 39,
+  "totalSkipped": 0,
+  "errors": [],
+  "detectedFields": {
+    "title": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "description": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "VIPsentence": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "adresse": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "categorie": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "partnerType": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "waze": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "keywords": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 39,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "keywords[]": {
+      "totalSeen": 484,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 484,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "subtitle": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 39,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "subtitle[]": {
+      "totalSeen": 101,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 101,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "villes": {
+      "totalSeen": 17,
+      "types": {
+        "null": 2,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 15,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "villes[]": {
+      "totalSeen": 15,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 15,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "langues": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 39,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "langues[]": {
+      "totalSeen": 111,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 111,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "VIP": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 39,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "Images": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 0,
+        "map": 39,
+        "unknown": 0
+      }
+    },
+    "Images.carousel": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "Images.logo": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "Images.mainImage": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "Images.gallery": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 38,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "Images.gallery[]": {
+      "totalSeen": 89,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 89,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "contact": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 0,
+        "map": 39,
+        "unknown": 0
+      }
+    },
+    "contact.internet": {
+      "totalSeen": 29,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 29,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "contact.instagram": {
+      "totalSeen": 14,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 14,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "contact.phone": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 38,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "contact.whatsapp": {
+      "totalSeen": 20,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 20,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "contact.facebook": {
+      "totalSeen": 14,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 14,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "contact.mail": {
+      "totalSeen": 27,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 27,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "banner": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "isActive": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 39,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "migrated_at": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 1,
+        "timestamp": 38,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 0,
+        "map": 39,
+        "unknown": 0
+      }
+    },
+    "translations.en": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 0,
+        "map": 38,
+        "unknown": 0
+      }
+    },
+    "translations.en.description": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 38,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.en.keywords": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 38,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.en.keywords[]": {
+      "totalSeen": 470,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 470,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.en.subtitle": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 38,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.en.subtitle[]": {
+      "totalSeen": 99,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 99,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.en.title": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 38,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.en.categorie": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 38,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.en.banner": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 38,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.en.VIPsentence": {
+      "totalSeen": 38,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 38,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 0,
+        "map": 39,
+        "unknown": 0
+      }
+    },
+    "translations.fr.description": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr.keywords": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 39,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr.keywords[]": {
+      "totalSeen": 484,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 484,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr.subtitle": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 39,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr.subtitle[]": {
+      "totalSeen": 100,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 100,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr.title": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr.categorie": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr.banner": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations.fr.VIPsentence": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "migration_version": {
+      "totalSeen": 39,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 39,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "offersImages": {
+      "totalSeen": 32,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 32,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "offersImages[]": {
+      "totalSeen": 32,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 26,
+        "timestamp": 0,
+        "array": 0,
+        "map": 6,
+        "unknown": 0
+      }
+    },
+    "offersImage": {
+      "totalSeen": 1,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 1,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "isRDV": {
+      "totalSeen": 1,
+      "types": {
+        "null": 0,
+        "boolean": 1,
+        "number": 0,
+        "string": 0,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "translations_updated_at": {
+      "totalSeen": 1,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 1,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    },
+    "iconVIP": {
+      "totalSeen": 1,
+      "types": {
+        "null": 0,
+        "boolean": 0,
+        "number": 0,
+        "string": 1,
+        "timestamp": 0,
+        "array": 0,
+        "map": 0,
+        "unknown": 0
+      }
+    }
+  },
+  "samplePaths": [
+    "Partenaires/0a51ujCuSst5VGQIKDVk",
+    "Partenaires/1rdtNh4JA18wKzNuGcV3",
+    "Partenaires/2O1kMUqSIWS0HbpVTGDF",
+    "Partenaires/2gbHEf73q5NKsBsg3A3K",
+    "Partenaires/40pGrNWvXlGofQ2l08ml",
+    "Partenaires/4CXQtKtDvz1hd8ZDIRwz",
+    "Partenaires/5mYVB8lwMia208zdBpW0",
+    "Partenaires/62QR5JfZFqZwdLY4PUkP",
+    "Partenaires/74K5YqOGOQND7Zs2QREZ",
+    "Partenaires/96vkuNbgqL7w4fPi4QBV"
+  ],
+  "completedAt": "2026-03-10T17:09:13.564Z"
+}

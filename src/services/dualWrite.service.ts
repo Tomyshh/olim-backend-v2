@@ -724,3 +724,145 @@ export async function dualDeleteSavedTip(
   const rowId = `${tipId}_${firebaseUid}`;
   await dualWriteDelete('user_saved_tips', 'id', rowId);
 }
+
+// ---------------------------------------------------------------------------
+// Legacy Request mapper
+// ---------------------------------------------------------------------------
+
+export function mapLegacyRequestToSupabase(
+  uid: string,
+  requestId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firebase_request_id: requestId,
+    unique_id: `LEGACY-${requestId}-${uid.slice(0, 8)}`,
+    user_id: uid,
+    request_type: pickStr(fs['Request Type']) ?? 'unknown',
+    request_category: pickStr(fs['Request Category']) ?? 'unknown',
+    request_sub_category: pickStr(fs['Request Sub-Category']),
+    request_description: pickStr(fs.Description),
+    uploaded_files: fs['Uploaded Files'] ?? [],
+    available_days: fs['Available Days'] ?? [],
+    available_hours: fs['Available Hours'] ?? [],
+    tags: fs.Tags ?? [],
+    status: pickStr(fs.Status) ?? 'pending',
+    priority: typeof fs.Priority === 'number' ? fs.Priority : null,
+    assigned_to: pickStr(fs['Assigned to']),
+    first_name: pickStr(fs['First Name']),
+    last_name: pickStr(fs['Last Name']),
+    email: pickStr(fs.Email),
+    membership_type: pickStr(fs['Membership Type']),
+    rating: typeof fs.rating === 'number' ? fs.rating : null,
+    client_comment: pickStr(fs.ratingComment),
+    source: 'LEGACY',
+    platform: 'mobile',
+    created_by: 'LEGACY',
+    request_date: toIso(fs['Request Date']) ?? new Date().toISOString(),
+    sync_source: 'backend',
+    sync_date: new Date().toISOString(),
+    metadata: { formData: fs['Form Data'] ?? {} }
+  };
+}
+
+export async function dualWriteLegacyRequest(
+  uid: string,
+  requestId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const row = mapLegacyRequestToSupabase(uid, requestId, fsData);
+  await dualWriteToSupabase('requests', row, { onConflict: 'unique_id' });
+}
+
+// ---------------------------------------------------------------------------
+// Client Access Credentials mapper
+// ---------------------------------------------------------------------------
+
+export function mapAccesToSupabase(
+  clientSupabaseId: string,
+  accesId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: accesId,
+    client_id: clientSupabaseId,
+    title: pickStr(fs.title) ?? pickStr(fs.name),
+    username: pickStr(fs.username) ?? pickStr(fs.login),
+    securden_id: pickStr(fs.securdenId) ?? pickStr(fs.securden_id),
+    family_members: fs.familyMembers ?? fs.family_members ?? null,
+    metadata: fs.metadata ?? {},
+    created_at: toIso(fs.createdAt) ?? new Date().toISOString()
+  };
+}
+
+export async function dualWriteAcces(
+  firebaseUid: string,
+  accesId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  if (!clientId) return;
+  const row = mapAccesToSupabase(clientId, accesId, fsData);
+  await dualWriteToSupabase('client_access_credentials', row, { mode: 'insert' });
+}
+
+// ---------------------------------------------------------------------------
+// Client Logs mapper
+// ---------------------------------------------------------------------------
+
+export function mapClientLogToSupabase(
+  clientSupabaseId: string,
+  logId: string,
+  fs: Record<string, any>
+): Record<string, any> {
+  return {
+    firestore_id: logId,
+    client_id: clientSupabaseId,
+    action: pickStr(fs.action) ?? '',
+    description: pickStr(fs.description) ?? '',
+    metadata: fs.metadata ?? {},
+    created_at: toIso(fs.createdAt) ?? new Date().toISOString()
+  };
+}
+
+export async function dualWriteClientLog(
+  firebaseUid: string,
+  logId: string,
+  fsData: Record<string, any>
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  if (!clientId) return;
+  const row = mapClientLogToSupabase(clientId, logId, fsData);
+  await dualWriteToSupabase('client_logs', row, { mode: 'insert' });
+}
+
+// ---------------------------------------------------------------------------
+// Document Upload mapper
+// ---------------------------------------------------------------------------
+
+export function mapDocumentUploadToSupabase(
+  clientSupabaseId: string,
+  doc: Record<string, any>
+): Record<string, any> {
+  return {
+    client_id: clientSupabaseId,
+    document_type: pickStr(doc.documentType) ?? 'personal',
+    file_url: pickStr(doc.url),
+    file_path: pickStr(doc.path),
+    file_name: pickStr(doc.originalName),
+    content_type: pickStr(doc.contentType),
+    file_size: typeof doc.size === 'number' ? doc.size : null,
+    metadata: doc.metadata ?? {},
+    created_at: new Date().toISOString()
+  };
+}
+
+export async function dualWriteDocumentUpload(
+  firebaseUid: string,
+  docData: Record<string, any>
+): Promise<void> {
+  const clientId = await resolveSupabaseClientId(firebaseUid);
+  if (!clientId) return;
+  const row = mapDocumentUploadToSupabase(clientId, docData);
+  await dualWriteToSupabase('client_documents', row, { mode: 'insert' });
+}
