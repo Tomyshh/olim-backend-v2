@@ -19,23 +19,27 @@ const supabaseUrl =
   process.env.EXPO_PUBLIC_SUPABASE_URL ||
   process.env.NEXT_PUBLIC_SUPABASE_URL ||
   '';
-// Backend: préférer une clé service-role (pas de contraintes RLS), fallback anon si besoin
+// Backend: préférer une clé service-role (pas de contraintes RLS), fallback anon/publishable si besoin
 const supabaseKey =
-  // Render (prod) - variable demandée côté infra
+  // Render (prod) - variables supportées
   process.env.SUPABASE_SECRET_KEY ||
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
   process.env.SUPABASE_SERVICE_KEY ||
   process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ||
   process.env.SUPABASE_ANON_KEY ||
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY ||
   '';
 
 if (!supabaseUrl || !supabaseKey) {
   console.warn('[supabase] Missing Supabase environment variables.');
 }
 
-if (supabaseKey && supabaseKey === process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-  console.warn('[supabase] Using ANON key for backend jobs. Prefer SUPABASE_SERVICE_ROLE_KEY to avoid RLS issues.');
+const isAnonKey =
+  supabaseKey === process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+  supabaseKey === process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY;
+if (supabaseKey && isAnonKey) {
+  console.warn('[supabase] Using ANON/publishable key for backend. Prefer SUPABASE_SERVICE_ROLE_KEY to avoid RLS issues.');
 }
 
 export const supabase = createClient(supabaseUrl, supabaseKey);
