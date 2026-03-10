@@ -90,7 +90,18 @@ export async function getRequests(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    const requests = (data ?? []).map(r => mapRequestToLegacy(r));
+    const mapped = (data ?? []).map(r => mapRequestToLegacy(r));
+
+    // Deduplicate by firebase_request_id (migration can create LEGACY-xxx
+    // and APP-xxx rows for the same request)
+    const seen = new Map<string, Record<string, any>>();
+    for (const r of mapped) {
+      const fid = r.firebase_request_id ?? r.requestId;
+      if (!fid || !seen.has(fid)) {
+        seen.set(fid ?? r.id, r);
+      }
+    }
+    const requests = Array.from(seen.values());
 
     res.json({ requests });
   } catch (error: any) {

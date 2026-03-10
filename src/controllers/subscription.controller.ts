@@ -1366,7 +1366,17 @@ export async function getCards(req: AuthenticatedRequest, res: Response): Promis
       return;
     }
 
-    const cards = (data ?? []).map((d: any) => mapPaymentCredentialToCard(d.firestore_id ?? d.id, {
+    // Deduplicate by firestore_id or card_masked (migration may have inserted
+    // the same card multiple times without a unique constraint)
+    const seen = new Set<string>();
+    const uniqueData = (data ?? []).filter((d: any) => {
+      const key = d.firestore_id ?? d.card_masked ?? d.id;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const cards = uniqueData.map((d: any) => mapPaymentCredentialToCard(d.firestore_id ?? d.id, {
       'Card Name': d.card_name,
       'Card Number': d.card_masked,
       'Card Holder': d.card_name,
