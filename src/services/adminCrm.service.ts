@@ -44,14 +44,14 @@ export async function listClients(filters: ClientFilters) {
   const limit = Math.min(filters.limit ?? 50, 200);
   const offset = (page - 1) * limit;
 
-  let query = supabase
-    .from('clients')
-    .select(`
-      *,
-      subscriptions(id, plan_type, membership_type, price_cents, currency, payme_status, is_unpaid, payme_sub_id, start_at, end_at, created_at, updated_at),
-      family_members(id, first_name, last_name, status),
-      client_addresses(id, label, address1, city, country, is_primary)
-    `, { count: 'exact' });
+  const selectWithRelations = `
+    *,
+    subscriptions(id, plan_type, membership_type, price_cents, currency, payme_status, is_unpaid, payme_sub_id, start_at, end_at, created_at, updated_at),
+    family_members(id, first_name, last_name, status),
+    client_addresses(id, label, address1, city, country, is_primary)
+  `;
+
+  let query = supabase.from('clients').select(selectWithRelations, { count: 'exact' });
 
   if (filters.search) {
     query = query.or(
@@ -69,10 +69,37 @@ export async function listClients(filters: ClientFilters) {
   const sortAsc = filters.sort_order === 'asc';
   query = query.order(sortCol, { ascending: sortAsc }).range(offset, offset + limit - 1);
 
-  const { data, count, error } = await query;
-  if (error) throw new Error(`Supabase listClients error: ${error.message}`);
+  let result = await query;
+  if (result.error) {
+    const errMsg = result.error.message?.toLowerCase() ?? '';
+    if (
+      errMsg.includes('relation') ||
+      errMsg.includes('embed') ||
+      errMsg.includes('does not exist') ||
+      errMsg.includes('column')
+    ) {
+      query = supabase.from('clients').select('*', { count: 'exact' });
+      if (filters.search) {
+        query = query.or(
+          `first_name.ilike.%${filters.search}%,last_name.ilike.%${filters.search}%,email.ilike.%${filters.search}%,tz.ilike.%${filters.search}%`
+        );
+      }
+      if (filters.membership) query = query.eq('membership_type', filters.membership);
+      if (filters.subscription_status) query = query.eq('subscription_status', filters.subscription_status);
+      query = query.order(sortCol, { ascending: sortAsc }).range(offset, offset + limit - 1);
+      result = await query;
+    }
+    if (result.error) {
+      throw new Error(`Supabase listClients error: ${result.error.message}`);
+    }
+  }
 
-  return { clients: data ?? [], total: count ?? 0, page, limit };
+  return {
+    clients: result.data ?? [],
+    total: result.count ?? 0,
+    page,
+    limit,
+  };
 }
 
 export async function getClientById(clientId: string) {
