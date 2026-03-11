@@ -32,6 +32,33 @@ function mapDocAliases(d: any) {
 }
 
 // ---------------------------------------------------------------------------
+// GET /documents/types  (public list of document types)
+// ---------------------------------------------------------------------------
+
+export async function getDocumentTypes(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from('document_types')
+      .select('id, slug, label, label_he, description')
+      .order('label', { ascending: true });
+
+    if (error) throw error;
+
+    const types = (data || []).map((t: any) => ({
+      id: t.id,
+      slug: t.slug,
+      label: t.label,
+      labelHe: t.label_he,
+      description: t.description,
+    }));
+
+    res.json({ types });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // GET /documents
 // ---------------------------------------------------------------------------
 
