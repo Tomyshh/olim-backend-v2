@@ -14,18 +14,45 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
+async function resolveDocumentTypeId(documentType: string): Promise<string | null> {
+  if (!documentType) return null;
+  try {
+    const { data } = await supabase
+      .from('document_types')
+      .select('id')
+      .ilike('label', documentType.trim())
+      .maybeSingle();
+    return data?.id ?? null;
+  } catch { return null; }
+}
+
 function mapDocAliases(d: any) {
-  const docType = d.document_type ?? d.type ?? '';
-  const forWho = d.for_who ?? '';
+  // Resolve document_type: prefer joined label, then raw column
+  const joinedType = d.document_types;
+  const docType = joinedType?.label ?? d.document_type ?? d.type ?? '';
+  const docTypeSlug = joinedType?.slug ?? '';
+  const docTypeId = d.document_type_id ?? joinedType?.id ?? null;
+
+  // Resolve for_who: prefer joined family member name
+  const joinedMember = d.family_members;
+  const rawForWho = d.for_who ?? '';
+  const forWhoName = joinedMember
+    ? `${joinedMember.first_name ?? joinedMember.prenom ?? ''} ${joinedMember.last_name ?? joinedMember.nom ?? ''}`.trim()
+    : rawForWho;
+
   const uploadedAt = d.uploaded_at ?? d.created_at ?? '';
   const fileUrl = d.file_url ?? '';
   const fileUrls: string[] = fileUrl ? [fileUrl] : [];
 
+  // Remove joined objects from spread to keep response clean
+  const { document_types: _dt, family_members: _fm, ...rest } = d;
+
   return {
     documentId: d.firestore_id || d.id,
-    ...d,
-    // Supabase native keys
+    ...rest,
     documentType: docType,
+    documentTypeSlug: docTypeSlug,
+    documentTypeId: docTypeId,
     fileUrl,
     filePath: d.file_path ?? '',
     fileName: d.file_name ?? '',
@@ -33,10 +60,9 @@ function mapDocAliases(d: any) {
     uploadedAt,
     createdAt: d.created_at ?? '',
     familyMemberId: d.family_member_id ?? null,
-    forWho,
-    // Legacy Firestore keys expected by the Flutter frontend
+    forWho: forWhoName,
     'Document Type': docType,
-    'For who ?': forWho,
+    'For who ?': forWhoName,
     'Upload date': uploadedAt,
     'Uploaded Files': fileUrls,
     uploadDate: uploadedAt,
@@ -107,7 +133,7 @@ export async function getDocuments(req: AuthenticatedRequest, res: Response): Pr
 
     const { data, error } = await supabase
       .from('client_documents')
-      .select('*')
+      .select('*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name, prenom, nom)')
       .eq('client_id', clientId)
       .order('created_at', { ascending: false });
 
@@ -135,7 +161,7 @@ export async function getPersonalDocuments(req: AuthenticatedRequest, res: Respo
 
     const { data, error } = await supabase
       .from('client_documents')
-      .select('*')
+      .select('*, document_types(id, slug, label, label_he)')
       .eq('client_id', clientId)
       .is('family_member_id', null)
       .order('created_at', { ascending: false });
@@ -161,7 +187,7 @@ export async function getFamilyMemberDocuments(req: AuthenticatedRequest, res: R
 
     const { data, error } = await supabase
       .from('client_documents')
-      .select('*')
+      .select('*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name, prenom, nom)')
       .eq('client_id', clientId)
       .eq('family_member_id', memberId)
       .order('created_at', { ascending: false });
@@ -210,12 +236,13 @@ export async function uploadPersonalDocument(req: AuthenticatedRequest, res: Res
 
     const now = new Date().toISOString();
 
-    // Direct insert to Supabase with for_who and uploaded_at
     const clientId = await resolveSupabaseClientId(uid);
     if (clientId) {
+      const docTypeId = await resolveDocumentTypeId(documentType);
       const row: Record<string, any> = {
         client_id: clientId,
         document_type: documentType,
+        document_type_id: docTypeId,
         for_who: forWho || null,
         file_url: result.firebaseUrl,
         file_path: result.firebasePath,
@@ -284,9 +311,11 @@ export async function uploadFamilyMemberDocument(req: AuthenticatedRequest, res:
     const now = new Date().toISOString();
     const clientId = await resolveSupabaseClientId(uid);
     if (clientId) {
+      const docTypeId = await resolveDocumentTypeId(documentType);
       const row: Record<string, any> = {
         client_id: clientId,
         document_type: documentType,
+        document_type_id: docTypeId,
         for_who: forWho || null,
         file_url: result.firebaseUrl,
         file_path: result.firebasePath,
@@ -384,27 +413,26 @@ export async function saveDocumentMetadata(req: AuthenticatedRequest, res: Respo
     }
 
     const now = new Date().toISOString();
+    const docTypeId = await resolveDocumentTypeId(documentType);
+
+    const baseRow: Record<string, any> = {
+      client_id: clientId,
+      document_type: documentType,
+      document_type_id: docTypeId,
+      for_who: forWho || null,
+      uploaded_at: uploadDate,
+      created_at: now,
+      is_valid: true,
+      metadata: {},
+    };
+
     const rows = urls.length > 0
       ? urls.map((url: string) => ({
-          client_id: clientId,
-          document_type: documentType,
-          for_who: forWho || null,
+          ...baseRow,
           file_url: url,
           file_name: url.split('/').pop() || 'file',
-          uploaded_at: uploadDate,
-          created_at: now,
-          is_valid: true,
-          metadata: {},
         }))
-      : [{
-          client_id: clientId,
-          document_type: documentType,
-          for_who: forWho || null,
-          uploaded_at: uploadDate,
-          created_at: now,
-          is_valid: true,
-          metadata: {},
-        }];
+      : [baseRow];
 
     const { error } = await supabase.from('client_documents').insert(rows);
     if (error) throw error;
@@ -438,7 +466,11 @@ export async function updateDocument(req: AuthenticatedRequest, res: Response): 
     if (!doc) { res.status(404).json({ error: 'Document introuvable.' }); return; }
 
     const updates: Record<string, any> = {};
-    if (req.body.document_type !== undefined) updates.document_type = req.body.document_type;
+    if (req.body.document_type !== undefined) {
+      updates.document_type = req.body.document_type;
+      const dtId = await resolveDocumentTypeId(req.body.document_type);
+      if (dtId) updates.document_type_id = dtId;
+    }
     if (req.body.for_who !== undefined) updates.for_who = req.body.for_who;
 
     if (Object.keys(updates).length === 0) {
