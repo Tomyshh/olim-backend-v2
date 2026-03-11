@@ -1,205 +1,170 @@
 import type { Response } from 'express';
-import crypto from 'node:crypto';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
-import { getStorage } from '../../config/firebase.js';
+import {
+  uploadDual,
+  sanitizeFilename,
+  inferContentType,
+  getSupabasePublicUrl,
+  type DualUploadResult,
+} from '../../services/storage.service.js';
 import { dualWriteDocumentUpload, dualWriteClient } from '../../services/dualWrite.service.js';
 
-type UploadResult = {
+type UploadResultLegacy = {
   url: string;
   path: string;
   contentType: string;
   size: number;
   originalName: string;
+  supabaseStoragePath?: string | null;
 };
 
-function sanitizeFilename(name: string): string {
-  const base = (name || 'file').trim();
-  return base.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 180) || 'file';
-}
-
-function inferContentType(originalName: string, fallback: string): string {
-  const ct = String(fallback || '').trim();
-  if (ct && ct !== 'application/octet-stream') return ct;
-  const ext = originalName.split('.').pop()?.toLowerCase() || '';
-  const map: Record<string, string> = {
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    png: 'image/png',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    pdf: 'application/pdf',
-    doc: 'application/msword',
-    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    txt: 'text/plain',
-    json: 'application/json'
+function toLegacy(r: DualUploadResult): UploadResultLegacy {
+  return {
+    url: r.firebaseUrl,
+    path: r.firebasePath,
+    contentType: r.contentType,
+    size: r.size,
+    originalName: r.originalName,
+    supabaseStoragePath: r.supabasePath,
   };
-  return map[ext] || 'application/octet-stream';
 }
 
-function buildFirebaseDownloadUrl(bucketName: string, objectPath: string, token: string): string {
-  const encoded = encodeURIComponent(objectPath);
-  return `https://firebasestorage.googleapis.com/v0/b/${bucketName}/o/${encoded}?alt=media&token=${encodeURIComponent(token)}`;
-}
-
+// ---- POST /v1/uploads/documents ----
 export async function v1UploadDocumentFiles(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = String(req.uid || '').trim();
-  if (!uid) {
-    res.status(401).json({ message: 'Vous devez être connecté.' });
-    return;
-  }
+  if (!uid) { res.status(401).json({ message: 'Vous devez être connecté.' }); return; }
 
   const files = (req as any).files as Express.Multer.File[] | undefined;
-  if (!files || !Array.isArray(files) || files.length === 0) {
+  if (!files?.length) {
     res.status(400).json({ message: 'Aucun fichier reçu (champ attendu: files[]).' });
     return;
   }
 
-  const storage = getStorage();
-  const bucket = storage.bucket();
-  const bucketName = bucket.name;
-  const uploaded: UploadResult[] = [];
+  const uploaded: UploadResultLegacy[] = [];
 
   for (const f of files) {
     const originalName = String(f.originalname || 'file');
     const clean = sanitizeFilename(originalName);
     const ts = Date.now();
-    const objectPath = `${uid}/documents/${ts}_${clean}`;
     const contentType = inferContentType(originalName, f.mimetype);
-    const token = crypto.randomUUID();
 
-    const fileRef = bucket.file(objectPath);
-    await fileRef.save(f.buffer, {
-      resumable: false,
-      metadata: {
-        contentType,
-        metadata: {
-          firebaseStorageDownloadTokens: token,
-          uploadedBy: uid,
-          uploadedAt: new Date().toISOString(),
-          originalName,
-          fileSize: String(f.size || 0)
-        }
-      }
+    const result = await uploadDual({
+      bucket: 'client-documents',
+      firebasePath: `${uid}/documents/${ts}_${clean}`,
+      supabasePath: `${uid}/personal/${ts}_${clean}`,
+      buffer: f.buffer,
+      contentType,
+      originalName,
+      size: f.size || 0,
+      uploaderId: uid,
     });
 
-    const url = buildFirebaseDownloadUrl(bucketName, objectPath, token);
-    uploaded.push({ url, path: objectPath, contentType, size: f.size || 0, originalName });
+    uploaded.push(toLegacy(result));
 
     dualWriteDocumentUpload(uid, {
-      url, path: objectPath, contentType, size: f.size || 0, originalName, documentType: 'personal'
+      url: result.firebaseUrl,
+      path: result.firebasePath,
+      contentType,
+      size: f.size || 0,
+      originalName,
+      documentType: 'personal',
+      supabaseStoragePath: result.supabasePath,
+      supabaseStorageBucket: result.supabaseBucket,
     }).catch(() => {});
   }
 
   res.json({ files: uploaded });
 }
 
+// ---- POST /v1/uploads/profile-photo ----
 export async function v1UploadProfilePhoto(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = String(req.uid || '').trim();
-  if (!uid) {
-    res.status(401).json({ message: 'Vous devez être connecté.' });
-    return;
-  }
+  if (!uid) { res.status(401).json({ message: 'Vous devez être connecté.' }); return; }
 
   const file = (req as any).file as Express.Multer.File | undefined;
-  if (!file) {
-    res.status(400).json({ message: 'Aucun fichier reçu.' });
-    return;
-  }
-
-  const storage = getStorage();
-  const bucket = storage.bucket();
-  const bucketName = bucket.name;
+  if (!file) { res.status(400).json({ message: 'Aucun fichier reçu.' }); return; }
 
   const originalName = String(file.originalname || 'profile');
   const clean = sanitizeFilename(originalName);
-  const objectPath = `${uid}/profile/${clean}`;
   const contentType = inferContentType(originalName, file.mimetype);
-  const token = crypto.randomUUID();
 
-  const fileRef = bucket.file(objectPath);
-  await fileRef.save(file.buffer, {
-    resumable: false,
-    metadata: {
-      contentType,
-      metadata: {
-        firebaseStorageDownloadTokens: token,
-        uploadedBy: uid,
-        uploadedAt: new Date().toISOString(),
-        originalName,
-        fileSize: String(file.size || 0)
-      }
-    }
+  const result = await uploadDual({
+    bucket: 'avatars',
+    firebasePath: `${uid}/profile/${clean}`,
+    supabasePath: `${uid}/${clean}`,
+    buffer: file.buffer,
+    contentType,
+    originalName,
+    size: file.size || 0,
+    uploaderId: uid,
   });
 
-  const url = buildFirebaseDownloadUrl(bucketName, objectPath, token);
+  const avatarPublicUrl = result.supabasePath
+    ? getSupabasePublicUrl('avatars', result.supabasePath)
+    : null;
 
   dualWriteDocumentUpload(uid, {
-    url, path: objectPath, contentType, size: file.size || 0, originalName, documentType: 'profile_photo'
+    url: result.firebaseUrl,
+    path: result.firebasePath,
+    contentType,
+    size: file.size || 0,
+    originalName,
+    documentType: 'profile_photo',
+    supabaseStoragePath: result.supabasePath,
+    supabaseStorageBucket: result.supabaseBucket,
   }).catch(() => {});
-  dualWriteClient(uid, { profilePhotoUrl: url }).catch(() => {});
 
-  res.json({
-    files: [{ url, path: objectPath, contentType, size: file.size || 0, originalName }]
-  });
+  dualWriteClient(uid, {
+    profilePhotoUrl: result.firebaseUrl,
+    supabaseAvatarUrl: avatarPublicUrl,
+  }).catch(() => {});
+
+  res.json({ files: [toLegacy(result)] });
 }
 
+// ---- POST /v1/uploads/requests ----
 export async function v1UploadRequestFiles(req: AuthenticatedRequest, res: Response): Promise<void> {
   const uid = String(req.uid || '').trim();
-  if (!uid) {
-    res.status(401).json({ message: 'Vous devez être connecté.' });
-    return;
-  }
+  if (!uid) { res.status(401).json({ message: 'Vous devez être connecté.' }); return; }
 
   const files = (req as any).files as Express.Multer.File[] | undefined;
-  if (!files || !Array.isArray(files) || files.length === 0) {
+  if (!files?.length) {
     res.status(400).json({ message: 'Aucun fichier reçu (champ attendu: files[]).' });
     return;
   }
 
-  const storage = getStorage();
-  const bucket = storage.bucket(); // bucket par défaut (config firebase.ts)
-  const bucketName = bucket.name;
-
-  const uploaded: UploadResult[] = [];
+  const uploaded: UploadResultLegacy[] = [];
 
   for (const f of files) {
     const originalName = String(f.originalname || 'file');
     const clean = sanitizeFilename(originalName);
     const ts = Date.now();
-    const objectPath = `requests/${uid}/${ts}_${clean}`;
     const contentType = inferContentType(originalName, f.mimetype);
-    const token = crypto.randomUUID();
 
-    const fileRef = bucket.file(objectPath);
-    await fileRef.save(f.buffer, {
-      resumable: false,
-      metadata: {
-        contentType,
-        metadata: {
-          // Compat URL Firebase (token dans metadata)
-          firebaseStorageDownloadTokens: token,
-          uploadedBy: uid,
-          uploadedAt: new Date().toISOString(),
-          originalName,
-          fileSize: String(f.size || 0)
-        }
-      }
-    });
-
-    const url = buildFirebaseDownloadUrl(bucketName, objectPath, token);
-    uploaded.push({
-      url,
-      path: objectPath,
+    const result = await uploadDual({
+      bucket: 'request-files',
+      firebasePath: `requests/${uid}/${ts}_${clean}`,
+      supabasePath: `${uid}/${ts}_${clean}`,
+      buffer: f.buffer,
       contentType,
+      originalName,
       size: f.size || 0,
-      originalName
+      uploaderId: uid,
     });
+
+    uploaded.push(toLegacy(result));
 
     dualWriteDocumentUpload(uid, {
-      url, path: objectPath, contentType, size: f.size || 0, originalName, documentType: 'request_attachment'
+      url: result.firebaseUrl,
+      path: result.firebasePath,
+      contentType,
+      size: f.size || 0,
+      originalName,
+      documentType: 'request_attachment',
+      supabaseStoragePath: result.supabasePath,
+      supabaseStorageBucket: result.supabaseBucket,
     }).catch(() => {});
   }
 
   res.json({ files: uploaded });
 }
-

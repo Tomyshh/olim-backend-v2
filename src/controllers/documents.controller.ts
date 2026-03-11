@@ -15,20 +15,57 @@ import {
 // ---------------------------------------------------------------------------
 
 function mapDocAliases(d: any) {
+  const docType = d.document_type ?? d.type ?? '';
+  const forWho = d.for_who ?? '';
+  const uploadedAt = d.uploaded_at ?? d.created_at ?? '';
+  const fileUrl = d.file_url ?? '';
+  const fileUrls: string[] = fileUrl ? [fileUrl] : [];
+
   return {
     documentId: d.firestore_id || d.id,
     ...d,
-    'Document Type': d.document_type ?? d.type ?? '',
-    documentType: d.document_type ?? d.type ?? '',
-    fileUrl: d.file_url ?? '',
+    // Supabase native keys
+    documentType: docType,
+    fileUrl,
     filePath: d.file_path ?? '',
     fileName: d.file_name ?? '',
     isValid: d.is_valid ?? false,
-    uploadedAt: d.uploaded_at ?? '',
+    uploadedAt,
     createdAt: d.created_at ?? '',
     familyMemberId: d.family_member_id ?? null,
-    forWho: d.for_who ?? null,
+    forWho,
+    // Legacy Firestore keys expected by the Flutter frontend
+    'Document Type': docType,
+    'For who ?': forWho,
+    'Upload date': uploadedAt,
+    'Uploaded Files': fileUrls,
+    uploadDate: uploadedAt,
+    uploadedFiles: fileUrls,
+    urls: fileUrls,
   };
+}
+
+async function enrichWithSignedUrls(docs: any[]): Promise<any[]> {
+  const enriched = await Promise.all(docs.map(async (d) => {
+    if (d.fileUrl) return d;
+    if (!d.supabase_storage_path || !d.supabase_storage_bucket) return d;
+    try {
+      const signedUrl = await getSupabaseSignedUrl(
+        d.supabase_storage_bucket,
+        d.supabase_storage_path,
+        7200,
+      );
+      if (signedUrl) {
+        d.fileUrl = signedUrl;
+        d.file_url = signedUrl;
+        d['Uploaded Files'] = [signedUrl];
+        d.uploadedFiles = [signedUrl];
+        d.urls = [signedUrl];
+      }
+    } catch (_) { /* best-effort */ }
+    return d;
+  }));
+  return enriched;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +103,7 @@ export async function getDocuments(req: AuthenticatedRequest, res: Response): Pr
   try {
     const uid = req.uid!;
     const clientId = await resolveSupabaseClientId(uid);
-    if (!clientId) { res.json({ personalDocs: [], legacyDocs: [], documents: [] }); return; }
+    if (!clientId) { res.json({ personalDocs: [], familyDocs: [], documents: [] }); return; }
 
     const { data, error } = await supabase
       .from('client_documents')
@@ -76,9 +113,9 @@ export async function getDocuments(req: AuthenticatedRequest, res: Response): Pr
 
     if (error) throw error;
 
-    const allDocs = (data || []).map(mapDocAliases);
-    const personalDocs = allDocs.filter(d => !d.family_member_id);
-    const familyDocs = allDocs.filter(d => !!d.family_member_id);
+    const allDocs = await enrichWithSignedUrls((data || []).map(mapDocAliases));
+    const personalDocs = allDocs.filter((d: any) => !d.family_member_id);
+    const familyDocs = allDocs.filter((d: any) => !!d.family_member_id);
 
     res.json({ personalDocs, familyDocs, documents: allDocs });
   } catch (error: any) {
@@ -104,7 +141,8 @@ export async function getPersonalDocuments(req: AuthenticatedRequest, res: Respo
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json({ documents: (data || []).map(mapDocAliases) });
+    const docs = await enrichWithSignedUrls((data || []).map(mapDocAliases));
+    res.json({ documents: docs });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -129,7 +167,8 @@ export async function getFamilyMemberDocuments(req: AuthenticatedRequest, res: R
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json({ documents: (data || []).map(mapDocAliases) });
+    const docs = await enrichWithSignedUrls((data || []).map(mapDocAliases));
+    res.json({ documents: docs });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -143,6 +182,7 @@ export async function uploadPersonalDocument(req: AuthenticatedRequest, res: Res
   try {
     const uid = req.uid!;
     const documentType = String(req.body?.type || req.body?.typeKey || 'personal').trim();
+    const forWho = String(req.body?.for_who || req.body?.forWho || '').trim();
 
     const files = (req as any).files as Express.Multer.File[] | undefined;
     const file = files?.[0] || (req as any).file as Express.Multer.File | undefined;
@@ -168,16 +208,30 @@ export async function uploadPersonalDocument(req: AuthenticatedRequest, res: Res
       uploaderId: uid,
     });
 
-    dualWriteDocumentUpload(uid, {
-      url: result.firebaseUrl,
-      path: result.firebasePath,
-      contentType,
-      size: result.size,
-      originalName,
-      documentType,
-      supabaseStoragePath: result.supabasePath,
-      supabaseStorageBucket: result.supabaseBucket,
-    }).catch(() => {});
+    const now = new Date().toISOString();
+
+    // Direct insert to Supabase with for_who and uploaded_at
+    const clientId = await resolveSupabaseClientId(uid);
+    if (clientId) {
+      const row: Record<string, any> = {
+        client_id: clientId,
+        document_type: documentType,
+        for_who: forWho || null,
+        file_url: result.firebaseUrl,
+        file_path: result.firebasePath,
+        file_name: originalName,
+        content_type: contentType,
+        file_size: result.size,
+        uploaded_at: now,
+        supabase_storage_path: result.supabasePath,
+        supabase_storage_bucket: result.supabaseBucket,
+        metadata: {},
+        created_at: now,
+      };
+      supabase.from('client_documents').insert(row).then(({ error: insertErr }) => {
+        if (insertErr) console.error('[documents] insert personal doc error:', insertErr);
+      });
+    }
 
     res.status(201).json({
       url: result.firebaseUrl,
@@ -201,6 +255,7 @@ export async function uploadFamilyMemberDocument(req: AuthenticatedRequest, res:
     const uid = req.uid!;
     const { memberId } = req.params;
     const documentType = String(req.body?.type || req.body?.typeKey || 'family').trim();
+    const forWho = String(req.body?.for_who || req.body?.forWho || '').trim();
 
     const files = (req as any).files as Express.Multer.File[] | undefined;
     const file = files?.[0] || (req as any).file as Express.Multer.File | undefined;
@@ -226,21 +281,24 @@ export async function uploadFamilyMemberDocument(req: AuthenticatedRequest, res:
       uploaderId: uid,
     });
 
+    const now = new Date().toISOString();
     const clientId = await resolveSupabaseClientId(uid);
     if (clientId) {
       const row: Record<string, any> = {
         client_id: clientId,
         document_type: documentType,
+        for_who: forWho || null,
         file_url: result.firebaseUrl,
         file_path: result.firebasePath,
         file_name: originalName,
         content_type: contentType,
         file_size: result.size,
         family_member_id: memberId,
+        uploaded_at: now,
         supabase_storage_path: result.supabasePath,
         supabase_storage_bucket: result.supabaseBucket,
         metadata: {},
-        created_at: new Date().toISOString(),
+        created_at: now,
       };
       supabase.from('client_documents').insert(row).then(({ error }) => {
         if (error) console.error('[documents] insert family doc error:', error);
@@ -300,6 +358,102 @@ export async function downloadDocument(req: AuthenticatedRequest, res: Response)
     }
 
     res.status(404).json({ error: 'Aucune URL de fichier disponible.' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /documents/save   (save metadata + file URLs to Supabase)
+// ---------------------------------------------------------------------------
+
+export async function saveDocumentMetadata(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const uid = req.uid!;
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.status(404).json({ error: 'Client introuvable.' }); return; }
+
+    const documentType = String(req.body?.document_type || req.body?.type || '').trim();
+    const forWho = String(req.body?.for_who || req.body?.forWho || '').trim();
+    const urls: string[] = req.body?.urls || req.body?.uploadedFiles || [];
+    const uploadDate = req.body?.upload_date || req.body?.uploadDate || new Date().toISOString();
+
+    if (!documentType) {
+      res.status(400).json({ error: 'document_type requis.' });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const rows = urls.length > 0
+      ? urls.map((url: string) => ({
+          client_id: clientId,
+          document_type: documentType,
+          for_who: forWho || null,
+          file_url: url,
+          file_name: url.split('/').pop() || 'file',
+          uploaded_at: uploadDate,
+          created_at: now,
+          is_valid: true,
+          metadata: {},
+        }))
+      : [{
+          client_id: clientId,
+          document_type: documentType,
+          for_who: forWho || null,
+          uploaded_at: uploadDate,
+          created_at: now,
+          is_valid: true,
+          metadata: {},
+        }];
+
+    const { error } = await supabase.from('client_documents').insert(rows);
+    if (error) throw error;
+
+    res.status(201).json({ message: 'Document(s) enregistré(s).', count: rows.length });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /documents/:documentId
+// ---------------------------------------------------------------------------
+
+export async function updateDocument(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const uid = req.uid!;
+    const { documentId } = req.params;
+
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.status(404).json({ error: 'Client introuvable.' }); return; }
+
+    const { data: doc, error: findErr } = await supabase
+      .from('client_documents')
+      .select('id')
+      .eq('client_id', clientId)
+      .or(`id.eq.${documentId},firestore_id.eq.${documentId}`)
+      .maybeSingle();
+
+    if (findErr) throw findErr;
+    if (!doc) { res.status(404).json({ error: 'Document introuvable.' }); return; }
+
+    const updates: Record<string, any> = {};
+    if (req.body.document_type !== undefined) updates.document_type = req.body.document_type;
+    if (req.body.for_who !== undefined) updates.for_who = req.body.for_who;
+
+    if (Object.keys(updates).length === 0) {
+      res.json({ message: 'Rien à mettre à jour.' });
+      return;
+    }
+
+    const { error: updateErr } = await supabase
+      .from('client_documents')
+      .update(updates)
+      .eq('id', doc.id);
+
+    if (updateErr) throw updateErr;
+
+    res.json({ message: 'Document mis à jour.', documentId: doc.id });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

@@ -1047,7 +1047,7 @@ export async function mapDocumentUploadToSupabase(
   const typeSlug = normalizeDocumentTypeSlug(rawType);
   const documentTypeId = await resolveDocumentTypeId(typeSlug);
 
-  return {
+  const row: Record<string, any> = {
     client_id: clientSupabaseId,
     document_type: rawType,
     document_type_id: documentTypeId,
@@ -1057,8 +1057,13 @@ export async function mapDocumentUploadToSupabase(
     content_type: pickStr(doc.contentType),
     file_size: typeof doc.size === 'number' ? doc.size : null,
     metadata: doc.metadata ?? {},
-    created_at: new Date().toISOString()
+    created_at: new Date().toISOString(),
   };
+
+  if (doc.supabaseStoragePath) row.supabase_storage_path = doc.supabaseStoragePath;
+  if (doc.supabaseStorageBucket) row.supabase_storage_bucket = doc.supabaseStorageBucket;
+
+  return row;
 }
 
 export async function dualWriteDocumentUpload(

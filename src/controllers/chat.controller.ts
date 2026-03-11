@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
 import { dualWriteToSupabase, resolveSupabaseClientId, mapChatConversationToSupabase, mapChatMessageToSupabase } from '../services/dualWrite.service.js';
 import { supabase } from '../services/supabase.service.js';
+import { uploadDual, sanitizeFilename, inferContentType } from '../services/storage.service.js';
 
 export async function getConversations(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -266,12 +267,99 @@ export async function uploadChatFile(req: AuthenticatedRequest, res: Response): 
   try {
     const uid = req.uid!;
     const { conversationId } = req.params;
-    // TODO: Implémenter upload fichier avec Firebase Storage
-    // TODO: Retourner URL du fichier
 
-    res.status(501).json({
-      message: 'Not implemented - uploadChatFile',
-      note: 'À implémenter avec Firebase Storage'
+    const files = (req as any).files as Express.Multer.File[] | undefined;
+    const file = files?.[0] || (req as any).file as Express.Multer.File | undefined;
+    if (!file) {
+      res.status(400).json({ message: 'Aucun fichier reçu.' });
+      return;
+    }
+
+    const { data: convo } = await supabase
+      .from('chat_conversations')
+      .select('id')
+      .or(`firestore_id.eq.${conversationId},id.eq.${conversationId}`)
+      .single();
+
+    if (!convo) {
+      res.status(404).json({ error: 'Conversation introuvable.' });
+      return;
+    }
+
+    const originalName = String(file.originalname || 'file');
+    const clean = sanitizeFilename(originalName);
+    const ts = Date.now();
+    const contentType = inferContentType(originalName, file.mimetype);
+
+    const result = await uploadDual({
+      bucket: 'chat-files',
+      firebasePath: `chats/${conversationId}/${ts}_${clean}`,
+      supabasePath: `${convo.id}/${ts}_${clean}`,
+      buffer: file.buffer,
+      contentType,
+      originalName,
+      size: file.size || 0,
+      uploaderId: uid,
+    });
+
+    const db = getFirestore();
+    const clientDoc = await db.collection('Clients').doc(uid).get();
+    const clientData = clientDoc.data() || {};
+
+    const attachment = {
+      url: result.firebaseUrl,
+      supabaseStoragePath: result.supabasePath,
+      name: originalName,
+      contentType,
+      size: result.size,
+    };
+
+    const msgData = {
+      senderId: uid,
+      senderName: `${clientData['First Name'] || ''} ${clientData['Last Name'] || ''}`.trim(),
+      content: '',
+      type: 'file',
+      attachments: [attachment],
+      read: false,
+      createdAt: new Date(),
+    };
+
+    const messageRef = await db
+      .collection('Clients')
+      .doc(uid)
+      .collection('Conversations')
+      .doc(conversationId)
+      .collection('Messages')
+      .add(msgData);
+
+    await db
+      .collection('Clients')
+      .doc(uid)
+      .collection('Conversations')
+      .doc(conversationId)
+      .update({ updatedAt: new Date() });
+
+    resolveSupabaseClientId(uid).then(async (cid) => {
+      if (!cid) return;
+      const { data: convoRow } = await supabase
+        .from('chat_conversations')
+        .select('id')
+        .eq('firestore_id', conversationId)
+        .maybeSingle();
+      if (convoRow?.id) {
+        dualWriteToSupabase('chat_messages', mapChatMessageToSupabase(convoRow.id, messageRef.id, msgData), { onConflict: 'firestore_id' }).catch(() => {});
+      }
+    }).catch(() => {});
+
+    res.status(201).json({
+      messageId: messageRef.id,
+      file: {
+        url: result.firebaseUrl,
+        supabaseStoragePath: result.supabasePath,
+        originalName,
+        contentType,
+        size: result.size,
+      },
     });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
