@@ -46,12 +46,12 @@ async function resolveFamilyMemberId(clientId: string, forWho: string): Promise<
     const fw = forWho.toLowerCase().trim();
     const { data: members } = await supabase
       .from('family_members')
-      .select('id, first_name, last_name, prenom, nom')
+      .select('id, first_name, last_name')
       .eq('client_id', clientId);
     for (const m of members || []) {
       const n1 = `${m.first_name ?? ''} ${m.last_name ?? ''}`.toLowerCase().trim();
-      const n2 = `${m.prenom ?? ''} ${m.nom ?? ''}`.toLowerCase().trim();
-      if (fw === n1 || fw === n2 || n1.includes(fw) || fw.includes(n1) || n2.includes(fw) || fw.includes(n2)) {
+      const n1r = `${m.last_name ?? ''} ${m.first_name ?? ''}`.toLowerCase().trim();
+      if (fw === n1 || fw === n1r || n1.includes(fw) || fw.includes(n1)) {
         return m.id;
       }
     }

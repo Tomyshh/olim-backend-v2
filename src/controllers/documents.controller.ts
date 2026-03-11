@@ -37,7 +37,7 @@ function mapDocAliases(d: any) {
   const joinedMember = d.family_members;
   const rawForWho = d.for_who ?? '';
   const forWhoName = joinedMember
-    ? `${joinedMember.first_name ?? joinedMember.prenom ?? ''} ${joinedMember.last_name ?? joinedMember.nom ?? ''}`.trim()
+    ? `${joinedMember.first_name ?? ''} ${joinedMember.last_name ?? ''}`.trim()
     : rawForWho;
 
   const uploadedAt = d.uploaded_at ?? d.created_at ?? '';
@@ -133,7 +133,7 @@ export async function getDocuments(req: AuthenticatedRequest, res: Response): Pr
 
     // Try with JOINs first, fall back to simple select if FK not set up yet
     let data: any[] | null = null;
-    const joinSelect = '*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name, prenom, nom)';
+    const joinSelect = '*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name)';
     const result = await supabase
       .from('client_documents')
       .select(joinSelect)
@@ -214,7 +214,7 @@ export async function getFamilyMemberDocuments(req: AuthenticatedRequest, res: R
     let data: any[] | null = null;
     const result = await supabase
       .from('client_documents')
-      .select('*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name, prenom, nom)')
+      .select('*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name)')
       .eq('client_id', clientId)
       .eq('family_member_id', memberId)
       .order('created_at', { ascending: false });
@@ -591,7 +591,7 @@ export async function backfillDocumentRelations(req: AuthenticatedRequest, res: 
       const clientIds = [...new Set(docs.map((d: any) => d.client_id))];
       const { data: members } = await supabase
         .from('family_members')
-        .select('id, client_id, first_name, last_name, prenom, nom')
+        .select('id, client_id, first_name, last_name')
         .in('client_id', clientIds);
 
       const membersByClient = new Map<string, any[]>();
@@ -608,8 +608,8 @@ export async function backfillDocumentRelations(req: AuthenticatedRequest, res: 
         let matched: any = null;
         for (const m of clientMembers) {
           const n1 = `${m.first_name ?? ''} ${m.last_name ?? ''}`.toLowerCase().trim();
-          const n2 = `${m.prenom ?? ''} ${m.nom ?? ''}`.toLowerCase().trim();
-          if (forWho === n1 || forWho === n2 || n1.includes(forWho) || forWho.includes(n1) || n2.includes(forWho) || forWho.includes(n2)) {
+          const n1r = `${m.last_name ?? ''} ${m.first_name ?? ''}`.toLowerCase().trim();
+          if (forWho === n1 || forWho === n1r || n1.includes(forWho) || forWho.includes(n1)) {
             matched = m;
             break;
           }

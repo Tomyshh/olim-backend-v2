@@ -57,7 +57,7 @@ async function backfillFamilyMemberIds() {
   // Fetch all family members for these clients
   const { data: members, error: memErr } = await supabase
     .from('family_members')
-    .select('id, client_id, first_name, last_name, prenom, nom')
+    .select('id, client_id, first_name, last_name')
     .in('client_id', clientIds);
 
   if (memErr) {
@@ -84,20 +84,17 @@ async function backfillFamilyMemberIds() {
     let matched: any = null;
 
     for (const m of clientMembers) {
-      const fullName1 = normalize(`${m.first_name ?? ''} ${m.last_name ?? ''}`);
-      const fullName2 = normalize(`${m.prenom ?? ''} ${m.nom ?? ''}`);
-      const fullNameReversed1 = normalize(`${m.last_name ?? ''} ${m.first_name ?? ''}`);
-      const fullNameReversed2 = normalize(`${m.nom ?? ''} ${m.prenom ?? ''}`);
+      const fn = normalize(m.first_name ?? '');
+      const ln = normalize(m.last_name ?? '');
+      const fullName = normalize(`${m.first_name ?? ''} ${m.last_name ?? ''}`);
+      const fullNameReversed = normalize(`${m.last_name ?? ''} ${m.first_name ?? ''}`);
 
       if (
-        forWho === fullName1 ||
-        forWho === fullName2 ||
-        forWho === fullNameReversed1 ||
-        forWho === fullNameReversed2 ||
-        fullName1.includes(forWho) ||
-        forWho.includes(fullName1) ||
-        fullName2.includes(forWho) ||
-        forWho.includes(fullName2)
+        forWho === fullName ||
+        forWho === fullNameReversed ||
+        fullName.includes(forWho) ||
+        forWho.includes(fullName) ||
+        (fn && ln && forWho.includes(fn) && forWho.includes(ln))
       ) {
         matched = m;
         break;
@@ -162,17 +159,71 @@ async function backfillDocumentTypeIds() {
     return;
   }
 
+  // Build mapping: various document_type strings → document_types.id
+  const typeMap = new Map<string, string>();
+  for (const t of types) {
+    typeMap.set(normalize(t.label), t.id);
+    typeMap.set(normalize(t.slug), t.id);
+  }
+
+  // Common aliases from Firestore → matching document_types label
+  const aliases: Record<string, string> = {
+    'teoudat zeout': 'teoudat zehout',
+    'teoudat zehut': 'teoudat zehout',
+    'teudat zehut': 'teoudat zehout',
+    'teoudat zehout': 'teoudat zehout',
+    'tz': 'teoudat zehout',
+    'teoudat olé': 'teoudat ole',
+    'teoudat ole': 'teoudat ole',
+    'passeport israelien': 'passeport',
+    'passeport français': 'passeport etranger',
+    'passeport francais': 'passeport etranger',
+    'passport': 'passeport',
+    'carte de crédit': 'carte de credit',
+    "carte d'identité": "carte d'identite",
+    'contrat de location/achat': 'contrat de location',
+    "contrat de location ou acte de propriété": 'contrat de location',
+    "facture d'éléctricité": "facture d'electricite",
+    "facture d'electricité": "facture d'electricite",
+    "facture de téléphone": 'facture de telephone',
+    'facture': 'autre',
+    "compteur d'électricité": "compteur d'electricite",
+    "photo du compteur électrique": "compteur d'electricite",
+    "photo du compteur d'eau": "compteur d'eau",
+    "photo du compteur de gaz": "compteur de gaz",
+    "photo ou pdf de l'avis de arnona": "facture d'arnona",
+    "dernière facture d'arnona": "facture d'arnona",
+    "facture d'arnona": "facture d'arnona",
+    "photo ou pdf de la facture d'électricité": "facture d'electricite",
+    "ancienne facture d'électricité": "facture d'electricite",
+    "photo ou pdf de la facture d'eau": "facture d'eau",
+    "ancienne facture d'eau": "facture d'eau",
+    "photo ou pdf de la facture de gaz": "facture de gaz",
+    "ancienne facture de gaz": "facture de gaz",
+    'driving license': 'permis de conduire',
+    "permis de conduire expiré": 'permis de conduire',
+    'credit card': 'carte de credit',
+    'home insurance': 'assurance habitation',
+    'teoudat zeout': 'teoudat zehout',
+  };
+
+  // Build alias → id map
+  for (const [alias, target] of Object.entries(aliases)) {
+    const targetId = typeMap.get(normalize(target));
+    if (targetId) {
+      typeMap.set(normalize(alias), targetId);
+    }
+  }
+
   let updated = 0;
   for (const doc of docs) {
     const docType = normalize(doc.document_type);
-    const match = types.find(
-      (t) => normalize(t.label) === docType || normalize(t.slug) === docType
-    );
-    if (match) {
+    const matchId = typeMap.get(docType);
+    if (matchId) {
       if (!dryRun) {
         await supabase
           .from('client_documents')
-          .update({ document_type_id: match.id })
+          .update({ document_type_id: matchId })
           .eq('id', doc.id);
       }
       updated++;
