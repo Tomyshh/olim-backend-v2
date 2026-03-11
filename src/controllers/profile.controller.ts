@@ -258,19 +258,49 @@ export async function updateFamilyMember(req: AuthenticatedRequest, res: Respons
     const uid = req.uid!;
     const { memberId } = req.params;
     const updates = req.body;
-    const db = getFirestore();
 
-    await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Family Members')
-      .doc(memberId)
-      .update({
-        ...updates,
-        updatedAt: new Date()
-      });
+    // Build Supabase update payload
+    const supaUpdates: Record<string, any> = { updated_at: new Date().toISOString() };
+    if (updates.first_name !== undefined || updates['First Name'] !== undefined)
+      supaUpdates.first_name = updates.first_name ?? updates['First Name'];
+    if (updates.last_name !== undefined || updates['Last Name'] !== undefined)
+      supaUpdates.last_name = updates.last_name ?? updates['Last Name'];
+    if (updates.father_name !== undefined || updates['Father Name'] !== undefined)
+      supaUpdates.father_name = updates.father_name ?? updates['Father Name'];
+    if (updates.birthday !== undefined || updates['Birthday'] !== undefined)
+      supaUpdates.birthday = updates.birthday ?? updates['Birthday'];
+    if (updates.teoudat_zeout !== undefined || updates['Teoudat Zeout'] !== undefined)
+      supaUpdates.teoudat_zeout = updates.teoudat_zeout ?? updates['Teoudat Zeout'];
+    if (updates.koupat_holim !== undefined || updates['Koupat Holim'] !== undefined)
+      supaUpdates.koupat_holim = updates.koupat_holim ?? updates['Koupat Holim'];
+    if (updates.civility !== undefined) supaUpdates.civility = updates.civility;
+    if (updates.email !== undefined) supaUpdates.email = updates.email;
+    if (updates.phone !== undefined) supaUpdates.phone = updates.phone;
+    if (updates.status !== undefined) supaUpdates.status = updates.status;
+    if (updates.relationship_type !== undefined) supaUpdates.relationship_type = updates.relationship_type;
+    if (updates.is_account_owner !== undefined) supaUpdates.is_account_owner = updates.is_account_owner;
+    if (updates.has_gov_access !== undefined) supaUpdates.has_gov_access = updates.has_gov_access;
+    if (updates.is_active !== undefined) supaUpdates.is_active = updates.is_active;
 
-    dualWriteFamilyMember(uid, memberId, { ...updates, updatedAt: new Date() }).catch(() => {});
+    // Update Supabase (primary source of truth)
+    const { error: supaErr } = await supabase
+      .from('family_members')
+      .update(supaUpdates)
+      .or(`id.eq.${memberId},firestore_id.eq.${memberId}`);
+
+    if (supaErr) throw supaErr;
+
+    // Best-effort Firestore update (may fail if doc doesn't exist there)
+    try {
+      const db = getFirestore();
+      await db
+        .collection('Clients')
+        .doc(uid)
+        .collection('Family Members')
+        .doc(memberId)
+        .update({ ...updates, updatedAt: new Date() });
+    } catch (_) { /* Firestore doc might not exist – that's OK */ }
+
     res.json({ message: 'Family member updated', memberId });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

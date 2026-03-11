@@ -131,13 +131,26 @@ export async function getDocuments(req: AuthenticatedRequest, res: Response): Pr
     const clientId = await resolveSupabaseClientId(uid);
     if (!clientId) { res.json({ personalDocs: [], familyDocs: [], documents: [] }); return; }
 
-    const { data, error } = await supabase
+    // Try with JOINs first, fall back to simple select if FK not set up yet
+    let data: any[] | null = null;
+    const joinSelect = '*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name, prenom, nom)';
+    const result = await supabase
       .from('client_documents')
-      .select('*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name, prenom, nom)')
+      .select(joinSelect)
       .eq('client_id', clientId)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (result.error) {
+      const fallback = await supabase
+        .from('client_documents')
+        .select('*')
+        .eq('client_id', clientId)
+        .order('created_at', { ascending: false });
+      if (fallback.error) throw fallback.error;
+      data = fallback.data;
+    } else {
+      data = result.data;
+    }
 
     const allDocs = await enrichWithSignedUrls((data || []).map(mapDocAliases));
     const personalDocs = allDocs.filter((d: any) => !d.family_member_id);
@@ -159,14 +172,27 @@ export async function getPersonalDocuments(req: AuthenticatedRequest, res: Respo
     const clientId = await resolveSupabaseClientId(uid);
     if (!clientId) { res.json({ documents: [] }); return; }
 
-    const { data, error } = await supabase
+    let data: any[] | null = null;
+    const result = await supabase
       .from('client_documents')
       .select('*, document_types(id, slug, label, label_he)')
       .eq('client_id', clientId)
       .is('family_member_id', null)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (result.error) {
+      const fallback = await supabase
+        .from('client_documents')
+        .select('*')
+        .eq('client_id', clientId)
+        .is('family_member_id', null)
+        .order('created_at', { ascending: false });
+      if (fallback.error) throw fallback.error;
+      data = fallback.data;
+    } else {
+      data = result.data;
+    }
+
     const docs = await enrichWithSignedUrls((data || []).map(mapDocAliases));
     res.json({ documents: docs });
   } catch (error: any) {
@@ -185,14 +211,27 @@ export async function getFamilyMemberDocuments(req: AuthenticatedRequest, res: R
     const clientId = await resolveSupabaseClientId(uid);
     if (!clientId) { res.json({ documents: [] }); return; }
 
-    const { data, error } = await supabase
+    let data: any[] | null = null;
+    const result = await supabase
       .from('client_documents')
       .select('*, document_types(id, slug, label, label_he), family_members(id, first_name, last_name, prenom, nom)')
       .eq('client_id', clientId)
       .eq('family_member_id', memberId)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (result.error) {
+      const fallback = await supabase
+        .from('client_documents')
+        .select('*')
+        .eq('client_id', clientId)
+        .eq('family_member_id', memberId)
+        .order('created_at', { ascending: false });
+      if (fallback.error) throw fallback.error;
+      data = fallback.data;
+    } else {
+      data = result.data;
+    }
+
     const docs = await enrichWithSignedUrls((data || []).map(mapDocAliases));
     res.json({ documents: docs });
   } catch (error: any) {
@@ -527,6 +566,89 @@ export async function deleteDocument(req: AuthenticatedRequest, res: Response): 
     if (delErr) throw delErr;
 
     res.json({ message: 'Document supprimé.', documentId: doc.id });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// POST /documents/backfill  (admin: backfill family_member_id + document_type_id)
+// ---------------------------------------------------------------------------
+
+export async function backfillDocumentRelations(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const results = { familyMemberUpdated: 0, familyMemberNoMatch: 0, docTypeUpdated: 0 };
+
+    // 1. Backfill family_member_id from for_who text
+    const { data: docs } = await supabase
+      .from('client_documents')
+      .select('id, client_id, for_who, family_member_id')
+      .is('family_member_id', null)
+      .not('for_who', 'is', null)
+      .neq('for_who', '');
+
+    if (docs && docs.length > 0) {
+      const clientIds = [...new Set(docs.map((d: any) => d.client_id))];
+      const { data: members } = await supabase
+        .from('family_members')
+        .select('id, client_id, first_name, last_name, prenom, nom')
+        .in('client_id', clientIds);
+
+      const membersByClient = new Map<string, any[]>();
+      for (const m of members || []) {
+        const list = membersByClient.get(m.client_id) || [];
+        list.push(m);
+        membersByClient.set(m.client_id, list);
+      }
+
+      for (const doc of docs) {
+        const forWho = (doc.for_who || '').toLowerCase().trim();
+        if (!forWho) continue;
+        const clientMembers = membersByClient.get(doc.client_id) || [];
+        let matched: any = null;
+        for (const m of clientMembers) {
+          const n1 = `${m.first_name ?? ''} ${m.last_name ?? ''}`.toLowerCase().trim();
+          const n2 = `${m.prenom ?? ''} ${m.nom ?? ''}`.toLowerCase().trim();
+          if (forWho === n1 || forWho === n2 || n1.includes(forWho) || forWho.includes(n1) || n2.includes(forWho) || forWho.includes(n2)) {
+            matched = m;
+            break;
+          }
+        }
+        if (matched) {
+          await supabase.from('client_documents').update({ family_member_id: matched.id }).eq('id', doc.id);
+          results.familyMemberUpdated++;
+        } else {
+          results.familyMemberNoMatch++;
+        }
+      }
+    }
+
+    // 2. Backfill document_type_id
+    try {
+      const { data: dtDocs } = await supabase
+        .from('client_documents')
+        .select('id, document_type, document_type_id')
+        .is('document_type_id', null)
+        .not('document_type', 'is', null)
+        .neq('document_type', '');
+
+      if (dtDocs && dtDocs.length > 0) {
+        const { data: types } = await supabase.from('document_types').select('id, slug, label');
+        for (const doc of dtDocs) {
+          const dt = (doc.document_type || '').toLowerCase().trim();
+          const match = (types || []).find((t: any) =>
+            (t.label || '').toLowerCase().trim() === dt ||
+            (t.slug || '').toLowerCase().trim() === dt
+          );
+          if (match) {
+            await supabase.from('client_documents').update({ document_type_id: match.id }).eq('id', doc.id);
+            results.docTypeUpdated++;
+          }
+        }
+      }
+    } catch (_) { /* column might not exist yet */ }
+
+    res.json({ message: 'Backfill terminé.', results });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

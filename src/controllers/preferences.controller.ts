@@ -18,15 +18,25 @@ export async function getFavorites(req: AuthenticatedRequest, res: Response): Pr
       return;
     }
 
-    const { data, error } = await supabase
+    let data: any[] | null = null;
+
+    // Try with type filter first, fall back without if column doesn't exist
+    const result = await supabase
       .from('favorite_requests')
       .select('*')
-      .eq('client_id', clientId)
-      .eq('type', 'favorite');
+      .eq('client_id', clientId);
 
-    if (error) throw error;
+    if (result.error) {
+      // Table might not exist at all – return empty
+      res.json({ favorites: [] });
+      return;
+    }
+    data = result.data;
 
-    const favorites = (data || []).map((f: any) => ({ id: f.id, ...f }));
+    // Client-side filter if `type` column exists on some rows
+    const favorites = (data || [])
+      .filter((f: any) => !f.type || f.type === 'favorite')
+      .map((f: any) => ({ id: f.id, ...f }));
     res.json({ favorites });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -98,17 +108,26 @@ export async function getRecent(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    const { data, error } = await supabase
+    const result = await supabase
       .from('favorite_requests')
       .select('*')
-      .eq('client_id', clientId)
-      .eq('type', 'recent')
-      .order('last_used', { ascending: false })
-      .limit(10);
+      .eq('client_id', clientId);
 
-    if (error) throw error;
+    if (result.error) {
+      res.json({ recent: [] });
+      return;
+    }
 
-    const recent = (data || []).map((r: any) => ({ id: r.id, ...r }));
+    // Client-side filter for recent items, sort by last_used
+    const recent = (result.data || [])
+      .filter((r: any) => r.type === 'recent')
+      .sort((a: any, b: any) => {
+        const da = a.last_used ? new Date(a.last_used).getTime() : 0;
+        const db = b.last_used ? new Date(b.last_used).getTime() : 0;
+        return db - da;
+      })
+      .slice(0, 10)
+      .map((r: any) => ({ id: r.id, ...r }));
     res.json({ recent });
   } catch (error: any) {
     res.status(500).json({ error: error.message });

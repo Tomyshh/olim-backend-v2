@@ -18,6 +18,7 @@ router.get('/personal', asyncHandler(documentsController.getPersonalDocuments as
 router.get('/family-member/:memberId', asyncHandler(documentsController.getFamilyMemberDocuments as any));
 
 router.post('/save', asyncHandler(documentsController.saveDocumentMetadata as any));
+router.post('/backfill', asyncHandler(documentsController.backfillDocumentRelations as any));
 router.post('/personal/upload', upload.array('files'), asyncHandler(documentsController.uploadPersonalDocument as any));
 router.post('/family-member/:memberId/upload', upload.array('files'), asyncHandler(documentsController.uploadFamilyMemberDocument as any));
 

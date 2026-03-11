@@ -24,7 +24,14 @@ export async function getAppointments(req: AuthenticatedRequest, res: Response):
     }
 
     const { data, error } = await query;
-    if (error) throw error;
+    if (error) {
+      // Table might not exist yet – return empty gracefully
+      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+        res.json({ appointments: [] });
+        return;
+      }
+      throw error;
+    }
 
     const appointments = (data || []).map(a => ({
       appointmentId: a.firestore_id || a.id,
