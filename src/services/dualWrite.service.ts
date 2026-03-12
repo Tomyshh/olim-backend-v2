@@ -416,17 +416,30 @@ export async function mapFamilyMemberToSupabase(
   };
 }
 
+const KNOWN_RELATIONSHIP_SLUGS = ['account_owner', 'conjoint', 'parent', 'child', 'sibling', 'grandparent', 'other'];
+
 async function resolveRelationshipTypeFromStatus(status: string | null): Promise<string | null> {
   if (!status) return null;
   const s = status.toLowerCase().trim();
   let slug: string;
-  if (s.includes('account owner')) slug = 'account_owner';
-  else if (['conjoint', 'conjoin', 'spouse', 'partner', 'mari'].includes(s) || s.includes('conjoint')) slug = 'conjoint';
-  else if (['child', 'boy', 'girl', 'daughter', 'fille', 'fils', 'garçon', 'beau fils'].includes(s)) slug = 'child';
-  else if (['father', 'mother', 'mere', 'mère', 'pere', 'père', 'parent'].includes(s) || s.includes('mere') || s.includes('pere')) slug = 'parent';
-  else if (s.includes('grand')) slug = 'grandparent';
-  else if (s.includes('soeur') || s.includes('frere')) slug = 'sibling';
-  else slug = 'other';
+  // Si le frontend envoie déjà un slug Supabase, l'utiliser directement
+  if (KNOWN_RELATIONSHIP_SLUGS.includes(s)) {
+    slug = s;
+  } else if (s.includes('account owner')) {
+    slug = 'account_owner';
+  } else if (['conjoin', 'spouse', 'partner', 'mari'].includes(s) || s.includes('conjoint')) {
+    slug = 'conjoint';
+  } else if (['boy', 'girl', 'daughter', 'fille', 'fils', 'garçon', 'beau fils'].includes(s)) {
+    slug = 'child';
+  } else if (['father', 'mother', 'mere', 'mère', 'pere', 'père'].includes(s) || s.includes('mere') || s.includes('pere')) {
+    slug = 'parent';
+  } else if (s.includes('grand')) {
+    slug = 'grandparent';
+  } else if (s.includes('soeur') || s.includes('frere')) {
+    slug = 'sibling';
+  } else {
+    slug = 'other';
+  }
   return resolveRelationshipTypeId(slug);
 }
 

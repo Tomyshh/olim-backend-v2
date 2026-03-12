@@ -44,6 +44,24 @@ export async function getServiceAvailability(
   }
 }
 
+export async function getRelationshipTypes(
+  req: AuthenticatedRequest,
+  res: Response
+): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from('relationship_types')
+      .select('id, slug, label, display_order')
+      .order('display_order', { ascending: true });
+
+    if (error) throw error;
+
+    res.json({ types: data ?? [] });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
 export async function getAiKey(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
     const cached = await getJsonFromCache<string>(AI_KEY_CACHE_KEY);
