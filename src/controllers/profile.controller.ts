@@ -358,10 +358,22 @@ export async function getFamilyMembers(req: AuthenticatedRequest, res: Response)
       'Date de naissance': m.birthday,
       firstName: m.first_name,
       lastName: m.last_name,
+      fatherName: m.father_name,
+      relationship: m.relationship_type ?? m.status,
       isAccountOwner: m.is_account_owner,
       hasGOVacces: m.has_gov_access,
       hasGovAccess: m.has_gov_access,
       isActive: m.is_active,
+      serviceActive: m.service_active ?? false,
+      livesAtHome: m.lives_at_home ?? false,
+      billingExempt: m.billing_exempt ?? false,
+      billingExemptReason: m.billing_exempt_reason,
+      validationStatus: m.validation_status ?? 'en_attente',
+      selectedCardId: m.selected_card_id,
+      email: m.email,
+      phone: m.phone,
+      phoneNumbers: m.phone ? [m.phone] : [],
+      koupatHolim: m.koupat_holim,
     }));
     res.json({ members, familyMembers: members });
   } catch (error: any) {

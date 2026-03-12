@@ -5,7 +5,8 @@ import { HttpError } from '../../utils/errors.js';
 import { paymeGenerateSale } from '../../services/payme.service.js';
 import { isConjoint, recomputeAndApplyFamilyMonthlySupplement, memberIsEligibleAdultSupplement, assertSubscriptionCanSupportFamilySupplement } from '../../services/familyBilling.service.js';
 import { getFamilyMemberPricingNis, nisToCents } from '../../services/remoteConfigPricing.service.js';
-import { dualWriteFamilyMember, dualWriteDelete } from '../../services/dualWrite.service.js';
+import { dualWriteFamilyMember, dualWriteDelete, resolveSupabaseClientId, mapFamilyMemberToSupabase } from '../../services/dualWrite.service.js';
+import { supabase } from '../../services/supabase.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
 
@@ -289,14 +290,10 @@ function buildMemberFirestoreDoc(params: { uid: string; body: any; defaults?: Re
   );
   if (!familyMemberStatus) throw new HttpError(400, 'Family Member Status requis.', 'MISSING_REQUIRED_FIELD');
 
-  // Requis côté storage: string "dd/MM/yyyy" (JJ/MM/YYYY)
+  // Optionnel (sauf pour la facturation adulte qui vérifie l'âge plus bas)
   const birthdayRaw = pickFromMany(member.birthday, getLegacyKey(raw, 'Birthday', 'birthday'));
   const birthdayStr = birthdayRaw == null ? null : parseBirthdayToDdMmYyyy(birthdayRaw);
-  // Birthday requis (car on doit calculer age et la facturation dépend de l'âge)
-  if (birthdayRaw == null) {
-    throw new HttpError(400, 'Birthday requis (format "dd/MM/yyyy").', 'INVALID_BIRTHDAY');
-  }
-  if (!birthdayStr) {
+  if (birthdayRaw != null && !birthdayStr) {
     throw new HttpError(400, 'Birthday invalide (attendu "dd/MM/yyyy").', 'INVALID_BIRTHDAY');
   }
   const age = birthdayStr ? computeAgeYearsFromBirthdayString(birthdayStr) : null;
@@ -570,12 +567,25 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
   }
 
   const ref = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
-  // IMPORTANT: attendre le dual-write Supabase avant de répondre, sinon le frontend
-  // rafraîchit le profil (GET /api/profile/family-members) avant que le membre soit visible.
-  // insertOnly: true car nouveau membre, évite le besoin de contrainte unique pour upsert.
-  await dualWriteFamilyMember(uid, ref.id, doc, { insertOnly: true }).catch((err) => {
-    console.warn('[v1CreateFamilyMember] dualWriteFamilyMember failed (member still in Firestore):', err?.message ?? err);
-  });
+
+  // ── Écriture directe dans Supabase (lecture = Supabase, donc ce write est critique) ──
+  try {
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      console.error('[v1CreateFamilyMember] CRITICAL: client absent de Supabase pour uid=', uid,
+        '→ le membre sera invisible (Firestore seul). Fixer la table clients.');
+    } else {
+      const row = await mapFamilyMemberToSupabase(clientId, ref.id, doc);
+      const { error: insertErr } = await supabase.from('family_members').insert(row);
+      if (insertErr) {
+        console.error('[v1CreateFamilyMember] Supabase INSERT failed:', insertErr.message, insertErr.details);
+      } else {
+        console.log('[v1CreateFamilyMember] Supabase INSERT OK, firestore_id=', ref.id);
+      }
+    }
+  } catch (supaErr: any) {
+    console.error('[v1CreateFamilyMember] Supabase write threw:', supaErr?.message ?? supaErr);
+  }
 
   // Recompute systématique après création (le calcul interne décide si count=0/1/2/...).
   // C'est ce qui garantit le caractère "cumulable" sans dépendre d'un pré-check fragile.
@@ -1017,7 +1027,20 @@ async function adminCreateFamilyMember(params: {
   }
 
   const ref = await db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
-  dualWriteFamilyMember(clientUid, ref.id, doc).catch(() => {});
+
+  // Écriture directe Supabase (même pattern que v1CreateFamilyMember)
+  try {
+    const adminClientId = await resolveSupabaseClientId(clientUid);
+    if (adminClientId) {
+      const adminRow = await mapFamilyMemberToSupabase(adminClientId, ref.id, doc);
+      const { error: adminInsertErr } = await supabase.from('family_members').insert(adminRow);
+      if (adminInsertErr) console.error('[adminCreate] Supabase INSERT failed:', adminInsertErr.message);
+    } else {
+      console.warn('[adminCreate] client absent de Supabase pour uid=', clientUid);
+    }
+  } catch (e: any) {
+    console.error('[adminCreate] Supabase write threw:', e?.message ?? e);
+  }
 
   // Recompute: safe (billingExempt/conjoint/enfant => eligible false)
   const shouldRecompute = !isConjoint(status);
