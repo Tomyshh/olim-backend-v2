@@ -71,10 +71,12 @@ export async function dualWriteToSupabase(
     if (result.error) {
       console.error(LOG_PREFIX, `${mode} on ${table} failed:`, result.error.message);
       await logFailure(table, mode, data, result.error);
+      throw result.error;
     }
   } catch (err) {
     console.error(LOG_PREFIX, `${mode} on ${table} threw:`, err);
     await logFailure(table, mode, data, err);
+    throw err;
   }
 }
 
@@ -814,12 +816,25 @@ export async function dualWriteSubscription(
 export async function dualWriteFamilyMember(
   firebaseUid: string,
   memberId: string,
-  fsData: Record<string, any>
+  fsData: Record<string, any>,
+  options?: { insertOnly?: boolean }
 ): Promise<void> {
   const clientId = await resolveSupabaseClientId(firebaseUid);
-  if (!clientId) return;
+  if (!clientId) {
+    console.warn(LOG_PREFIX, 'dualWriteFamilyMember: client not found in Supabase for firebaseUid=', firebaseUid);
+    return;
+  }
   const row = await mapFamilyMemberToSupabase(clientId, memberId, fsData);
-  await dualWriteToSupabase('family_members', row, { onConflict: 'client_id,firestore_id' });
+  // Pour un nouveau membre (create), utiliser INSERT (pas de contrainte unique requise).
+  // Pour update, upsert nécessite la contrainte (client_id, firestore_id).
+  if (options?.insertOnly) {
+    await dualWriteToSupabase('family_members', row, { mode: 'insert' });
+  } else {
+    await dualWriteToSupabase('family_members', row, {
+      mode: 'upsert',
+      onConflict: 'client_id,firestore_id',
+    });
+  }
 }
 
 export async function dualWriteAddress(

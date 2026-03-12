@@ -570,7 +570,12 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
   }
 
   const ref = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).add(stripUndefinedDeep(doc));
-  dualWriteFamilyMember(uid, ref.id, doc).catch(() => {});
+  // IMPORTANT: attendre le dual-write Supabase avant de répondre, sinon le frontend
+  // rafraîchit le profil (GET /api/profile/family-members) avant que le membre soit visible.
+  // insertOnly: true car nouveau membre, évite le besoin de contrainte unique pour upsert.
+  await dualWriteFamilyMember(uid, ref.id, doc, { insertOnly: true }).catch((err) => {
+    console.warn('[v1CreateFamilyMember] dualWriteFamilyMember failed (member still in Firestore):', err?.message ?? err);
+  });
 
   // Recompute systématique après création (le calcul interne décide si count=0/1/2/...).
   // C'est ce qui garantit le caractère "cumulable" sans dépendre d'un pré-check fragile.
