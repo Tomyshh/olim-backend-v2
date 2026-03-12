@@ -102,7 +102,7 @@ export async function getDocumentTypes(req: AuthenticatedRequest, res: Response)
   try {
     const { data, error } = await supabase
       .from('document_types')
-      .select('id, slug, label, label_he, description')
+      .select('id, slug, label, label_he, description, description_fr, description_en')
       .order('label', { ascending: true });
 
     if (error) throw error;
@@ -113,6 +113,8 @@ export async function getDocumentTypes(req: AuthenticatedRequest, res: Response)
       label: t.label,
       labelHe: t.label_he,
       description: t.description,
+      descriptionFr: t.description_fr,
+      descriptionEn: t.description_en,
     }));
 
     res.json({ types });
