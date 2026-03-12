@@ -130,6 +130,8 @@ export async function updateLead(req: AuthenticatedRequest, res: Response): Prom
     source_slug: pickOptionalString(body.source_slug),
     priority: pickOptionalString(body.priority),
     comments: pickOptionalString(body.comments),
+    conversion_plan: pickOptionalString(body.conversion_plan),
+    subscription_type: pickOptionalString(body.subscription_type),
   };
 
   const lead = await leadsService.updateLead(leadId, payload, req.uid!);
@@ -142,8 +144,14 @@ export async function updateLeadStatus(req: AuthenticatedRequest, res: Response)
   if (!leadId) throw new HttpError(400, 'id requis.');
   if (!statusSlug) throw new HttpError(400, 'status requis.');
 
+  await ensureLeadAccess(req, leadId);
+
   const conseillerName = pickOptionalString(req.body?.conseiller_name);
-  const lead = await leadsService.updateLeadStatus(leadId, statusSlug, req.uid!, conseillerName);
+  const conversionData = {
+    conversion_plan: pickOptionalString(req.body?.conversion_plan),
+    subscription_type: pickOptionalString(req.body?.subscription_type),
+  };
+  const lead = await leadsService.updateLeadStatus(leadId, statusSlug, req.uid!, conseillerName, conversionData);
   res.json(lead);
 }
 

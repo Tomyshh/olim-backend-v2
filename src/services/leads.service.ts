@@ -57,6 +57,8 @@ export interface LeadUpdatePayload {
   source_slug?: string;
   priority?: string;
   comments?: string;
+  conversion_plan?: string;
+  subscription_type?: string;
 }
 
 interface ScoreRule {
@@ -272,6 +274,64 @@ export async function computeLeadScore(lead: Record<string, any>): Promise<numbe
   return Math.max(0, score);
 }
 
+export function computeHeatBonus(lead: Record<string, any>): number {
+  let bonus = 0;
+
+  const createdAt = lead.created_at ? new Date(lead.created_at) : null;
+  if (createdAt) {
+    const ageDays = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
+    if (ageDays < 7) bonus += 15;
+    else if (ageDays < 30) bonus += 10;
+    else if (ageDays < 90) bonus += 5;
+  }
+
+  const slug = lead.pipeline_status?.slug ?? lead.status_slug ?? '';
+  if (slug === 'to_finalize') bonus += 20;
+  else if (slug === 'to_recall') bonus += 10;
+  else if (slug === 'no_answer') bonus += 5;
+  else if (slug === 'converted') bonus += 25;
+  else if (slug === 'lost') bonus -= 15;
+
+  const summary = (lead.last_call_summary ?? '').toLowerCase();
+  if (summary) {
+    if (summary.includes('intéressé') && !summary.includes('pas intéressé') && !summary.includes('non intéressé')) bonus += 15;
+    else if (summary.includes('pas intéressé') || summary.includes('non intéressé')) bonus -= 10;
+    if (summary.includes('inscrire') || summary.includes('inscription')) bonus += 20;
+    if (summary.includes('documents') || summary.includes('dossier')) bonus += 10;
+    if (summary.includes('réfléchir')) bonus += 5;
+    if (summary.includes('ne répond pas') || summary.includes('injoignable')) bonus -= 5;
+  }
+
+  return bonus;
+}
+
+async function recalculateLeadHeat(leadId: string) {
+  const lead = await getLeadById(leadId);
+  const baseScore = await computeLeadScore(lead);
+  const bonus = computeHeatBonus(lead);
+  const finalScore = Math.max(0, baseScore + bonus);
+  const interestLevel = deriveInterestLevel(finalScore);
+
+  await supabase.from('leads').update({
+    score: finalScore,
+    interest_level: interestLevel,
+  }).eq('id', leadId);
+}
+
+async function updateLeadLastCallFields(leadId: string, interaction: any) {
+  const updateData: Record<string, any> = {
+    last_call_summary: interaction.summary || null,
+    last_call_date: interaction.validated_at || interaction.created_at,
+    last_call_by_name: interaction.conseiller_name || interaction.validated_by_name || null,
+  };
+
+  if (interaction.reminder_at) {
+    updateData.next_reminder_at = interaction.reminder_at;
+  }
+
+  await supabase.from('leads').update(updateData).eq('id', leadId);
+}
+
 function deriveInterestLevel(score: number): 'hot' | 'warm' | 'cold' {
   if (score >= 40) return 'hot';
   if (score >= 15) return 'warm';
@@ -438,6 +498,7 @@ export async function updateLead(leadId: string, payload: LeadUpdatePayload, upd
     'first_name', 'last_name', 'phone', 'phone_secondary', 'email',
     'city', 'country', 'language', 'service_requested', 'interest_level',
     'estimated_budget', 'urgency', 'priority', 'comments',
+    'conversion_plan', 'subscription_type',
   ];
 
   for (const field of fields) {
@@ -487,9 +548,21 @@ export async function updateLead(leadId: string, payload: LeadUpdatePayload, upd
   return data;
 }
 
-export async function updateLeadStatus(leadId: string, statusSlug: string, updatedBy: string, conseillerName?: string) {
+export async function updateLeadStatus(
+  leadId: string,
+  statusSlug: string,
+  updatedBy: string,
+  conseillerName?: string,
+  conversionData?: { conversion_plan?: string; subscription_type?: string },
+) {
   const statusId = await resolveStatusId(statusSlug);
   if (!statusId) throw new Error(`Status inconnu: ${statusSlug}`);
+
+  if (statusSlug === 'converted') {
+    if (!conversionData?.conversion_plan || !conversionData?.subscription_type) {
+      throw new Error('Le forfait et le type d\'abonnement sont obligatoires pour convertir un lead.');
+    }
+  }
 
   const updateData: Record<string, any> = {
     status_id: statusId,
@@ -498,6 +571,8 @@ export async function updateLeadStatus(leadId: string, statusSlug: string, updat
 
   if (statusSlug === 'converted') {
     updateData.converted_at = new Date().toISOString();
+    updateData.conversion_plan = conversionData!.conversion_plan;
+    updateData.subscription_type = conversionData!.subscription_type;
   }
 
   const { data, error } = await supabase
@@ -522,7 +597,10 @@ export async function updateLeadStatus(leadId: string, statusSlug: string, updat
     metadata: { action: 'status_change', new_status: statusSlug },
   });
 
-  return data;
+  await recalculateLeadHeat(leadId);
+
+  const refreshed = await getLeadById(leadId);
+  return refreshed;
 }
 
 export async function assignLead(leadId: string, conseillerId: string, assignedBy: string, conseillerName?: string) {
@@ -822,6 +900,8 @@ export async function validateCallInteraction(leadId: string, interactionId: str
   await syncLeadStatusFromCall(leadId, data.status_slug);
   await syncReminderFromCall(data);
   await touchLeadInteraction(leadId);
+  await updateLeadLastCallFields(leadId, data);
+  await recalculateLeadHeat(leadId);
 
   return data;
 }
