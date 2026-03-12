@@ -945,6 +945,23 @@ export async function listReminders(leadId: string) {
   return data ?? [];
 }
 
+async function syncLeadNextReminder(leadId: string) {
+  const now = new Date().toISOString();
+  const { data: next } = await supabase
+    .from('lead_reminders')
+    .select('reminder_at')
+    .eq('lead_id', leadId)
+    .eq('treated', false)
+    .gt('reminder_at', now)
+    .order('reminder_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  await supabase
+    .from('leads')
+    .update({ next_reminder_at: next?.reminder_at ?? null })
+    .eq('id', leadId);
+}
+
 export async function createReminder(leadId: string, payload: {
   conseiller_id: string;
   reminder_at: string;
@@ -962,10 +979,18 @@ export async function createReminder(leadId: string, payload: {
     .single();
 
   if (error) throw error;
+  await syncLeadNextReminder(leadId);
   return data;
 }
 
 export async function markReminderTreated(reminderId: string) {
+  const { data: reminder, error: fetchErr } = await supabase
+    .from('lead_reminders')
+    .select('lead_id')
+    .eq('id', reminderId)
+    .single();
+  if (fetchErr || !reminder) throw fetchErr || new Error('Rappel introuvable');
+
   const { data, error } = await supabase
     .from('lead_reminders')
     .update({
@@ -977,6 +1002,7 @@ export async function markReminderTreated(reminderId: string) {
     .single();
 
   if (error) throw error;
+  await syncLeadNextReminder(reminder.lead_id);
   return data;
 }
 
