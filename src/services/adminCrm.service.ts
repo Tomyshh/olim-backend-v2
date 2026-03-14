@@ -1,6 +1,6 @@
 import { supabase } from './supabase.service.js';
 import { getFirestore } from '../config/firebase.js';
-import { dualWriteConseiller } from './dualWrite.service.js';
+import { dualWriteConseiller, dualWriteToSupabase, resolveSupabaseClientId } from './dualWrite.service.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,6 +64,15 @@ export async function listClients(filters: ClientFilters) {
   }
   if (filters.subscription_status) {
     query = query.eq('subscription_status', filters.subscription_status);
+  }
+  if (filters.payment_status) {
+    query = query.eq('membership_status', filters.payment_status);
+  }
+  if (filters.seniority) {
+    query = query.eq('seniority', filters.seniority);
+  }
+  if (filters.activity) {
+    query = query.eq('activity', filters.activity);
   }
 
   const sortCol = filters.sort_by || 'created_at';
@@ -169,38 +178,476 @@ export async function listRequestsAdmin(filters: RequestFilters) {
   const page = filters.page ?? 1;
   const offset = (page - 1) * pageLimit;
 
+  const sortCol = filters.sort_by || 'request_date';
+  const sortAsc = filters.sort_order === 'asc';
+
   let query = supabase
     .from('requests')
     .select('*', { count: 'exact' })
-    .order('request_date', { ascending: false });
+    .order(sortCol, { ascending: sortAsc });
 
   if (filters.status) query = query.eq('status', filters.status);
   if (filters.request_type) query = query.eq('request_type', filters.request_type);
   if (filters.category) query = query.eq('request_category', filters.category);
   if (filters.assigned_to) query = query.eq('assigned_to', filters.assigned_to);
+  if (filters.urgency) query = query.eq('urgence_conseiller', filters.urgency);
+  if (filters.date_from) query = query.gte('request_date', filters.date_from);
+  if (filters.date_to) query = query.lte('request_date', filters.date_to);
+  if (filters.unread_only) query = query.eq('is_opened', false);
   if (filters.search) {
-    query = query.or(`request_description.ilike.%${filters.search}%,user_id.ilike.%${filters.search}%,assigned_to.ilike.%${filters.search}%`);
+    query = query.or(
+      `request_description.ilike.%${filters.search}%,first_name.ilike.%${filters.search}%,last_name.ilike.%${filters.search}%,assigned_to.ilike.%${filters.search}%`
+    );
   }
 
   query = query.range(offset, offset + pageLimit - 1);
   const { data, error, count } = await query;
   if (error) throw new Error(`Supabase listRequestsAdmin error: ${error.message}`);
 
-  const requests = (data ?? []).map(r => ({
+  const requests = (data ?? []).map(formatRequestRow);
+
+  return { requests, total: count ?? 0, page, limit: pageLimit };
+}
+
+function formatRequestRow(r: Record<string, any>) {
+  return {
     id: r.firebase_request_id ?? r.id,
+    supabaseId: r.id,
     clientId: r.user_id,
+    client_id: r.client_id,
     status: r.status ?? '',
     requestType: r.request_type ?? '',
     requestCategory: r.request_category ?? '',
+    requestSubCategory: r.request_sub_category ?? '',
     assignedTo: r.assigned_to ?? '',
-    assignedToUid: r.assigned_to ?? null,
+    assignedToUid: r.assigned_to_conseiller_id ?? r.assigned_to ?? null,
     description: r.request_description ?? '',
     requestDate: r.request_date,
+    closingDate: r.closing_date,
     isOpened: r.is_opened ?? false,
+    firstName: r.first_name ?? '',
+    lastName: r.last_name ?? '',
+    email: r.email ?? '',
+    membershipType: r.membership_type ?? '',
+    priority: r.priority,
+    difficulty: r.difficulty,
+    rating: r.rating,
+    source: r.source ?? '',
+    platform: r.platform ?? '',
+    isRdv: r.is_rdv ?? false,
+    urgenceConseiller: r.urgence_conseiller ?? '',
+    conseillerNote: r.conseiller_note ?? '',
+    responseText: r.response_text ?? '',
+    createdBy: r.created_by ?? '',
+    tags: r.tags ?? [],
+    uploadedFiles: r.uploaded_files ?? [],
+    availableDays: r.available_days ?? [],
+    availableHours: r.available_hours ?? [],
+    clientComment: r.client_comment ?? '',
     ...r,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Single Request Detail (admin)
+// ---------------------------------------------------------------------------
+
+export async function getRequestById(requestId: string) {
+  let query = supabase
+    .from('requests')
+    .select('*')
+    .or(`firebase_request_id.eq.${requestId},id.eq.${requestId}`)
+    .limit(1)
+    .maybeSingle();
+
+  const { data, error } = await query;
+  if (error) throw new Error(`Supabase getRequestById error: ${error.message}`);
+  if (!data) return null;
+
+  let clientInfo = null;
+  if (data.client_id) {
+    const { data: c } = await supabase
+      .from('clients')
+      .select('id, firebase_uid, first_name, last_name, email, phone, membership_type, membership_status, seniority, teoudat_zeout, koupat_holim, birthday, created_at')
+      .eq('id', data.client_id)
+      .maybeSingle();
+    clientInfo = c;
+  } else if (data.user_id) {
+    const { data: c } = await supabase
+      .from('clients')
+      .select('id, firebase_uid, first_name, last_name, email, phone, membership_type, membership_status, seniority, teoudat_zeout, koupat_holim, birthday, created_at')
+      .eq('firebase_uid', data.user_id)
+      .maybeSingle();
+    clientInfo = c;
+  }
+
+  return { ...formatRequestRow(data), client: clientInfo };
+}
+
+// ---------------------------------------------------------------------------
+// Update Request (admin)
+// ---------------------------------------------------------------------------
+
+export async function updateRequestAdmin(requestId: string, updates: Record<string, unknown>) {
+  const allowedFields: Record<string, string> = {
+    status: 'status',
+    assigned_to: 'assigned_to',
+    response_text: 'response_text',
+    is_opened: 'is_opened',
+    conseiller_note: 'conseiller_note',
+    urgence_conseiller: 'urgence_conseiller',
+    difficulty: 'difficulty',
+    priority: 'priority',
+    closing_date: 'closing_date',
+    request_category: 'request_category',
+    request_sub_category: 'request_sub_category',
+    request_description: 'request_description',
+  };
+
+  const supabaseUpdates: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  for (const [key, col] of Object.entries(allowedFields)) {
+    if (updates[key] !== undefined) {
+      supabaseUpdates[col] = updates[key];
+    }
+  }
+
+  if (updates.status === 'Closed' && !updates.closing_date) {
+    supabaseUpdates.closing_date = new Date().toISOString();
+  }
+
+  const { data: existing } = await supabase
+    .from('requests')
+    .select('id, firebase_request_id, user_id')
+    .or(`firebase_request_id.eq.${requestId},id.eq.${requestId}`)
+    .limit(1)
+    .maybeSingle();
+
+  if (!existing) throw new Error('Request not found');
+
+  const { data, error } = await supabase
+    .from('requests')
+    .update(supabaseUpdates)
+    .eq('id', existing.id)
+    .select()
+    .single();
+
+  if (error) throw new Error(`Supabase updateRequestAdmin error: ${error.message}`);
+
+  const db = getFirestore();
+  const firebaseRequestId = existing.firebase_request_id ?? requestId;
+  if (existing.user_id && firebaseRequestId) {
+    const firestoreUpdates: Record<string, unknown> = {};
+    if (updates.status !== undefined) firestoreUpdates['Status'] = updates.status;
+    if (updates.assigned_to !== undefined) firestoreUpdates['Assigned to'] = updates.assigned_to;
+    if (updates.response_text !== undefined) firestoreUpdates['Response Text'] = updates.response_text;
+    if (updates.is_opened !== undefined) firestoreUpdates['is_opened'] = updates.is_opened;
+    if (updates.conseiller_note !== undefined) firestoreUpdates['Conseiller Note'] = updates.conseiller_note;
+    if (updates.urgence_conseiller !== undefined) firestoreUpdates['Urgence Conseiller'] = updates.urgence_conseiller;
+    if (updates.difficulty !== undefined) firestoreUpdates['Difficulty'] = updates.difficulty;
+    if (updates.priority !== undefined) firestoreUpdates['Priority'] = updates.priority;
+    if (updates.closing_date !== undefined) firestoreUpdates['Closing Date'] = updates.closing_date;
+
+    if (Object.keys(firestoreUpdates).length > 0) {
+      try {
+        await db
+          .collection('Clients').doc(existing.user_id)
+          .collection('Requests').doc(firebaseRequestId)
+          .update(firestoreUpdates);
+      } catch (fsErr) {
+        console.error('[adminCrm] Firestore sync failed for request update:', fsErr);
+      }
+    }
+  }
+
+  return formatRequestRow(data);
+}
+
+// ---------------------------------------------------------------------------
+// Create Request (admin / conseiller)
+// ---------------------------------------------------------------------------
+
+export async function createRequestAdmin(payload: Record<string, unknown>, createdBy: string) {
+  const now = new Date().toISOString();
+  const userId = payload.user_id as string;
+
+  let clientId: string | null = null;
+  if (userId) {
+    clientId = await resolveSupabaseClientId(userId);
+  }
+
+  const row: Record<string, any> = {
+    user_id: userId,
+    client_id: clientId,
+    request_type: payload.request_type ?? 'Request',
+    request_category: payload.request_category ?? '',
+    request_sub_category: payload.request_sub_category ?? null,
+    request_description: payload.request_description ?? '',
+    status: payload.status ?? 'Assigned',
+    assigned_to: payload.assigned_to ?? null,
+    first_name: payload.first_name ?? '',
+    last_name: payload.last_name ?? '',
+    email: payload.email ?? '',
+    membership_type: payload.membership_type ?? '',
+    priority: payload.priority ?? null,
+    difficulty: payload.difficulty ?? null,
+    urgence_conseiller: payload.urgence_conseiller ?? '',
+    source: 'CRM',
+    platform: 'web',
+    created_by: createdBy,
+    is_rdv: payload.is_rdv ?? (payload.request_type === 'Rendez-vous'),
+    request_date: payload.request_date ?? now,
+    available_days: payload.available_days ?? [],
+    available_hours: payload.available_hours ?? [],
+    tags: payload.tags ?? [],
+    created_at: now,
+    updated_at: now,
+  };
+
+  const { data, error } = await supabase
+    .from('requests')
+    .insert(row)
+    .select()
+    .single();
+
+  if (error) throw new Error(`Supabase createRequestAdmin error: ${error.message}`);
+
+  if (userId) {
+    const db = getFirestore();
+    try {
+      const firestoreData: Record<string, any> = {
+        'Request Type': row.request_type,
+        'Request Category': row.request_category,
+        'Request Sub-Category': row.request_sub_category,
+        'Description': row.request_description,
+        'Status': row.status,
+        'Assigned to': row.assigned_to,
+        'First Name': row.first_name,
+        'Last Name': row.last_name,
+        'Email': row.email,
+        'Membership Type': row.membership_type,
+        'Priority': row.priority,
+        'Difficulty': row.difficulty,
+        'Request Date': new Date(row.request_date),
+        'Created By': createdBy,
+        'source': 'CRM',
+        'platform': 'web',
+        'is_rdv': row.is_rdv,
+      };
+
+      const docRef = await db
+        .collection('Clients').doc(userId)
+        .collection('Requests')
+        .add(firestoreData);
+
+      await supabase
+        .from('requests')
+        .update({ firebase_request_id: docRef.id })
+        .eq('id', data.id);
+
+      data.firebase_request_id = docRef.id;
+    } catch (fsErr) {
+      console.error('[adminCrm] Firestore sync failed for request create:', fsErr);
+    }
+  }
+
+  return formatRequestRow(data);
+}
+
+// ---------------------------------------------------------------------------
+// Client Requests (admin)
+// ---------------------------------------------------------------------------
+
+export async function getClientRequests(clientId: string, filters: Pick<RequestFilters, 'status' | 'page' | 'limit'>) {
+  const pageLimit = Math.min(filters.limit ?? 50, 200);
+  const page = filters.page ?? 1;
+  const offset = (page - 1) * pageLimit;
+
+  const { data: client } = await supabase
+    .from('clients')
+    .select('id, firebase_uid')
+    .or(`id.eq.${clientId},firebase_uid.eq.${clientId}`)
+    .limit(1)
+    .maybeSingle();
+
+  if (!client) throw new Error('Client not found');
+
+  let query = supabase
+    .from('requests')
+    .select('*', { count: 'exact' })
+    .or(`client_id.eq.${client.id},user_id.eq.${client.firebase_uid}`)
+    .order('request_date', { ascending: false });
+
+  if (filters.status) query = query.eq('status', filters.status);
+
+  query = query.range(offset, offset + pageLimit - 1);
+  const { data, error, count } = await query;
+  if (error) throw new Error(`Supabase getClientRequests error: ${error.message}`);
+
+  return {
+    requests: (data ?? []).map(formatRequestRow),
+    total: count ?? 0,
+    page,
+    limit: pageLimit,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Subscription Events by Client
+// ---------------------------------------------------------------------------
+
+export async function getClientSubscriptionEvents(clientId: string, limit = 100) {
+  const { data: client } = await supabase
+    .from('clients')
+    .select('id')
+    .or(`id.eq.${clientId},firebase_uid.eq.${clientId}`)
+    .limit(1)
+    .maybeSingle();
+
+  if (!client) throw new Error('Client not found');
+
+  const { data: subs } = await supabase
+    .from('subscriptions')
+    .select('id')
+    .eq('client_id', client.id);
+
+  const subIds = (subs ?? []).map(s => s.id);
+  if (subIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('subscription_events')
+    .select('*')
+    .in('subscription_id', subIds)
+    .order('occurred_at', { ascending: false })
+    .limit(limit);
+
+  if (error) throw new Error(`Supabase getClientSubscriptionEvents error: ${error.message}`);
+  return data ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// Advanced Request Stats (dashboard)
+// ---------------------------------------------------------------------------
+
+export interface RequestStatsFilters {
+  period?: 'today' | 'week' | 'month' | 'year' | 'custom';
+  date_from?: string;
+  date_to?: string;
+}
+
+export async function getRequestStats(filters: RequestStatsFilters) {
+  const now = new Date();
+  let dateFrom: Date;
+  let dateTo = new Date();
+
+  switch (filters.period) {
+    case 'today':
+      dateFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      break;
+    case 'week': {
+      const dayOfWeek = now.getDay();
+      dateFrom = new Date(now);
+      dateFrom.setDate(now.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1));
+      dateFrom.setHours(0, 0, 0, 0);
+      break;
+    }
+    case 'year':
+      dateFrom = new Date(now.getFullYear(), 0, 1);
+      break;
+    case 'custom':
+      dateFrom = filters.date_from ? new Date(filters.date_from) : new Date(now.getTime() - 30 * 86400000);
+      dateTo = filters.date_to ? new Date(filters.date_to) : new Date();
+      break;
+    case 'month':
+    default:
+      dateFrom = new Date(now.getFullYear(), now.getMonth(), 1);
+      break;
+  }
+
+  const fromIso = dateFrom.toISOString();
+  const toIso = dateTo.toISOString();
+
+  const [allInPeriod, byAdviserResult, closedInPeriod] = await Promise.all([
+    supabase
+      .from('requests')
+      .select('status, request_category, source, assigned_to, request_date, is_rdv')
+      .gte('request_date', fromIso)
+      .lte('request_date', toIso),
+    supabase
+      .from('requests')
+      .select('assigned_to, status')
+      .gte('request_date', fromIso)
+      .lte('request_date', toIso),
+    supabase
+      .from('requests')
+      .select('closing_date')
+      .eq('status', 'Closed')
+      .gte('closing_date', fromIso)
+      .lte('closing_date', toIso),
+  ]);
+
+  const rows = allInPeriod.data ?? [];
+
+  const byStatus: Record<string, number> = {};
+  const byCategory: Record<string, number> = {};
+  const bySource: Record<string, number> = {};
+  const adviserMap: Record<string, Record<string, number>> = {};
+
+  for (const r of rows) {
+    const st = r.status ?? 'Unknown';
+    byStatus[st] = (byStatus[st] || 0) + 1;
+
+    const cat = r.request_category ?? 'Unknown';
+    byCategory[cat] = (byCategory[cat] || 0) + 1;
+
+    const src = r.source ?? 'Unknown';
+    bySource[src] = (bySource[src] || 0) + 1;
+
+    const adv = r.assigned_to ?? 'Non assigné';
+    if (!adviserMap[adv]) adviserMap[adv] = {};
+    adviserMap[adv][st] = (adviserMap[adv][st] || 0) + 1;
+  }
+
+  const byAdviser = Object.entries(adviserMap).map(([name, statuses]) => ({
+    name,
+    assigned: statuses['Assigned'] ?? 0,
+    in_progress: statuses['In progress'] ?? 0,
+    pending: statuses['Pending'] ?? 0,
+    closed: statuses['Closed'] ?? 0,
+    unsatisfied: statuses['Unsatisfied'] ?? 0,
+    total: Object.values(statuses).reduce((a, b) => a + b, 0),
   }));
 
-  return { requests, total: count ?? 0, page, limit: pageLimit };
+  const closedRows = closedInPeriod.data ?? [];
+  const dailyClosed: Record<string, number> = {};
+  for (const r of closedRows) {
+    if (r.closing_date) {
+      const day = r.closing_date.slice(0, 10);
+      dailyClosed[day] = (dailyClosed[day] || 0) + 1;
+    }
+  }
+
+  const dailyCreated: Record<string, number> = {};
+  for (const r of rows) {
+    if (r.request_date) {
+      const day = typeof r.request_date === 'string' ? r.request_date.slice(0, 10) : '';
+      if (day) dailyCreated[day] = (dailyCreated[day] || 0) + 1;
+    }
+  }
+
+  const allDays = new Set([...Object.keys(dailyClosed), ...Object.keys(dailyCreated)]);
+  const timeline = Array.from(allDays)
+    .sort()
+    .map(day => ({ date: day, created: dailyCreated[day] ?? 0, closed: dailyClosed[day] ?? 0 }));
+
+  return {
+    total: rows.length,
+    byStatus,
+    byCategory,
+    bySource,
+    byAdviser,
+    timeline,
+    period: { from: fromIso, to: toIso },
+  };
 }
 
 // ---------------------------------------------------------------------------

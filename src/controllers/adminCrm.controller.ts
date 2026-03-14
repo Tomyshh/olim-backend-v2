@@ -76,6 +76,59 @@ export async function listRequests(req: AuthenticatedRequest, res: Response) {
   res.json(result);
 }
 
+export async function getRequest(req: AuthenticatedRequest, res: Response) {
+  const request = await adminCrmService.getRequestById(req.params.requestId);
+  if (!request) throw new HttpError(404, 'Request not found');
+  res.json(request);
+}
+
+export async function updateRequest(req: AuthenticatedRequest, res: Response) {
+  const existing = await adminCrmService.getRequestById(req.params.requestId);
+  if (!existing) throw new HttpError(404, 'Request not found');
+  const updated = await adminCrmService.updateRequestAdmin(req.params.requestId, req.body);
+  res.json(updated);
+}
+
+export async function createRequest(req: AuthenticatedRequest, res: Response) {
+  const createdBy = (req as any).user?.firebase_uid ?? (req as any).user?.uid ?? 'admin';
+  const request = await adminCrmService.createRequestAdmin(req.body, createdBy);
+  res.status(201).json(request);
+}
+
+// ─── Client Requests ──────────────────────────────────────────────────
+
+export async function getClientRequests(req: AuthenticatedRequest, res: Response) {
+  const q = req.query as Record<string, string>;
+  const result = await adminCrmService.getClientRequests(req.params.clientId, {
+    status: pickOptional(q.status),
+    page: pickNumber(q.page, 1),
+    limit: pickNumber(q.limit, 50),
+  });
+  res.json(result);
+}
+
+// ─── Client Subscription Events ───────────────────────────────────────
+
+export async function getClientSubscriptionEvents(req: AuthenticatedRequest, res: Response) {
+  const events = await adminCrmService.getClientSubscriptionEvents(
+    req.params.clientId,
+    pickNumber((req.query as any).limit, 100)
+  );
+  res.json(events);
+}
+
+// ─── Request Stats ────────────────────────────────────────────────────
+
+export async function getRequestStats(req: AuthenticatedRequest, res: Response) {
+  const q = req.query as Record<string, string>;
+  const stats = await adminCrmService.getRequestStats({
+    period: (q.period as any) ?? 'month',
+    date_from: pickOptional(q.date_from),
+    date_to: pickOptional(q.date_to),
+  });
+  res.json(stats);
+}
+
 // ─── Conseillers ──────────────────────────────────────────────────────
 
 export async function listConseillers(_req: AuthenticatedRequest, res: Response) {

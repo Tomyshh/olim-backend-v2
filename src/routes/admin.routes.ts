@@ -36,6 +36,9 @@ router.delete('/clients/:clientId', asyncHandler(adminCrmController.deleteClient
 // ─── CRM: Requests (admin all-clients view) ──────────────────────────
 
 router.get('/requests', asyncHandler(adminCrmController.listRequests as any));
+router.post('/requests', asyncHandler(adminCrmController.createRequest as any));
+router.get('/requests/:requestId', asyncHandler(adminCrmController.getRequest as any));
+router.patch('/requests/:requestId', asyncHandler(adminCrmController.updateRequest as any));
 
 // ─── CRM: Conseillers ────────────────────────────────────────────────
 
@@ -43,10 +46,16 @@ router.get('/conseillers', asyncHandler(adminCrmController.listConseillers as an
 router.get('/conseillers/:conseillerId', asyncHandler(adminCrmController.getConseiller as any));
 router.patch('/conseillers/:conseillerId', asyncHandler(adminCrmController.updateConseiller as any));
 
+// ─── CRM: Client sub-resources ──────────────────────────────────────
+
+router.get('/clients/:clientId/requests', asyncHandler(adminCrmController.getClientRequests as any));
+router.get('/clients/:clientId/subscription-events', asyncHandler(adminCrmController.getClientSubscriptionEvents as any));
+
 // ─── CRM: Dashboard Stats ───────────────────────────────────────────
 
 router.get('/stats/overview', asyncHandler(adminCrmController.getOverviewStats as any));
 router.get('/stats/subscriptions', asyncHandler(adminCrmController.getSubscriptionStats as any));
+router.get('/stats/requests', asyncHandler(adminCrmController.getRequestStats as any));
 
 // ─── CRM: Promotions ────────────────────────────────────────────────
 
