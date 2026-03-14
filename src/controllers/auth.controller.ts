@@ -137,13 +137,16 @@ export async function loginEmail(req: AuthenticatedRequest, res: Response): Prom
       }
     }
 
-    // Si toujours pas de firebaseUid, vérifier si c'est un conseiller (Supabase only) → retourner uniquement les tokens Supabase
-    if (!firebaseUid) {
-      const { data: conseiller } = await supabase
-        .from('conseillers')
-        .select('id, name')
-        .eq('id', authData.user.id)
-        .maybeSingle();
+    // Vérifier si c'est un conseiller (CRM) → retourner les tokens Supabase directement
+    // Les conseillers n'ont pas besoin de Firebase pour le CRM
+    {
+      let conseiller: any = null;
+      const byId = await supabase.from('conseillers').select('id, name').eq('id', authData.user.id).maybeSingle();
+      conseiller = byId.data;
+      if (!conseiller) {
+        const byEmail = await supabase.from('conseillers').select('id, name').eq('email', email).maybeSingle();
+        conseiller = byEmail.data;
+      }
       if (conseiller) {
         res.json({
           ok: true,
@@ -158,6 +161,9 @@ export async function loginEmail(req: AuthenticatedRequest, res: Response): Prom
         });
         return;
       }
+    }
+
+    if (!firebaseUid) {
       res.status(404).json({
         message: 'Compte Supabase trouvé mais mapping Firebase introuvable.',
         code: 'firebase_mapping_not_found',

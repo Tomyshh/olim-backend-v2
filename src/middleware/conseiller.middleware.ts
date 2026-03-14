@@ -2,14 +2,33 @@ import type { NextFunction, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.middleware.js';
 import { supabase } from '../services/supabase.service.js';
 
-/** Trouve le conseiller par uid : id (Supabase Auth), firestore_id (legacy), ou firebase_uid. */
-async function getConseillerByUid(uid: string) {
+/**
+ * Trouve le conseiller par uid (id, firestore_id, firebase_uid) puis par email en dernier recours.
+ * Si trouvé par email et que firebase_uid est vide, le backfill automatiquement.
+ */
+async function getConseillerByUid(uid: string, email?: string | null) {
   const byId = await supabase.from('conseillers').select('*').eq('id', uid).maybeSingle();
   if (byId.data) return byId.data;
+
   const byFirestoreId = await supabase.from('conseillers').select('*').eq('firestore_id', uid).maybeSingle();
   if (byFirestoreId.data) return byFirestoreId.data;
+
   const byFirebaseUid = await supabase.from('conseillers').select('*').eq('firebase_uid', uid).maybeSingle();
-  return byFirebaseUid.data ?? null;
+  if (byFirebaseUid.data) return byFirebaseUid.data;
+
+  if (email) {
+    const byEmail = await supabase.from('conseillers').select('*').eq('email', email.toLowerCase()).maybeSingle();
+    if (byEmail.data) {
+      // Auto-backfill firebase_uid so future lookups by UID work directly
+      if (!byEmail.data.firebase_uid) {
+        supabase.from('conseillers').update({ firebase_uid: uid }).eq('id', byEmail.data.id)
+          .then(() => console.log(`[conseiller] Backfilled firebase_uid=${uid} for conseiller ${byEmail.data.id}`));
+      }
+      return byEmail.data;
+    }
+  }
+
+  return null;
 }
 
 export async function requireConseiller(
@@ -24,8 +43,10 @@ export async function requireConseiller(
       return;
     }
 
-    const data = await getConseillerByUid(uid);
+    const email = (req as any).user?.email ?? null;
+    const data = await getConseillerByUid(uid, email);
     if (!data) {
+      console.error(`[requireConseiller] Not found: uid=${uid}, email=${email}`);
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas conseiller.", error: "Accès refusé : vous n'êtes pas conseiller." });
       return;
     }
@@ -52,8 +73,10 @@ export async function requireAdmin(
       return;
     }
 
-    const data = await getConseillerByUid(uid);
+    const email = (req as any).user?.email ?? null;
+    const data = await getConseillerByUid(uid, email);
     if (!data) {
+      console.error(`[requireAdmin] Not found: uid=${uid}, email=${email}`);
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas admin.", error: "Accès refusé : vous n'êtes pas admin." });
       return;
     }
@@ -83,7 +106,8 @@ export async function requireSuperAdmin(
       return;
     }
 
-    const data = await getConseillerByUid(uid);
+    const email = (req as any).user?.email ?? null;
+    const data = await getConseillerByUid(uid, email);
     if (!data) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas superAdmin.", error: "Accès refusé : vous n'êtes pas superAdmin." });
       return;

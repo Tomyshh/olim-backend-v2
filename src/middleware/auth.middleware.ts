@@ -31,26 +31,22 @@ async function resolveUidFromSupabaseUser(supabaseUserId: string, email?: string
     if (byEmail?.firebase_uid) return byEmail.firebase_uid;
   }
 
-  // 2. Check conseillers table (CRM users)
+  // 2. Check conseillers table (CRM users) — return the Supabase table id directly
   const { data: conseiller } = await supabase
     .from('conseillers')
-    .select('id, firestore_id, firebase_uid')
+    .select('id')
     .eq('id', supabaseUserId)
     .maybeSingle();
 
-  if (conseiller) {
-    return conseiller.firestore_id || conseiller.firebase_uid || conseiller.id;
-  }
+  if (conseiller) return conseiller.id;
 
   if (email) {
     const { data: conseillerByEmail } = await supabase
       .from('conseillers')
-      .select('id, firestore_id, firebase_uid')
+      .select('id')
       .eq('email', email.toLowerCase())
       .maybeSingle();
-    if (conseillerByEmail) {
-      return conseillerByEmail.firestore_id || conseillerByEmail.firebase_uid || conseillerByEmail.id;
-    }
+    if (conseillerByEmail) return conseillerByEmail.id;
   }
 
   return null;

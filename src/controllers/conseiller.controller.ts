@@ -33,29 +33,31 @@ export async function getMe(req: AuthenticatedRequest, res: Response) {
   `;
 
   let data: any = null;
-  let error: any = null;
 
+  // Lookup by id (Supabase UUID — primary for CRM auth)
   const byId = await supabase.from('conseillers').select(selectFields).eq('id', uid).maybeSingle();
-  if (byId.data) {
-    data = byId.data;
-  } else {
+  data = byId.data;
+
+  // Fallback: firestore_id (legacy)
+  if (!data) {
     const byFirestoreId = await supabase.from('conseillers').select(selectFields).eq('firestore_id', uid).maybeSingle();
-    if (byFirestoreId.data) {
-      data = byFirestoreId.data;
-    } else {
-      const byFirebaseUid = await supabase.from('conseillers').select(selectFields).eq('firebase_uid', uid).maybeSingle();
-      data = byFirebaseUid.data;
-      error = byFirebaseUid.error;
-    }
+    data = byFirestoreId.data;
   }
 
-  if (error) {
-    console.error('[conseiller/me] Supabase error:', error);
-    res.status(500).json({ message: 'Erreur serveur.' });
-    return;
+  // Fallback: firebase_uid
+  if (!data) {
+    const byFirebaseUid = await supabase.from('conseillers').select(selectFields).eq('firebase_uid', uid).maybeSingle();
+    data = byFirebaseUid.data;
+  }
+
+  // Fallback: email from the auth token
+  if (!data && req.user?.email) {
+    const byEmail = await supabase.from('conseillers').select(selectFields).eq('email', req.user.email.toLowerCase()).maybeSingle();
+    data = byEmail.data;
   }
 
   if (!data) {
+    console.error(`[conseiller/me] Not found: uid=${uid}, email=${req.user?.email}`);
     res.status(403).json({ message: "Accès refusé : vous n'êtes pas conseiller." });
     return;
   }
