@@ -2,13 +2,12 @@ import type { NextFunction, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.middleware.js';
 import { supabase } from '../services/supabase.service.js';
 
+/** Trouve le conseiller par uid : soit id (Supabase Auth = conseiller.id), soit firestore_id (legacy). */
 async function getConseillerByFirebaseUid(uid: string) {
-  const { data } = await supabase
-    .from('conseillers')
-    .select('*')
-    .eq('firestore_id', uid)
-    .single();
-  return data;
+  const byId = await supabase.from('conseillers').select('*').eq('id', uid).maybeSingle();
+  if (byId.data) return byId.data;
+  const byFirestoreId = await supabase.from('conseillers').select('*').eq('firestore_id', uid).maybeSingle();
+  return byFirestoreId.data ?? null;
 }
 
 export async function requireConseiller(
