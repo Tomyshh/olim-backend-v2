@@ -181,6 +181,161 @@ export async function loginEmail(req: AuthenticatedRequest, res: Response): Prom
   }
 }
 
+/** Connexion via Google : idToken Google → Supabase signInWithIdToken → customToken Firebase + tokens Supabase */
+export async function loginGoogle(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const idToken = String(req.body?.idToken ?? req.body?.id_token ?? '').trim();
+    if (!idToken) {
+      res.status(400).json({ message: 'idToken (Google) requis.' });
+      return;
+    }
+    if (!supabaseAuthClient) {
+      res.status(503).json({ message: 'Supabase auth non configuré.', code: 'supabase_auth_not_configured' });
+      return;
+    }
+
+    const { data: authData, error: authError } = await supabaseAuthClient.auth.signInWithIdToken({
+      provider: 'google',
+      token: idToken,
+    });
+    if (authError || !authData.user) {
+      res.status(401).json({ message: authError?.message ?? 'Connexion Google invalide.', code: 'supabase_id_token_failed' });
+      return;
+    }
+
+    let firebaseUid: string | null = null;
+    const authUserId = authData.user.id;
+    const email = (authData.user.email ?? '').trim().toLowerCase();
+
+    const byAuthUserId = await supabase.from('clients').select('firebase_uid').eq('auth_user_id', authUserId).maybeSingle();
+    if (!byAuthUserId.error && (byAuthUserId.data as any)?.firebase_uid) {
+      firebaseUid = (byAuthUserId.data as any).firebase_uid;
+    }
+    if (!firebaseUid && email) {
+      const byEmail = await supabase.from('clients').select('firebase_uid').eq('email', email).maybeSingle();
+      if (!byEmail.error && (byEmail.data as any)?.firebase_uid) {
+        firebaseUid = (byEmail.data as any).firebase_uid;
+      }
+    }
+    if (!firebaseUid) {
+      try {
+        const user = await getAuth().getUserByEmail(email || authData.user.email!);
+        firebaseUid = user.uid;
+      } catch (_) {
+        firebaseUid = null;
+      }
+    }
+
+    if (!firebaseUid) {
+      res.status(404).json({
+        message: 'Compte non trouvé. Inscrivez-vous d\'abord avec votre numéro ou email.',
+        code: 'firebase_mapping_not_found',
+      });
+      return;
+    }
+
+    try {
+      await supabase
+        .from('clients')
+        .update({ auth_user_id: authUserId, updated_at: new Date().toISOString() })
+        .eq('firebase_uid', firebaseUid);
+    } catch (_) { /* best-effort */ }
+
+    const customToken = await getAuth().createCustomToken(firebaseUid, { authProvider: 'supabase_google' });
+    res.json({
+      ok: true,
+      provider: 'supabase',
+      customToken,
+      supabase: {
+        access_token: authData.session?.access_token ?? null,
+        refresh_token: authData.session?.refresh_token ?? null,
+        expires_in: authData.session?.expires_in ?? null,
+        token_type: 'bearer',
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+/** Connexion via Apple : identityToken Apple → Supabase signInWithIdToken → customToken Firebase + tokens Supabase */
+export async function loginApple(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const idToken = String(req.body?.idToken ?? req.body?.identity_token ?? '').trim();
+    if (!idToken) {
+      res.status(400).json({ message: 'idToken (Apple) requis.' });
+      return;
+    }
+    if (!supabaseAuthClient) {
+      res.status(503).json({ message: 'Supabase auth non configuré.', code: 'supabase_auth_not_configured' });
+      return;
+    }
+
+    const options: { provider: 'apple'; token: string; nonce?: string } = { provider: 'apple', token: idToken };
+    const rawNonce = req.body?.rawNonce ?? req.body?.raw_nonce;
+    if (rawNonce && typeof rawNonce === 'string') options.nonce = rawNonce;
+
+    const { data: authData, error: authError } = await supabaseAuthClient.auth.signInWithIdToken(options);
+    if (authError || !authData.user) {
+      res.status(401).json({ message: authError?.message ?? 'Connexion Apple invalide.', code: 'supabase_id_token_failed' });
+      return;
+    }
+
+    let firebaseUid: string | null = null;
+    const authUserId = authData.user.id;
+    const email = (authData.user.email ?? '').trim().toLowerCase();
+
+    const byAuthUserId = await supabase.from('clients').select('firebase_uid').eq('auth_user_id', authUserId).maybeSingle();
+    if (!byAuthUserId.error && (byAuthUserId.data as any)?.firebase_uid) {
+      firebaseUid = (byAuthUserId.data as any).firebase_uid;
+    }
+    if (!firebaseUid && email) {
+      const byEmail = await supabase.from('clients').select('firebase_uid').eq('email', email).maybeSingle();
+      if (!byEmail.error && (byEmail.data as any)?.firebase_uid) {
+        firebaseUid = (byEmail.data as any).firebase_uid;
+      }
+    }
+    if (!firebaseUid && email) {
+      try {
+        const user = await getAuth().getUserByEmail(email);
+        firebaseUid = user.uid;
+      } catch (_) {
+        firebaseUid = null;
+      }
+    }
+
+    if (!firebaseUid) {
+      res.status(404).json({
+        message: 'Compte non trouvé. Inscrivez-vous d\'abord avec votre numéro ou email.',
+        code: 'firebase_mapping_not_found',
+      });
+      return;
+    }
+
+    try {
+      await supabase
+        .from('clients')
+        .update({ auth_user_id: authUserId, updated_at: new Date().toISOString() })
+        .eq('firebase_uid', firebaseUid);
+    } catch (_) { /* best-effort */ }
+
+    const customToken = await getAuth().createCustomToken(firebaseUid, { authProvider: 'supabase_apple' });
+    res.json({
+      ok: true,
+      provider: 'supabase',
+      customToken,
+      supabase: {
+        access_token: authData.session?.access_token ?? null,
+        refresh_token: authData.session?.refresh_token ?? null,
+        expires_in: authData.session?.expires_in ?? null,
+        token_type: 'bearer',
+      },
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
 // ── Password Reset (Supabase OTP) ──────────────────────────────────────────
 
 const resetTokens = new Map<string, { email: string; expiresAt: number }>();

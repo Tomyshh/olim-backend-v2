@@ -24,6 +24,9 @@ router.post('/logout', authenticateToken, asyncHandler(authController.logout as 
 
 // Login email/password (Supabase-first, customToken Firebase)
 router.post('/login-email', asyncHandler(authController.loginEmail as any));
+// Login Google/Apple via Supabase (idToken → Supabase session + customToken Firebase)
+router.post('/login-google', asyncHandler(authController.loginGoogle as any));
+router.post('/login-apple', asyncHandler(authController.loginApple as any));
 
 // Supabase token refresh
 router.post('/refresh', asyncHandler(authController.refreshToken as any));
