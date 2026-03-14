@@ -2,12 +2,14 @@ import type { NextFunction, Response } from 'express';
 import type { AuthenticatedRequest } from './auth.middleware.js';
 import { supabase } from '../services/supabase.service.js';
 
-/** Trouve le conseiller par uid : soit id (Supabase Auth = conseiller.id), soit firestore_id (legacy). */
-async function getConseillerByFirebaseUid(uid: string) {
+/** Trouve le conseiller par uid : id (Supabase Auth), firestore_id (legacy), ou firebase_uid. */
+async function getConseillerByUid(uid: string) {
   const byId = await supabase.from('conseillers').select('*').eq('id', uid).maybeSingle();
   if (byId.data) return byId.data;
   const byFirestoreId = await supabase.from('conseillers').select('*').eq('firestore_id', uid).maybeSingle();
-  return byFirestoreId.data ?? null;
+  if (byFirestoreId.data) return byFirestoreId.data;
+  const byFirebaseUid = await supabase.from('conseillers').select('*').eq('firebase_uid', uid).maybeSingle();
+  return byFirebaseUid.data ?? null;
 }
 
 export async function requireConseiller(
@@ -22,7 +24,7 @@ export async function requireConseiller(
       return;
     }
 
-    const data = await getConseillerByFirebaseUid(uid);
+    const data = await getConseillerByUid(uid);
     if (!data) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas conseiller.", error: "Accès refusé : vous n'êtes pas conseiller." });
       return;
@@ -30,6 +32,7 @@ export async function requireConseiller(
 
     (req as any).isAdmin = data.is_admin === true;
     (req as any).conseillerName = data.name || '';
+    (req as any).conseillerId = data.id;
 
     next();
   } catch (err) {
@@ -49,7 +52,7 @@ export async function requireAdmin(
       return;
     }
 
-    const data = await getConseillerByFirebaseUid(uid);
+    const data = await getConseillerByUid(uid);
     if (!data) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas admin.", error: "Accès refusé : vous n'êtes pas admin." });
       return;
@@ -59,6 +62,8 @@ export async function requireAdmin(
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas admin.", error: "Accès refusé : vous n'êtes pas admin." });
       return;
     }
+
+    (req as any).conseillerId = data.id;
 
     next();
   } catch (err) {
@@ -78,7 +83,7 @@ export async function requireSuperAdmin(
       return;
     }
 
-    const data = await getConseillerByFirebaseUid(uid);
+    const data = await getConseillerByUid(uid);
     if (!data) {
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas superAdmin.", error: "Accès refusé : vous n'êtes pas superAdmin." });
       return;
@@ -89,6 +94,8 @@ export async function requireSuperAdmin(
       res.status(403).json({ message: "Accès refusé : vous n'êtes pas superAdmin.", error: "Accès refusé : vous n'êtes pas superAdmin." });
       return;
     }
+
+    (req as any).conseillerId = data.id;
 
     next();
   } catch (err) {

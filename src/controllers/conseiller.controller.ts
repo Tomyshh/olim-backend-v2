@@ -14,26 +14,40 @@ export async function getMe(req: AuthenticatedRequest, res: Response) {
     return;
   }
 
-  const { data, error } = await supabase
-    .from('conseillers')
-    .select(`
+  // Try all possible UID columns: id (Supabase UUID), firestore_id (legacy), firebase_uid
+  const selectFields = `
+    id,
+    firestore_id,
+    firebase_uid,
+    name,
+    email,
+    is_admin,
+    is_super_admin,
+    role_id,
+    roles (
       id,
-      firestore_id,
-      firebase_uid,
-      name,
-      email,
-      is_admin,
-      is_super_admin,
-      role_id,
-      roles (
-        id,
-        slug,
-        label,
-        has_leads_access
-      )
-    `)
-    .or(`firestore_id.eq.${uid},firebase_uid.eq.${uid}`)
-    .maybeSingle();
+      slug,
+      label,
+      has_leads_access
+    )
+  `;
+
+  let data: any = null;
+  let error: any = null;
+
+  const byId = await supabase.from('conseillers').select(selectFields).eq('id', uid).maybeSingle();
+  if (byId.data) {
+    data = byId.data;
+  } else {
+    const byFirestoreId = await supabase.from('conseillers').select(selectFields).eq('firestore_id', uid).maybeSingle();
+    if (byFirestoreId.data) {
+      data = byFirestoreId.data;
+    } else {
+      const byFirebaseUid = await supabase.from('conseillers').select(selectFields).eq('firebase_uid', uid).maybeSingle();
+      data = byFirebaseUid.data;
+      error = byFirebaseUid.error;
+    }
+  }
 
   if (error) {
     console.error('[conseiller/me] Supabase error:', error);

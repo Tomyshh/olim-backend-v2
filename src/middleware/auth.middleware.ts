@@ -9,10 +9,11 @@ export interface AuthenticatedRequest extends Request {
 }
 
 /**
- * Resolve a Supabase auth user ID to the Firebase UID used internally.
- * Falls back to the Supabase user ID if no mapping exists.
+ * Resolve a Supabase auth user ID to the internal UID used across the app.
+ * Checks clients first (for mobile app), then conseillers (for CRM).
  */
-async function resolveFirebaseUidFromSupabaseUser(supabaseUserId: string, email?: string): Promise<string | null> {
+async function resolveUidFromSupabaseUser(supabaseUserId: string, email?: string): Promise<string | null> {
+  // 1. Check clients table (mobile app users)
   const { data } = await supabase
     .from('clients')
     .select('firebase_uid')
@@ -30,6 +31,28 @@ async function resolveFirebaseUidFromSupabaseUser(supabaseUserId: string, email?
     if (byEmail?.firebase_uid) return byEmail.firebase_uid;
   }
 
+  // 2. Check conseillers table (CRM users)
+  const { data: conseiller } = await supabase
+    .from('conseillers')
+    .select('id, firestore_id, firebase_uid')
+    .eq('id', supabaseUserId)
+    .maybeSingle();
+
+  if (conseiller) {
+    return conseiller.firestore_id || conseiller.firebase_uid || conseiller.id;
+  }
+
+  if (email) {
+    const { data: conseillerByEmail } = await supabase
+      .from('conseillers')
+      .select('id, firestore_id, firebase_uid')
+      .eq('email', email.toLowerCase())
+      .maybeSingle();
+    if (conseillerByEmail) {
+      return conseillerByEmail.firestore_id || conseillerByEmail.firebase_uid || conseillerByEmail.id;
+    }
+  }
+
   return null;
 }
 
@@ -41,18 +64,19 @@ async function trySupabaseAuth(token: string): Promise<{ uid: string; user: any 
     const { data, error } = await supabase.auth.getUser(token);
     if (error || !data?.user) return null;
 
-    const firebaseUid = await resolveFirebaseUidFromSupabaseUser(
+    const resolvedUid = await resolveUidFromSupabaseUser(
       data.user.id,
       data.user.email ?? undefined
     );
 
-    if (!firebaseUid) return null;
+    // For conseillers who only exist in Supabase, use their Supabase user ID as uid
+    const uid = resolvedUid || data.user.id;
 
     return {
-      uid: firebaseUid,
+      uid,
       user: {
         ...data.user,
-        uid: firebaseUid,
+        uid,
         supabaseUserId: data.user.id,
         email: data.user.email,
         phone_number: data.user.phone,
