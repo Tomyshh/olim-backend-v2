@@ -128,7 +128,7 @@ export async function loginEmail(req: AuthenticatedRequest, res: Response): Prom
     }
 
     if (!firebaseUid) {
-      // Dernier fallback de mapping: Firebase Auth par email.
+      // Dernier fallback: Firebase Auth par email.
       try {
         const user = await getAuth().getUserByEmail(email);
         firebaseUid = user.uid;
@@ -137,7 +137,27 @@ export async function loginEmail(req: AuthenticatedRequest, res: Response): Prom
       }
     }
 
+    // Si toujours pas de firebaseUid, vérifier si c'est un conseiller (Supabase only) → retourner uniquement les tokens Supabase
     if (!firebaseUid) {
+      const { data: conseiller } = await supabase
+        .from('conseillers')
+        .select('id, name')
+        .eq('id', authData.user.id)
+        .maybeSingle();
+      if (conseiller) {
+        res.json({
+          ok: true,
+          provider: 'supabase',
+          customToken: null,
+          supabase: {
+            access_token: authData.session?.access_token ?? null,
+            refresh_token: authData.session?.refresh_token ?? null,
+            expires_in: authData.session?.expires_in ?? null,
+            token_type: 'bearer',
+          },
+        });
+        return;
+      }
       res.status(404).json({
         message: 'Compte Supabase trouvé mais mapping Firebase introuvable.',
         code: 'firebase_mapping_not_found',
