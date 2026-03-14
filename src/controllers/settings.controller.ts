@@ -7,6 +7,7 @@ import {
   resolveSupabaseClientId,
   dualWriteClient,
 } from '../services/dualWrite.service.js';
+import { supabaseFirstRead } from '../services/supabaseFirstRead.service.js';
 
 function mapSettingsToSupabase(
   clientSupabaseId: string,
@@ -54,8 +55,24 @@ export async function updatePreferences(req: AuthenticatedRequest, res: Response
       .collection('settings')
       .doc('preferences');
 
-    const existing = await prefsRef.get();
-    const current = existing.exists ? (existing.data() ?? {}) : {};
+    const current = await supabaseFirstRead<Record<string, any>>(
+      async () => {
+        const clientId = await resolveSupabaseClientId(uid);
+        if (!clientId) return null as any;
+        const { data, error } = await supabase
+          .from('client_settings')
+          .select('*')
+          .eq('client_id', clientId)
+          .maybeSingle();
+        if (error) throw error;
+        return data?.preferences ?? data ?? {};
+      },
+      async () => {
+        const doc = await prefsRef.get();
+        return doc.exists ? (doc.data() ?? {}) : {};
+      },
+      `readPreferences(${uid})`
+    );
     const merged = { ...current, ...updates };
 
     await prefsRef.set(merged, { merge: true });

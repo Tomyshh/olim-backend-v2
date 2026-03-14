@@ -17,6 +17,7 @@ import {
 import { validateAndApplyPromo, type PromoValidationOk } from '../services/promoCode.service.js';
 import { computeMembershipPricing } from '../services/membershipPricing.service.js';
 import { dualWriteSubscription, dualWriteClient, dualWritePaymentCredential, dualWriteToSupabase, dualWritePromoRevert, dualWritePromotion, resolveSupabaseClientId } from '../services/dualWrite.service.js';
+import { readClientInfo, readSubscription, readAllPaymentCredentials, readPaymentCredential } from '../services/supabaseFirstRead.service.js';
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -144,16 +145,26 @@ async function loadClientAndSubscription(params: { clientId: string }): Promise<
 }> {
   const db = getFirestore();
   const clientRef = db.collection('Clients').doc(params.clientId);
-  const [clientSnap, subSnap] = await Promise.all([
-    clientRef.get(),
-    clientRef.collection('subscription').doc('current').get()
+
+  const [clientData, subResult] = await Promise.all([
+    readClientInfo(params.clientId, async () => {
+      const snap = await clientRef.get();
+      if (!snap.exists) return null as any;
+      return (snap.data() || {}) as any;
+    }),
+    readSubscription(params.clientId, async () => {
+      const snap = await clientRef.collection('subscription').doc('current').get();
+      return { exists: snap.exists, data: snap.exists ? ((snap.data() || {}) as any) : null };
+    })
   ]);
-  if (!clientSnap.exists) throw new HttpError(404, 'Client introuvable.');
+
+  if (!clientData) throw new HttpError(404, 'Client introuvable.');
+
   return {
     clientRef,
-    client: (clientSnap.data() || {}) as any,
+    client: clientData,
     subscriptionRef: clientRef.collection('subscription').doc('current'),
-    subscription: subSnap.exists ? ((subSnap.data() || {}) as any) : null
+    subscription: subResult.exists ? subResult.data : null
   };
 }
 
@@ -551,10 +562,12 @@ export async function createOrReplaceClientSubscription(req: AuthenticatedReques
 
   // Charger buyerKey depuis Payment credentials/{paymentCredentialId}
   const db = getFirestore();
-  const paymentRef = clientRef.collection('Payment credentials').doc(paymentCredentialId);
-  const paymentSnap = await paymentRef.get();
-  if (!paymentSnap.exists) throw new HttpError(404, 'Payment credential introuvable.');
-  const buyerKey = pickString((paymentSnap.data() || {})['Isracard Key']);
+  const paymentResult = await readPaymentCredential(clientId, paymentCredentialId, async () => {
+    const snap = await clientRef.collection('Payment credentials').doc(paymentCredentialId).get();
+    return { exists: snap.exists, data: snap.exists ? ((snap.data() || {}) as Record<string, any>) : null };
+  });
+  if (!paymentResult.exists || !paymentResult.data) throw new HttpError(404, 'Payment credential introuvable.');
+  const buyerKey = pickString(paymentResult.data['Isracard Key']);
   if (!buyerKey) throw new HttpError(400, 'Payment credential invalide: buyerKey PayMe manquant.');
 
   let salePaymeId: string | null = null;
@@ -1433,12 +1446,17 @@ export async function setClientSubscriptionCard(req: AuthenticatedRequest, res: 
 
   const db = getFirestore();
   const clientRef = db.collection('Clients').doc(clientId);
-  const credsSnap = await clientRef.collection('Payment credentials').get();
-  if (credsSnap.empty) throw new HttpError(404, 'Aucune carte trouvée.');
 
-  const targetExists = credsSnap.docs.some((d) => d.id === paymentCredentialId);
+  const creds = await readAllPaymentCredentials(clientId, async () => {
+    const snap = await clientRef.collection('Payment credentials').get();
+    return snap.docs.map(d => ({ id: d.id, data: d.data() as Record<string, any> }));
+  });
+  if (creds.length === 0) throw new HttpError(404, 'Aucune carte trouvée.');
+
+  const targetExists = creds.some((c) => c.id === paymentCredentialId);
   if (!targetExists) throw new HttpError(404, 'Payment credential introuvable.');
 
+  const credsSnap = await clientRef.collection('Payment credentials').get();
   const batch = db.batch();
   for (const doc of credsSnap.docs) {
     batch.set(doc.ref, { isSubscriptionCard: doc.id === paymentCredentialId }, { merge: true });
@@ -1483,10 +1501,12 @@ export async function createClientCustomSale(req: AuthenticatedRequest, res: Res
   if (!description) throw new HttpError(400, 'description requise.');
   const installments = coerceOptionalPositiveInt(body.installments);
 
-  const db = getFirestore();
-  const paymentSnap = await db.collection('Clients').doc(clientId).collection('Payment credentials').doc(paymentCredentialId).get();
-  if (!paymentSnap.exists) throw new HttpError(404, 'Payment credential introuvable.');
-  const buyerKey = pickString((paymentSnap.data() || {})['Isracard Key']);
+  const paymentResult = await readPaymentCredential(clientId, paymentCredentialId, async () => {
+    const snap = await getFirestore().collection('Clients').doc(clientId).collection('Payment credentials').doc(paymentCredentialId).get();
+    return { exists: snap.exists, data: snap.exists ? ((snap.data() || {}) as Record<string, any>) : null };
+  });
+  if (!paymentResult.exists || !paymentResult.data) throw new HttpError(404, 'Payment credential introuvable.');
+  const buyerKey = pickString(paymentResult.data['Isracard Key']);
   if (!buyerKey) throw new HttpError(400, 'Payment credential invalide: buyerKey PayMe manquant.');
 
   const sale = await paymeGenerateSale({

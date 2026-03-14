@@ -25,6 +25,9 @@ router.post('/logout', authenticateToken, asyncHandler(authController.logout as 
 // Login email/password (Supabase-first, customToken Firebase)
 router.post('/login-email', asyncHandler(authController.loginEmail as any));
 
+// Supabase token refresh
+router.post('/refresh', asyncHandler(authController.refreshToken as any));
+
 // Password reset flow (Supabase OTP)
 router.post('/forgot-password', asyncHandler(authController.forgotPassword as any));
 router.post('/verify-reset-otp', asyncHandler(authController.verifyResetOtp as any));

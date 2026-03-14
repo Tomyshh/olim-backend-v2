@@ -3,6 +3,7 @@ import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { getFirestore, admin } from '../../config/firebase.js';
 import { supabase } from '../../services/supabase.service.js';
 import { calculateAdjustedProcessTime } from '../../utils/processTime.js';
+import { readClientInfo, readAvailableConseillers } from '../../services/supabaseFirstRead.service.js';
 
 type RequestSource = 'APP' | 'VOICE' | 'SHARE' | 'SYSTEM';
 type MembershipType = 'Pack Start' | 'Pack Essential' | 'Pack VIP' | 'Pack Elite' | 'Visitor' | string;
@@ -130,7 +131,6 @@ async function resolveAssignedTo(params: { uid: string; requestType: string; req
   const rt = requestType.trim().toLowerCase();
   const rc = requestCategory.trim();
 
-  // Règles "Internal System"
   if (rt === 'internal system') {
     if (rc === 'Vérifier remboursement') return 'Yaacov';
     return 'Odelia';
@@ -139,77 +139,51 @@ async function resolveAssignedTo(params: { uid: string; requestType: string; req
   const db = getFirestore();
   const lang = String(clientLanguage || '').trim().toLowerCase() || 'fr';
 
-  // On tente de choisir un conseiller présent, compatible langue, avec la charge la plus basse (now_request)
-  // Stratégie 1 : requête composite (nécessite un index Firestore composite)
-  try {
-    const q = db
-      .collection('Conseillers2')
-      .where('isPresent', '==', true)
-      .where(`language.${lang}`, '==', true)
-      .orderBy('now_request', 'asc')
-      .limit(1);
-    const snap = await q.get();
-    if (!snap.empty) {
-      const d = snap.docs[0]!.data() as any;
-      const name = String(d?.name || '').trim();
-      if (name) return name;
-    }
-  } catch (err) {
-    console.warn('[resolveAssignedTo] Requête composite lang+isPresent échouée (index manquant ?), fallback en cours', err);
-  }
-
-  // Stratégie 2 : requête composite sans langue (nécessite un index Firestore composite)
-  try {
-    const q2 = db.collection('Conseillers2').where('isPresent', '==', true).orderBy('now_request', 'asc').limit(1);
-    const snap2 = await q2.get();
-    if (!snap2.empty) {
-      const d = snap2.docs[0]!.data() as any;
-      const name = String(d?.name || '').trim();
-      if (name) return name;
-    }
-  } catch (err) {
-    console.warn('[resolveAssignedTo] Requête composite isPresent+orderBy échouée (index manquant ?), fallback en cours', err);
-  }
-
-  // Stratégie 3 : fallback sans index composite — simple filtre isPresent, tri en mémoire
-  try {
+  // Supabase-first: read available conseillers, fallback to Firestore
+  const conseillers = await readAvailableConseillers(async () => {
+    // Firestore fallback with 3 strategies
+    try {
+      const q = db.collection('Conseillers2').where('isPresent', '==', true).where(`language.${lang}`, '==', true).orderBy('now_request', 'asc').limit(1);
+      const snap = await q.get();
+      if (!snap.empty) return snap.docs.map(d => d.data() as any);
+    } catch { /* index missing */ }
+    try {
+      const q2 = db.collection('Conseillers2').where('isPresent', '==', true).orderBy('now_request', 'asc').limit(1);
+      const snap2 = await q2.get();
+      if (!snap2.empty) return snap2.docs.map(d => d.data() as any);
+    } catch { /* index missing */ }
     const q3 = db.collection('Conseillers2').where('isPresent', '==', true);
     const snap3 = await q3.get();
-    if (!snap3.empty) {
-      const docs = snap3.docs
-        .map((d) => d.data() as any)
-        .filter((d) => d?.name);
+    return snap3.docs.map(d => d.data() as any);
+  });
 
-      // Trier par now_request (asc), préférer ceux qui parlent la langue du client
-      docs.sort((a: any, b: any) => {
-        const aLang = a?.language?.[lang] === true ? 0 : 1;
-        const bLang = b?.language?.[lang] === true ? 0 : 1;
-        if (aLang !== bLang) return aLang - bLang;
-        return (Number(a?.now_request) || 0) - (Number(b?.now_request) || 0);
-      });
-
-      const best = docs[0];
-      if (best) {
-        const name = String(best.name).trim();
-        if (name) return name;
-      }
+  if (conseillers && conseillers.length > 0) {
+    const docs = conseillers.filter((d: any) => d?.name);
+    docs.sort((a: any, b: any) => {
+      const aLang = a?.language?.[lang] === true ? 0 : 1;
+      const bLang = b?.language?.[lang] === true ? 0 : 1;
+      if (aLang !== bLang) return aLang - bLang;
+      return (Number(a?.now_request) || 0) - (Number(b?.now_request) || 0);
+    });
+    const best = docs[0];
+    if (best) {
+      const name = String(best.name).trim();
+      if (name) return name;
     }
-  } catch (err) {
-    console.error('[resolveAssignedTo] Fallback isPresent simple échoué', err);
   }
 
-  // Fallback ultime demandé
   void uid;
   return 'Marie';
 }
 
 async function getClientContext(uid: string): Promise<{ language: string | null; membership: MembershipType | null; profile: Record<string, unknown> }> {
   const db = getFirestore();
-  const snap = await db.collection('Clients').doc(uid).get();
-  const profile = (snap.data() as Record<string, unknown>) || {};
+  const profile = await readClientInfo(uid, async () => {
+    const snap = await db.collection('Clients').doc(uid).get();
+    return (snap.data() as Record<string, unknown>) || {};
+  });
   const language = (typeof profile.language === 'string' ? profile.language : null) || null;
 
-  // membership: freeAccess > membership (new) > Membership (legacy)
   const freeAccess = isRecord(profile.freeAccess) ? profile.freeAccess : null;
   const freeMembership = freeAccess && typeof freeAccess.membership === 'string' ? freeAccess.membership : null;
   if (freeAccess && freeAccess.isEnabled === true && freeMembership) {

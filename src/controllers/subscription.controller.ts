@@ -22,6 +22,7 @@ import {
 } from '../services/securden.service.js';
 import { dualWriteSubscription, dualWritePaymentCredential, dualWriteDelete, dualWriteToSupabase, dualWritePromoRevert, dualWritePromotion, mapRefundRequestToSupabase, resolveSupabaseClientId } from '../services/dualWrite.service.js';
 import { supabase } from '../services/supabase.service.js';
+import { readClientInfo, readSubscription, readPaymentCredential, readAllPaymentCredentials } from '../services/supabaseFirstRead.service.js';
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -220,19 +221,20 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
   try {
     const uid = req.uid!;
     const db = getFirestore();
-    // IMPORTANT (2026-01): l'entitlement doit se baser UNIQUEMENT sur
-    // Clients/{uid}/subscription/current (le doc principal Clients/{uid} est legacy/déprécié pour le statut d'abonnement).
     const clientRef = db.collection('Clients').doc(uid);
     const currentSubscriptionRef = clientRef.collection('subscription').doc('current');
-    const currentSubscriptionDoc = await currentSubscriptionRef.get();
 
-    // Si aucun doc subscription/current => on considère "non abonné" (Visitor)
-    if (!currentSubscriptionDoc.exists) {
+    // Supabase-first: read subscription, fallback to Firestore
+    const subResult = await readSubscription(uid, async () => {
+      const doc = await currentSubscriptionRef.get();
+      return { exists: doc.exists, data: doc.exists ? (doc.data() || {}) as Record<string, any> : null };
+    });
+
+    if (!subResult.exists || !subResult.data) {
       res.status(200).json({
         success: true,
         subscription: {
           uid,
-          // Note: `sub_status` gardé en alias (legacy) pour compatibilité; source préférée: `status`.
           payme: { subCode: null, subId: null, status: null, sub_status: null, next_payment_date: null },
           entitlement: { isEntitled: false, state: 'none', accessUntil: null, hadSubscription: false },
           updatedAt: new Date().toISOString()
@@ -241,9 +243,9 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
       return;
     }
 
-    let subscription = (currentSubscriptionDoc.data() || {}) as Record<string, any>;
+    let subscription = subResult.data as Record<string, any>;
 
-    if (currentSubscriptionDoc.exists) {
+    if (subResult.exists) {
       const subData = subscription;
 
       // Hook "sans cron": réversion automatique promo multi-cycles (mensuel) si revertAt dépassé
@@ -382,15 +384,18 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     let hadSubscription = subCode != null;
     if (!hadSubscription) {
       try {
-        const clientDoc = await clientRef.get();
-        const clientEmail = pickString((clientDoc.data() || {} as any).Email);
+        const clientData = await readClientInfo(uid, async () => {
+          const doc = await clientRef.get();
+          return (doc.data() || {}) as Record<string, any>;
+        });
+        const clientEmail = pickString(clientData?.Email);
         if (clientEmail) {
           const allSubs = await paymeListSubscriptions();
           const emailLc = clientEmail.toLowerCase();
           hadSubscription = allSubs.some((it) => (it.email || '').toLowerCase() === emailLc);
         }
       } catch {
-        // best effort: en cas d'erreur PayMe, on assume pas d'abonnement antérieur
+        // best effort
       }
     }
 
@@ -400,8 +405,7 @@ export async function getSubscriptionStatus(req: AuthenticatedRequest, res: Resp
     }
 
     // ---- Firestore maintenance (best effort) ----
-    // Champs source de vérité: Clients/{uid}/subscription/current
-    if (currentSubscriptionDoc.exists) {
+    if (subResult.exists) {
       const patch: Record<string, any> = {
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       };
@@ -511,13 +515,22 @@ export async function quoteSubscriptionChange(req: AuthenticatedRequest, res: Re
     const cardId = pickString(body.cardId) || null;
 
     const clientRef = db.collection('Clients').doc(uid);
-    const [clientSnap, subSnap] = await Promise.all([clientRef.get(), clientRef.collection('subscription').doc('current').get()]);
-    if (!clientSnap.exists) {
+
+    const clientData = await readClientInfo(uid, async () => {
+      const snap = await clientRef.get();
+      if (!snap.exists) return null as any;
+      return (snap.data() || {}) as Record<string, any>;
+    });
+    if (!clientData) {
       res.status(404).json({ error: 'Client introuvable.' });
       return;
     }
 
-    const current = (subSnap.data() || {}) as Record<string, any>;
+    const subResult = await readSubscription(uid, async () => {
+      const doc = await clientRef.collection('subscription').doc('current').get();
+      return { exists: doc.exists, data: doc.exists ? (doc.data() || {}) as Record<string, any> : null };
+    });
+    const current = (subResult.data || {}) as Record<string, any>;
     const currentPlanType = pickString(current?.plan?.type) || '';
     const currentMembership = pickString(current?.plan?.membership) || '';
     const currentPrice = Number(current?.plan?.price || 0);
@@ -813,14 +826,23 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     }
 
     const clientRef = db.collection('Clients').doc(uid);
-    const [clientSnap, subSnap] = await Promise.all([clientRef.get(), clientRef.collection('subscription').doc('current').get()]);
 
-    if (!clientSnap.exists) {
+    const clientData = await readClientInfo(uid, async () => {
+      const snap = await clientRef.get();
+      if (!snap.exists) return null as any;
+      return (snap.data() || {}) as Record<string, any>;
+    });
+    if (!clientData) {
       res.status(404).json({ error: 'Client introuvable.' });
       return;
     }
 
-    const existingSub = (subSnap.data() || {}) as Record<string, any>;
+    const subResult = await readSubscription(uid, async () => {
+      const doc = await clientRef.collection('subscription').doc('current').get();
+      return { exists: doc.exists, data: doc.exists ? (doc.data() || {}) as Record<string, any> : null };
+    });
+
+    const existingSub = (subResult.data || {}) as Record<string, any>;
     const currentPlanType = pickString(existingSub?.plan?.type);
     const currentMembership = pickString(existingSub?.plan?.membership);
     const currentSubId = pickString(existingSub?.payme?.subID) || pickString(existingSub?.paymeSubID) || null;
@@ -887,7 +909,6 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
       changeQuote = q;
     }
 
-    const clientData = (clientSnap.data() || {}) as Record<string, any>;
     const email = pickString(clientData.Email);
     if (!email) {
       res.status(400).json({ error: 'Email requis pour PayMe.', code: 'EMAIL_REQUIRED' });
@@ -904,12 +925,15 @@ export async function subscribe(req: AuthenticatedRequest, res: Response): Promi
     let createdCard: { id: string; paymentDoc: Record<string, any> } | null = null;
 
     if (paymentCredentialId) {
-      const paymentSnap = await clientRef.collection('Payment credentials').doc(paymentCredentialId).get();
-      if (!paymentSnap.exists) {
+      const paymentResult = await readPaymentCredential(uid, paymentCredentialId, async () => {
+        const snap = await clientRef.collection('Payment credentials').doc(paymentCredentialId).get();
+        return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+      });
+      if (!paymentResult.exists || !paymentResult.data) {
         res.status(404).json({ error: 'Payment credential introuvable.', code: 'CARD_NOT_FOUND' });
         return;
       }
-      buyerKey = pickString((paymentSnap.data() || {})['Isracard Key']);
+      buyerKey = pickString(paymentResult.data['Isracard Key']);
       if (!buyerKey) {
         res.status(400).json({ error: 'Carte invalide (buyerKey manquant).', code: 'CARD_INVALID' });
         return;
@@ -1443,14 +1467,16 @@ export async function addCard(req: AuthenticatedRequest, res: Response): Promise
       return;
     }
 
-    // Charger client (nom + email) pour PayMe
     const clientRef = db.collection('Clients').doc(uid);
-    const clientSnap = await clientRef.get();
-    if (!clientSnap.exists) {
+    const clientData = await readClientInfo(uid, async () => {
+      const snap = await clientRef.get();
+      if (!snap.exists) return null as any;
+      return (snap.data() || {}) as Record<string, any>;
+    });
+    if (!clientData) {
       res.status(404).json({ error: 'Client introuvable.' });
       return;
     }
-    const clientData = (clientSnap.data() || {}) as Record<string, any>;
     const firstName = pickString(clientData['First Name'] ?? clientData.firstName);
     const lastName = pickString(clientData['Last Name'] ?? clientData.lastName);
     const clientName = `${firstName} ${lastName}`.trim() || pickString(clientData.Email) || uid;
@@ -1575,8 +1601,11 @@ export async function updateCard(req: AuthenticatedRequest, res: Response): Prom
     delete updates.buyerKey;
 
     const paymentRef = db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId);
-    const snap = await paymentRef.get();
-    if (snap.exists) {
+    const paymentResult = await readPaymentCredential(uid, cardId, async () => {
+      const snap = await paymentRef.get();
+      return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+    });
+    if (paymentResult.exists) {
       await paymentRef.set(
         {
           ...updates,
@@ -1585,7 +1614,7 @@ export async function updateCard(req: AuthenticatedRequest, res: Response): Prom
         },
         { merge: true }
       );
-      dualWritePaymentCredential(uid, cardId, { ...(snap.data() || {}), ...updates }).catch(() => {});
+      dualWritePaymentCredential(uid, cardId, { ...(paymentResult.data || {}), ...updates }).catch(() => {});
       res.json({ message: 'Card updated', cardId });
       return;
     }
@@ -1604,10 +1633,11 @@ export async function deleteCard(req: AuthenticatedRequest, res: Response): Prom
     const clientRef = db.collection('Clients').doc(uid);
     const paymentRef = clientRef.collection('Payment credentials').doc(cardId);
 
-    // Lire d'abord pour récupérer l'ID Securden (si présent), afin d'assurer la suppression des deux côtés.
-    const snap = await paymentRef.get().catch(() => null as any);
-    const data = snap?.exists ? (snap.data() as any) : null;
-    const securdenId = typeof data?.['Securden ID'] === 'string' ? String(data['Securden ID']).trim() : '';
+    const paymentResult = await readPaymentCredential(uid, cardId, async () => {
+      const snap = await paymentRef.get().catch(() => null as any);
+      return { exists: !!snap?.exists, data: snap?.exists ? (snap.data() as any) : null };
+    });
+    const securdenId = typeof paymentResult.data?.['Securden ID'] === 'string' ? String(paymentResult.data['Securden ID']).trim() : '';
 
     if (securdenId) {
       const s = await deleteSecurdenAccounts({
@@ -1646,22 +1676,30 @@ export async function setDefaultCard(req: AuthenticatedRequest, res: Response): 
     const clientRef = db.collection('Clients').doc(uid);
     const batch = db.batch();
 
-    // Ne pas créer un doc vide par accident si cardId est invalide
-    const credDoc = await clientRef.collection('Payment credentials').doc(cardId).get();
-    if (!credDoc.exists) {
+    const credResult = await readPaymentCredential(uid, cardId, async () => {
+      const doc = await clientRef.collection('Payment credentials').doc(cardId).get();
+      return { exists: doc.exists, data: doc.exists ? (doc.data() || {}) as Record<string, any> : null };
+    });
+    if (!credResult.exists) {
       res.status(404).json({ error: 'Card not found' });
       return;
     }
 
-    // Payment credentials
-    const credsSnap = await clientRef.collection('Payment credentials').get();
-    credsSnap.docs.forEach((d) => batch.set(d.ref, { isDefault: false }, { merge: true }));
+    const allCreds = await readAllPaymentCredentials(uid, async () => {
+      const snap = await clientRef.collection('Payment credentials').get();
+      return snap.docs.map(d => ({ id: d.id, data: (d.data() || {}) as Record<string, any> }));
+    });
+
+    // Update Firestore: set all to non-default, then selected to default
+    for (const cred of allCreds) {
+      batch.set(clientRef.collection('Payment credentials').doc(cred.id), { isDefault: false }, { merge: true });
+    }
     batch.set(clientRef.collection('Payment credentials').doc(cardId), { isDefault: true }, { merge: true });
 
     await batch.commit();
-    credsSnap.docs.forEach((d) => {
-      dualWritePaymentCredential(uid, d.id, { ...(d.data() || {}), isDefault: d.id === cardId }).catch(() => {});
-    });
+    for (const cred of allCreds) {
+      dualWritePaymentCredential(uid, cred.id, { ...cred.data, isDefault: cred.id === cardId }).catch(() => {});
+    }
 
     res.json({ message: 'Default card set', cardId });
   } catch (error: any) {

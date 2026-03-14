@@ -3,6 +3,8 @@ import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
 import { dualWriteToSupabase, resolveSupabaseClientId, mapAppointmentToSupabase } from '../services/dualWrite.service.js';
 import { supabase } from '../services/supabase.service.js';
+import { supabaseFirstRead } from '../services/supabaseFirstRead.service.js';
+import { supabaseInsertThenFirestore, supabaseUpdateThenFirestore } from '../services/supabaseFirstWrite.service.js';
 
 export async function getAppointments(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -58,9 +60,13 @@ export async function getAppointmentDetail(req: AuthenticatedRequest, res: Respo
     const uid = req.uid!;
     const { appointmentId } = req.params;
 
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) { res.status(404).json({ error: 'Appointment not found' }); return; }
+
     const { data, error } = await supabase
       .from('appointments')
       .select('*')
+      .eq('client_id', clientId)
       .or(`firestore_id.eq.${appointmentId},id.eq.${appointmentId}`)
       .single();
 
@@ -93,14 +99,30 @@ export async function createAppointment(req: AuthenticatedRequest, res: Response
     const { slotId, requestId, notes } = req.body;
     const db = getFirestore();
 
-    // Récupérer infos du créneau
-    const slotDoc = await db.collection('AvailableSlots').doc(slotId).get();
-    if (!slotDoc.exists) {
+    const slotResult = await supabaseFirstRead(
+      async () => {
+        const { data, error } = await supabase
+          .from('available_slots')
+          .select('*')
+          .or(`firestore_id.eq.${slotId},id.eq.${slotId}`)
+          .maybeSingle();
+        if (error) throw error;
+        if (!data) return null as any;
+        return { date: data.date, time: data.time, available: data.available };
+      },
+      async () => {
+        const doc = await db.collection('AvailableSlots').doc(slotId).get();
+        if (!doc.exists) return null as any;
+        return doc.data()!;
+      },
+      `createAppointment.slot(${slotId})`
+    );
+    if (!slotResult) {
       res.status(404).json({ error: 'Slot not found' });
       return;
     }
 
-    const slotData = slotDoc.data()!;
+    const slotData = slotResult;
 
     const newAppointment = {
       requestId: requestId || null,
@@ -113,17 +135,24 @@ export async function createAppointment(req: AuthenticatedRequest, res: Response
       updatedAt: new Date()
     };
 
-    const appointmentRef = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('appointments')
-      .add(newAppointment);
+    const firestoreId = db.collection('Clients').doc(uid).collection('appointments').doc().id;
+    const clientId = await resolveSupabaseClientId(uid);
 
-    resolveSupabaseClientId(uid).then(cid => {
-      if (cid) dualWriteToSupabase('appointments', mapAppointmentToSupabase(cid, appointmentRef.id, newAppointment), { onConflict: 'firestore_id' });
-    }).catch(() => {});
+    if (clientId) {
+      const supabaseData = mapAppointmentToSupabase(clientId, firestoreId, newAppointment);
+      await supabaseInsertThenFirestore({
+        table: 'appointments',
+        supabaseData,
+        firestoreWrite: async () => {
+          await db.collection('Clients').doc(uid).collection('appointments').doc(firestoreId).set(newAppointment);
+        },
+        context: 'appointments.create',
+      });
+    } else {
+      await db.collection('Clients').doc(uid).collection('appointments').doc(firestoreId).set(newAppointment);
+    }
 
-    res.status(201).json({ appointmentId: appointmentRef.id, ...newAppointment });
+    res.status(201).json({ appointmentId: firestoreId, ...newAppointment });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -135,29 +164,27 @@ export async function updateAppointment(req: AuthenticatedRequest, res: Response
     const { appointmentId } = req.params;
     const updates = req.body;
     const db = getFirestore();
+    const updatedAt = new Date();
 
-    await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('appointments')
-      .doc(appointmentId)
-      .update({
-        ...updates,
-        updatedAt: new Date()
-      });
+    const supabaseUpdates: Record<string, any> = { updated_at: updatedAt.toISOString() };
+    if (updates.status) supabaseUpdates.status = updates.status;
+    if (updates.notes !== undefined) supabaseUpdates.notes = updates.notes;
+    if (updates.date) supabaseUpdates.date = updates.date;
+    if (updates.time) supabaseUpdates.time = updates.time;
 
-    const updatedDoc = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('appointments')
-      .doc(appointmentId)
-      .get();
+    await supabaseUpdateThenFirestore({
+      table: 'appointments',
+      supabaseData: supabaseUpdates,
+      matchColumn: 'firestore_id',
+      matchValue: appointmentId,
+      firestoreWrite: async () => {
+        await db.collection('Clients').doc(uid).collection('appointments').doc(appointmentId)
+          .update({ ...updates, updatedAt });
+      },
+      context: 'appointments.update',
+    });
 
-    resolveSupabaseClientId(uid).then(cid => {
-      if (cid) dualWriteToSupabase('appointments', mapAppointmentToSupabase(cid, appointmentId, updatedDoc.data()!), { onConflict: 'firestore_id' });
-    }).catch(() => {});
-
-    res.json({ appointmentId, ...updatedDoc.data() });
+    res.json({ appointmentId, ...updates, updatedAt });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -168,20 +195,19 @@ export async function cancelAppointment(req: AuthenticatedRequest, res: Response
     const uid = req.uid!;
     const { appointmentId } = req.params;
     const db = getFirestore();
-
     const cancelledAt = new Date();
 
-    await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('appointments')
-      .doc(appointmentId)
-      .update({
-        status: 'cancelled',
-        updatedAt: cancelledAt
-      });
-
-    dualWriteToSupabase('appointments', { status: 'cancelled', updated_at: cancelledAt.toISOString() }, { mode: 'update', matchColumn: 'firestore_id', matchValue: appointmentId }).catch(() => {});
+    await supabaseUpdateThenFirestore({
+      table: 'appointments',
+      supabaseData: { status: 'cancelled', updated_at: cancelledAt.toISOString() },
+      matchColumn: 'firestore_id',
+      matchValue: appointmentId,
+      firestoreWrite: async () => {
+        await db.collection('Clients').doc(uid).collection('appointments').doc(appointmentId)
+          .update({ status: 'cancelled', updatedAt: cancelledAt });
+      },
+      context: 'appointments.cancel',
+    });
 
     res.json({ message: 'Appointment cancelled', appointmentId });
   } catch (error: any) {

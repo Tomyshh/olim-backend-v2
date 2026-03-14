@@ -2,6 +2,8 @@ import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../../middleware/auth.middleware.js';
 import { admin, getFirestore } from '../../config/firebase.js';
 import { dualWriteToSupabase, dualWriteDelete, resolveSupabaseClientId, mapRequestDraftToSupabase } from '../../services/dualWrite.service.js';
+import { supabaseFirstRead } from '../../services/supabaseFirstRead.service.js';
+import { supabase } from '../../services/supabase.service.js';
 
 type DraftType = 'manual_conversational' | 'voice_stepflow' | 'housing_inscription';
 
@@ -162,35 +164,58 @@ export async function v1CreateRequestDraft(req: AuthenticatedRequest, res: Respo
   const expiresAt = admin.firestore.Timestamp.fromDate(addDays(now, DRAFT_TTL_DAYS));
   const serverNow = admin.firestore.FieldValue.serverTimestamp();
 
-  await db.runTransaction(async (tx) => {
-    // Limite "max 10" par utilisateur: on évince le plus ancien si besoin.
-    const existingSnap = await tx.get(col.orderBy('updated_at', 'desc').limit(MAX_DRAFTS_PER_USER));
-    if (existingSnap.size >= MAX_DRAFTS_PER_USER) {
-      const oldest = existingSnap.docs[existingSnap.docs.length - 1]!;
-      tx.delete(oldest.ref);
-      dualWriteDelete('request_drafts', 'firestore_id', oldest.id).catch(() => {});
-    }
+  const existingDraftIds = await supabaseFirstRead<string[]>(
+    async () => {
+      const { data: client } = await supabase
+        .from('clients')
+        .select('id')
+        .eq('firebase_uid', uid)
+        .maybeSingle();
+      if (!client?.id) return null as any;
 
-    tx.set(
-      ref,
-      {
-        uid,
-        type,
-        title,
-        category,
-        subcategory,
-        progress,
-        current_step,
-        snapshot_json: snapshot_json ?? {},
-        uploaded_urls,
-        client_temp_id: clientTempId,
-        created_at: serverNow,
-        updated_at: serverNow,
-        expires_at: expiresAt
-      },
-      { merge: false }
-    );
-  });
+      const { data, error } = await supabase
+        .from('request_drafts')
+        .select('firestore_id, updated_at')
+        .eq('client_id', client.id)
+        .order('updated_at', { ascending: false })
+        .limit(MAX_DRAFTS_PER_USER);
+      if (error) throw error;
+      if (!data || data.length === 0) return [];
+      return data.map((d: any) => String(d.firestore_id ?? '')).filter(Boolean);
+    },
+    async () => {
+      const snap = await col.orderBy('updated_at', 'desc').limit(MAX_DRAFTS_PER_USER).get();
+      return snap.docs.map(d => d.id);
+    },
+    `v1CreateRequestDraft:existingDrafts(${uid})`
+  );
+
+  if (existingDraftIds.length >= MAX_DRAFTS_PER_USER) {
+    const oldestId = existingDraftIds[existingDraftIds.length - 1]!;
+    if (oldestId) {
+      col.doc(oldestId).delete().catch(() => {});
+      dualWriteDelete('request_drafts', 'firestore_id', oldestId).catch(() => {});
+    }
+  }
+
+  await ref.set(
+    {
+      uid,
+      type,
+      title,
+      category,
+      subcategory,
+      progress,
+      current_step,
+      snapshot_json: snapshot_json ?? {},
+      uploaded_urls,
+      client_temp_id: clientTempId,
+      created_at: serverNow,
+      updated_at: serverNow,
+      expires_at: expiresAt
+    },
+    { merge: false }
+  );
 
   resolveSupabaseClientId(uid).then(clientId => {
     if (!clientId) return;

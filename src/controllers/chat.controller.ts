@@ -4,6 +4,8 @@ import { getFirestore } from '../config/firebase.js';
 import { dualWriteToSupabase, resolveSupabaseClientId, mapChatConversationToSupabase, mapChatMessageToSupabase } from '../services/dualWrite.service.js';
 import { supabase } from '../services/supabase.service.js';
 import { uploadDual, sanitizeFilename, inferContentType } from '../services/storage.service.js';
+import { readClientInfo } from '../services/supabaseFirstRead.service.js';
+import { supabaseInsertThenFirestore } from '../services/supabaseFirstWrite.service.js';
 
 export async function getConversations(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
@@ -127,17 +129,30 @@ export async function createConversation(req: AuthenticatedRequest, res: Respons
       updatedAt: new Date()
     };
 
-    const conversationRef = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Conversations')
-      .add(convoData);
+    const firestoreConvoId = db.collection('Clients').doc(uid).collection('Conversations').doc().id;
+    const clientId = await resolveSupabaseClientId(uid);
+
+    if (clientId) {
+      const supabaseConvo = mapChatConversationToSupabase(clientId, firestoreConvoId, convoData);
+      await supabaseInsertThenFirestore({
+        table: 'chat_conversations',
+        supabaseData: supabaseConvo,
+        firestoreWrite: async () => {
+          await db.collection('Clients').doc(uid).collection('Conversations').doc(firestoreConvoId).set(convoData);
+        },
+        context: 'chat.createConversation',
+      });
+    } else {
+      await db.collection('Clients').doc(uid).collection('Conversations').doc(firestoreConvoId).set(convoData);
+    }
 
     const firstMessage = (message || initialMessage || '').toString().trim();
     if (firstMessage) {
-      const clientDoc = await db.collection('Clients').doc(uid).get();
-      const clientData = clientDoc.data() || {};
-      await conversationRef.collection('Messages').add({
+      const clientData = await readClientInfo(uid, async () => {
+        const doc = await db.collection('Clients').doc(uid).get();
+        return doc.data() || {};
+      });
+      const msgData = {
         senderId: uid,
         senderName: `${clientData['First Name'] || ''} ${clientData['Last Name'] || ''}`.trim(),
         content: firstMessage,
@@ -145,15 +160,30 @@ export async function createConversation(req: AuthenticatedRequest, res: Respons
         attachments: [],
         read: false,
         createdAt: new Date()
-      });
+      };
+      const firestoreMsgId = db.collection('Clients').doc(uid).collection('Conversations').doc(firestoreConvoId).collection('Messages').doc().id;
+
+      if (clientId) {
+        const { data: convoRow } = await supabase.from('chat_conversations').select('id').eq('firestore_id', firestoreConvoId).maybeSingle();
+        if (convoRow?.id) {
+          await supabaseInsertThenFirestore({
+            table: 'chat_messages',
+            supabaseData: mapChatMessageToSupabase(convoRow.id, firestoreMsgId, msgData),
+            firestoreWrite: async () => {
+              await db.collection('Clients').doc(uid).collection('Conversations').doc(firestoreConvoId).collection('Messages').doc(firestoreMsgId).set(msgData);
+            },
+            context: 'chat.createConversation.firstMessage',
+          });
+        } else {
+          await db.collection('Clients').doc(uid).collection('Conversations').doc(firestoreConvoId).collection('Messages').doc(firestoreMsgId).set(msgData);
+        }
+      } else {
+        await db.collection('Clients').doc(uid).collection('Conversations').doc(firestoreConvoId).collection('Messages').doc(firestoreMsgId).set(msgData);
+      }
     }
 
-    resolveSupabaseClientId(uid).then(cid => {
-      if (cid) dualWriteToSupabase('chat_conversations', mapChatConversationToSupabase(cid, conversationRef.id, convoData), { onConflict: 'firestore_id' });
-    }).catch(() => {});
-
     res.status(201).json({
-      conversationId: conversationRef.id,
+      conversationId: firestoreConvoId,
       requestId,
       title: conversationTitle
     });
@@ -174,13 +204,14 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    // Récupérer infos client
-    const clientDoc = await db.collection('Clients').doc(uid).get();
-    const clientData = clientDoc.data()!;
+    const clientData = await readClientInfo(uid, async () => {
+      const doc = await db.collection('Clients').doc(uid).get();
+      return doc.data() || {};
+    });
 
     const msgData = {
       senderId: uid,
-      senderName: `${clientData['First Name']} ${clientData['Last Name']}`,
+      senderName: `${clientData['First Name'] || ''} ${clientData['Last Name'] || ''}`.trim(),
       content: messageContent,
       type,
       attachments: attachments || [],
@@ -188,37 +219,28 @@ export async function sendMessage(req: AuthenticatedRequest, res: Response): Pro
       createdAt: new Date()
     };
 
-    const messageRef = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Conversations')
-      .doc(conversationId)
-      .collection('Messages')
-      .add(msgData);
-
+    const firestoreMsgId = db.collection('Clients').doc(uid).collection('Conversations').doc(conversationId).collection('Messages').doc().id;
     const convoUpdateTime = new Date();
 
-    // Mettre à jour conversation
-    await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Conversations')
-      .doc(conversationId)
-      .update({
-        updatedAt: convoUpdateTime
+    const { data: convoRow } = await supabase.from('chat_conversations').select('id').eq('firestore_id', conversationId).maybeSingle();
+
+    if (convoRow?.id) {
+      await supabaseInsertThenFirestore({
+        table: 'chat_messages',
+        supabaseData: mapChatMessageToSupabase(convoRow.id, firestoreMsgId, msgData),
+        firestoreWrite: async () => {
+          await db.collection('Clients').doc(uid).collection('Conversations').doc(conversationId).collection('Messages').doc(firestoreMsgId).set(msgData);
+          await db.collection('Clients').doc(uid).collection('Conversations').doc(conversationId).update({ updatedAt: convoUpdateTime });
+        },
+        context: 'chat.sendMessage',
       });
+      Promise.resolve(supabase.from('chat_conversations').update({ updated_at: convoUpdateTime.toISOString() }).eq('firestore_id', conversationId)).catch(() => {});
+    } else {
+      await db.collection('Clients').doc(uid).collection('Conversations').doc(conversationId).collection('Messages').doc(firestoreMsgId).set(msgData);
+      await db.collection('Clients').doc(uid).collection('Conversations').doc(conversationId).update({ updatedAt: convoUpdateTime });
+    }
 
-    resolveSupabaseClientId(uid).then(async (cid) => {
-      if (!cid) return;
-      const { data: convoRow } = await supabase.from('chat_conversations').select('id').eq('firestore_id', conversationId).maybeSingle();
-      if (convoRow?.id) {
-        dualWriteToSupabase('chat_messages', mapChatMessageToSupabase(convoRow.id, messageRef.id, msgData), { onConflict: 'firestore_id' }).catch(() => {});
-        dualWriteToSupabase('chat_conversations', { updated_at: convoUpdateTime.toISOString() }, { mode: 'update', matchColumn: 'firestore_id', matchValue: conversationId }).catch(() => {});
-      }
-    }).catch(() => {});
-
-    const messageDoc = await messageRef.get();
-    res.status(201).json({ messageId: messageRef.id, ...messageDoc.data() });
+    res.status(201).json({ messageId: firestoreMsgId, ...msgData });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -229,35 +251,86 @@ export async function markAsRead(req: AuthenticatedRequest, res: Response): Prom
     const uid = req.uid!;
     const { conversationId } = req.params;
     const db = getFirestore();
-
-    // Marquer tous les messages non lus comme lus
-    const unreadMessages = await db
-      .collection('Clients')
-      .doc(uid)
-      .collection('Conversations')
-      .doc(conversationId)
-      .collection('Messages')
-      .where('read', '==', false)
-      .where('senderId', '!=', uid)
-      .get();
-
-    const batch = db.batch();
     const readAt = new Date();
-    unreadMessages.docs.forEach(doc => {
-      batch.update(doc.ref, { read: true, readAt });
-    });
-    await batch.commit();
 
-    if (unreadMessages.size > 0) {
-      const messageFirestoreIds = unreadMessages.docs.map(d => d.id);
-      Promise.resolve(
-        supabase.from('chat_messages')
+    // Supabase-first: mark unread messages as read
+    const { data: convo } = await supabase
+      .from('chat_conversations')
+      .select('id')
+      .or(`firestore_id.eq.${conversationId},id.eq.${conversationId}`)
+      .maybeSingle();
+
+    let count = 0;
+
+    if (convo?.id) {
+      const { data: unreadMessages } = await supabase
+        .from('chat_messages')
+        .select('id, firestore_id')
+        .eq('conversation_id', convo.id)
+        .eq('is_read', false)
+        .neq('sender_id', uid);
+
+      if (unreadMessages && unreadMessages.length > 0) {
+        count = unreadMessages.length;
+        const ids = unreadMessages.map((m: any) => m.id);
+        await supabase
+          .from('chat_messages')
           .update({ is_read: true, read_at: readAt.toISOString() })
-          .in('firestore_id', messageFirestoreIds)
-      ).catch(() => {});
+          .in('id', ids);
+
+        // Firestore best-effort sync
+        try {
+          const firestoreIds = unreadMessages
+            .map((m: any) => m.firestore_id)
+            .filter(Boolean);
+          if (firestoreIds.length > 0) {
+            const batch = db.batch();
+            for (const fid of firestoreIds) {
+              const ref = db
+                .collection('Clients')
+                .doc(uid)
+                .collection('Conversations')
+                .doc(conversationId)
+                .collection('Messages')
+                .doc(fid);
+              batch.update(ref, { read: true, readAt });
+            }
+            await batch.commit();
+          }
+        } catch (firestoreErr) {
+          console.warn('[chat.markAsRead] Firestore sync failed (best-effort)', firestoreErr);
+        }
+      }
+    } else {
+      // Fallback: Firestore if conversation not found in Supabase
+      const unreadMessages = await db
+        .collection('Clients')
+        .doc(uid)
+        .collection('Conversations')
+        .doc(conversationId)
+        .collection('Messages')
+        .where('read', '==', false)
+        .where('senderId', '!=', uid)
+        .get();
+
+      const batch = db.batch();
+      unreadMessages.docs.forEach(doc => {
+        batch.update(doc.ref, { read: true, readAt });
+      });
+      await batch.commit();
+      count = unreadMessages.size;
+
+      if (unreadMessages.size > 0) {
+        const messageFirestoreIds = unreadMessages.docs.map(d => d.id);
+        Promise.resolve(
+          supabase.from('chat_messages')
+            .update({ is_read: true, read_at: readAt.toISOString() })
+            .in('firestore_id', messageFirestoreIds)
+        ).catch(() => {});
+      }
     }
 
-    res.json({ message: 'Messages marked as read', count: unreadMessages.size });
+    res.json({ message: 'Messages marked as read', count });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
@@ -303,8 +376,10 @@ export async function uploadChatFile(req: AuthenticatedRequest, res: Response): 
     });
 
     const db = getFirestore();
-    const clientDoc = await db.collection('Clients').doc(uid).get();
-    const clientData = clientDoc.data() || {};
+    const clientData = await readClientInfo(uid, async () => {
+      const doc = await db.collection('Clients').doc(uid).get();
+      return doc.data() || {};
+    });
 
     const attachment = {
       url: result.firebaseUrl,

@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore, getAuth } from '../config/firebase.js';
 import { supabase } from '../services/supabase.service.js';
 import { resolveSupabaseClientId } from '../services/dualWrite.service.js';
+import { readClientInfo, readSubscription, readAllPaymentCredentials, readFamilyMembers } from '../services/supabaseFirstRead.service.js';
 
 function serializeFirestoreValue(val: unknown): unknown {
   if (val === null || val === undefined) return val;
@@ -61,28 +62,76 @@ export async function exportUserData(req: AuthenticatedRequest, res: Response): 
     const uid = req.uid!;
     const db = getFirestore();
     const clientRef = db.collection('Clients').doc(uid);
-    const clientDoc = await clientRef.get();
 
-    if (!clientDoc.exists) {
+    const clientData = await readClientInfo(uid, async () => {
+      const snap = await clientRef.get();
+      if (!snap.exists) return null as any;
+      return (snap.data() ?? {}) as Record<string, any>;
+    });
+
+    if (!clientData) {
       res.status(404).json({ error: 'Client not found' });
       return;
     }
 
-    const clientData = clientDoc.data() ?? {};
-    const serializedClient: Record<string, unknown> = { id: clientDoc.id };
+    const serializedClient: Record<string, unknown> = { id: uid };
     for (const [k, v] of Object.entries(clientData)) {
       serializedClient[k] = serializeFirestoreValue(v);
     }
 
-    const result: Record<string, unknown> = {
-      client: serializedClient,
-      subcollections: {} as Record<string, unknown[]>,
-    };
+    const subcollections: Record<string, unknown[]> = {};
 
+    const subResult = await readSubscription(uid, async () => {
+      const snap = await clientRef.collection('subscription').doc('current').get();
+      return { exists: snap.exists, data: snap.exists ? ((snap.data() || {}) as any) : null };
+    });
+    if (subResult.exists && subResult.data) {
+      const serialized: Record<string, unknown> = { id: 'current' };
+      for (const [k, v] of Object.entries(subResult.data)) {
+        serialized[k] = serializeFirestoreValue(v);
+      }
+      subcollections['subscription'] = [serialized];
+    }
+
+    const paymentCreds = await readAllPaymentCredentials(uid, async () => {
+      const snap = await clientRef.collection('Payment credentials').get();
+      return snap.docs.map(d => ({ id: d.id, data: d.data() as Record<string, any> }));
+    });
+    if (paymentCreds.length > 0) {
+      subcollections['Payment credentials'] = paymentCreds.map(c => {
+        const serialized: Record<string, unknown> = { id: c.id };
+        for (const [k, v] of Object.entries(c.data)) {
+          serialized[k] = serializeFirestoreValue(v);
+        }
+        return serialized;
+      });
+    }
+
+    const familyMembers = await readFamilyMembers(uid, async () => {
+      const snap = await clientRef.collection('Family Members').get();
+      return snap.docs.map(d => ({ id: d.id, data: d.data() as Record<string, any> }));
+    });
+    if (familyMembers.length > 0) {
+      subcollections['Family Members'] = familyMembers.map(fm => {
+        const serialized: Record<string, unknown> = { id: fm.id };
+        for (const [k, v] of Object.entries(fm.data)) {
+          serialized[k] = serializeFirestoreValue(v);
+        }
+        return serialized;
+      });
+    }
+
+    const coveredSubcollections = new Set(['subscription', 'Payment credentials', 'Family Members']);
     const collections = await clientRef.listCollections();
     for (const col of collections) {
-      await exportCollectionRecursive(db, col, result.subcollections as Record<string, unknown[]>);
+      if (coveredSubcollections.has(col.id)) continue;
+      await exportCollectionRecursive(db, col, subcollections);
     }
+
+    const result: Record<string, unknown> = {
+      client: serializedClient,
+      subcollections,
+    };
 
     res.json(result);
   } catch (error: any) {

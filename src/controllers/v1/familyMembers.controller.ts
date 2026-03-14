@@ -7,6 +7,7 @@ import { isConjoint, recomputeAndApplyFamilyMonthlySupplement, memberIsEligibleA
 import { getFamilyMemberPricingNis, nisToCents } from '../../services/remoteConfigPricing.service.js';
 import { dualWriteFamilyMember, dualWriteDelete, resolveSupabaseClientId, mapFamilyMemberToSupabase } from '../../services/dualWrite.service.js';
 import { supabase } from '../../services/supabase.service.js';
+import { readFamilyMember, readPaymentCredential } from '../../services/supabaseFirstRead.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
 
@@ -540,10 +541,12 @@ export async function v1CreateFamilyMember(req: AuthenticatedRequest, res: Respo
       (doc as any).livesAtHome = true;
     }
 
-    // Récupérer buyerKey depuis Payment credentials/{cardId}
-    const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardIdFromPayload).get();
-    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
-    const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+    const cardResult = await readPaymentCredential(uid, cardIdFromPayload, async () => {
+      const snap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardIdFromPayload).get();
+      return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+    });
+    if (!cardResult.exists || !cardResult.data) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
+    const buyerKey = pickString(cardResult.data['Isracard Key']);
     if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
     const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
@@ -620,8 +623,11 @@ export async function v1UpdateFamilyMember(req: AuthenticatedRequest, res: Respo
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(uid, memberId, async () => {
+    const snap = await ref.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   const updates = buildUpdateDoc({ uid, body: req.body || {} });
   // Si rien à mettre à jour (à part updatedAt), on évite un faux-positif
@@ -647,8 +653,11 @@ export async function v1DeactivateFamilyMember(req: AuthenticatedRequest, res: R
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(uid, memberId, async () => {
+    const snap = await ref.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   await ref.set(
     {
@@ -671,10 +680,13 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(uid, memberId, async () => {
+    const snap = await ref.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
-  const data = (snap.data() || {}) as Record<string, any>;
+  const data = (memberResult.data || {}) as Record<string, any>;
   const status = pickString(data['Family Member Status']);
   const age =
     typeof data.age === 'number'
@@ -714,14 +726,15 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
     // AVANT de prélever et d'activer le membre (évite un état incohérent).
     await assertSubscriptionCanSupportFamilySupplement(uid);
 
-    // Ici, on exige la cardId envoyée par le frontend (pas de fallback silencieux)
     const cardId = cardIdFromPayload;
     if (!cardId) throw new HttpError(400, 'cardId requis pour réactiver un membre majeur.', 'CARD_REQUIRED');
 
-    // Récupérer buyerKey depuis Payment credentials/{cardId}
-    const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
-    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
-    const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+    const cardResult = await readPaymentCredential(uid, cardId, async () => {
+      const snap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
+      return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+    });
+    if (!cardResult.exists || !cardResult.data) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
+    const buyerKey = pickString(cardResult.data['Isracard Key']);
     if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
     const pricing = await getFamilyMemberPricingNis();
@@ -730,7 +743,6 @@ export async function v1ActivateFamilyMember(req: AuthenticatedRequest, res: Res
       throw new HttpError(500, 'Prix activation service invalide (Remote Config).', 'INVALID_PRICING');
     }
 
-    // Débit one-shot lors de la réactivation (membre majeur)
     const sale = await paymeGenerateSale({
       priceInCents: ponctuallyPriceInCents,
       description: `Réactivation membre famille (majeur) - ${pickString(data['First Name'])} ${pickString(data['Last Name'])}`.trim(),
@@ -778,17 +790,19 @@ export async function v1DeleteFamilyMember(req: AuthenticatedRequest, res: Respo
   const memberId = pickString(req.params.id);
   if (!memberId) throw new HttpError(400, 'Id manquant.', 'MISSING_MEMBER_ID');
 
-  // Sécurité: ne jamais supprimer le titulaire
   if (memberId === 'account_owner') {
     throw new HttpError(400, "Impossible de supprimer le titulaire du compte.", 'CANNOT_DELETE_ACCOUNT_OWNER');
   }
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(uid, memberId, async () => {
+    const snap = await ref.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
-  const memberData = (snap.data() || {}) as Record<string, any>;
+  const memberData = (memberResult.data || {}) as Record<string, any>;
   // Refuser la suppression d'un membre avec service actif
   if (memberData.serviceActive === true && memberData.isActive === true) {
     throw new HttpError(
@@ -818,10 +832,13 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
 
   const db = getFirestore();
   const memberRef = db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const memberSnap = await memberRef.get();
-  if (!memberSnap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(uid, memberId, async () => {
+    const snap = await memberRef.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
-  const memberData = (memberSnap.data() || {}) as Record<string, any>;
+  const memberData = (memberResult.data || {}) as Record<string, any>;
   const status = pickString(memberData['Family Member Status']);
 
   // Idempotence: si déjà actif, on répond OK
@@ -877,13 +894,13 @@ export async function v1ActivateFamilyMemberService(req: AuthenticatedRequest, r
   // AVANT de prélever et d'activer le membre (évite un état incohérent).
   await assertSubscriptionCanSupportFamilySupplement(uid);
 
-  // Récupérer buyerKey depuis Payment credentials/{cardId}
-  const cardSnap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
-  if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
-  const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+  const cardResult = await readPaymentCredential(uid, cardId, async () => {
+    const snap = await db.collection('Clients').doc(uid).collection('Payment credentials').doc(cardId).get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!cardResult.exists || !cardResult.data) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
+  const buyerKey = pickString(cardResult.data['Isracard Key']);
   if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
-
-  // Débit one-shot (Remote Config: add_family_member_ponctually en NIS)
   const pricing = await getFamilyMemberPricingNis();
   const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
   if (!ponctuallyPriceInCents || ponctuallyPriceInCents <= 0) {
@@ -987,9 +1004,12 @@ async function adminCreateFamilyMember(params: {
     }
     if ((doc as any).livesAtHome !== true) (doc as any).livesAtHome = true;
 
-    const cardSnap = await db.collection('Clients').doc(clientUid).collection('Payment credentials').doc(cardIdFromPayload).get();
-    if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
-    const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+    const cardResult = await readPaymentCredential(clientUid, cardIdFromPayload, async () => {
+      const snap = await db.collection('Clients').doc(clientUid).collection('Payment credentials').doc(cardIdFromPayload).get();
+      return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+    });
+    if (!cardResult.exists || !cardResult.data) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
+    const buyerKey = pickString(cardResult.data['Isracard Key']);
     if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
     const ponctuallyPriceInCents = nisToCents(pricing.ponctuallyNis);
@@ -1113,8 +1133,11 @@ export async function v1AdminDeactivateFamilyMember(req: AuthenticatedRequest, r
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(clientUid, memberId, async () => {
+    const snap = await ref.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
   await ref.set(
     {
@@ -1159,10 +1182,13 @@ async function adminActivateFamilyMember(params: {
   const { clientUid, memberId, adminUid, body, mode } = params;
   const db = getFirestore();
   const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(clientUid, memberId, async () => {
+    const snap = await ref.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
-  const data = (snap.data() || {}) as Record<string, any>;
+  const data = (memberResult.data || {}) as Record<string, any>;
   if (data.isActive === true) {
     return { salePaymeId: null, attemptedSale: false, alreadyActive: true };
   }
@@ -1211,9 +1237,12 @@ async function adminActivateFamilyMember(params: {
       const cardId = cardIdFromPayload;
       if (!cardId) throw new HttpError(400, 'cardId requis pour activer (paid) un membre majeur.', 'CARD_REQUIRED');
 
-      const cardSnap = await db.collection('Clients').doc(clientUid).collection('Payment credentials').doc(cardId).get();
-      if (!cardSnap.exists) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
-      const buyerKey = pickString((cardSnap.data() || {})['Isracard Key']);
+      const cardResult = await readPaymentCredential(clientUid, cardId, async () => {
+        const snap = await db.collection('Clients').doc(clientUid).collection('Payment credentials').doc(cardId).get();
+        return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+      });
+      if (!cardResult.exists || !cardResult.data) throw new HttpError(404, 'Carte introuvable.', 'CARD_NOT_FOUND');
+      const buyerKey = pickString(cardResult.data['Isracard Key']);
       if (!buyerKey) throw new HttpError(400, 'Carte invalide: buyerKey PayMe manquant.', 'INVALID_CARD');
 
       const pricing = await getFamilyMemberPricingNis();
@@ -1290,10 +1319,13 @@ export async function v1AdminEditFamilyMember(req: AuthenticatedRequest, res: Re
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(clientUid, memberId, async () => {
+    const snap = await ref.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
-  const existing = (snap.data() || {}) as Record<string, any>;
+  const existing = (memberResult.data || {}) as Record<string, any>;
   const updates = buildUpdateDoc({ uid: clientUid, body: req.body || {} });
   const { flags, raw } = normalizePayload(req.body || {});
 
@@ -1388,17 +1420,19 @@ export async function v1AdminDeleteFamilyMember(req: AuthenticatedRequest, res: 
   const memberId = pickString(req.params.id);
   if (!memberId) throw new HttpError(400, 'Id membre manquant.', 'MISSING_MEMBER_ID');
 
-  // Sécurité: ne jamais supprimer le titulaire
   if (memberId === 'account_owner') {
     throw new HttpError(400, 'Impossible de supprimer le titulaire du compte.', 'CANNOT_DELETE_ACCOUNT_OWNER');
   }
 
   const db = getFirestore();
   const ref = db.collection('Clients').doc(clientUid).collection(FAMILY_MEMBERS_COLLECTION).doc(memberId);
-  const snap = await ref.get();
-  if (!snap.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
+  const memberResult = await readFamilyMember(clientUid, memberId, async () => {
+    const snap = await ref.get();
+    return { exists: snap.exists, data: snap.exists ? (snap.data() || {}) as Record<string, any> : null };
+  });
+  if (!memberResult.exists) throw new HttpError(404, 'Membre introuvable.', 'MEMBER_NOT_FOUND');
 
-  const data = (snap.data() || {}) as Record<string, any>;
+  const data = (memberResult.data || {}) as Record<string, any>;
 
   // Refuser la suppression d'un membre avec service actif
   // sauf si force=true est explicitement fourni

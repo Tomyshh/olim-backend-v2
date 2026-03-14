@@ -4,6 +4,7 @@ import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { buildInitialSeniority } from '../services/clientSeniority.service.js';
 import { dualWriteClient } from '../services/dualWrite.service.js';
 import { ensureSupabaseAuthUser } from '../services/supabaseAuth.service.js';
+import { readClientInfo } from '../services/supabaseFirstRead.service.js';
 
 /**
  * POST /users/init
@@ -27,10 +28,15 @@ export async function initUser(req: AuthenticatedRequest, res: Response): Promis
 
   const db = getFirestore();
   const clientRef = db.collection('Clients').doc(uid);
-  const snap = await clientRef.get();
 
-  if (snap.exists) {
-    const existing = (snap.data() || {}) as Record<string, any>;
+  const existing = await readClientInfo(uid, async () => {
+    const doc = await clientRef.get();
+    return doc.exists ? (doc.data() || {}) as Record<string, any> : null as any;
+  });
+
+  const clientExists = existing != null && typeof existing === 'object' && Object.keys(existing).length > 0;
+
+  if (clientExists) {
     const hasCreatedAt = existing?.['Created At'] != null;
     const hasSeniority = existing?.seniority != null;
     // Non destructif : on met juste à jour des champs "safe" (merge)

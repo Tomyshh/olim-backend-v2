@@ -16,4 +16,8 @@ yarn-error.log*
 scripts/firebase-auth-migration/supabase-service.json
 scripts/firebase-auth-migration/firebase-service.json
 
+# Apple private keys (NEVER commit)
+*.p8
 
+
+scripts/ios-client-secret-generator/*.p8

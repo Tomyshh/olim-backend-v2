@@ -3,6 +3,7 @@ import { HttpError } from '../utils/errors.js';
 import { paymeGetSubscriptionDetails, paymeSetSubscriptionPrice } from './payme.service.js';
 import { getFamilyMemberPricingNis, nisToCents } from './remoteConfigPricing.service.js';
 import { dualWriteSubscription, dualWriteFamilyMember } from './dualWrite.service.js';
+import { readSubscription, readFamilyMembers } from './supabaseFirstRead.service.js';
 
 const FAMILY_MEMBERS_COLLECTION = 'Family Members';
 
@@ -128,9 +129,18 @@ async function loadSubscriptionPaymeInfo(uid: string): Promise<{
   previousFamilySupplementTotalInCents: number | null;
 }> {
   const db = getFirestore();
-  const currentSubscriptionDoc = await db.collection('Clients').doc(uid).collection('subscription').doc('current').get();
-  if (!currentSubscriptionDoc.exists) return { subId: null, subCode: null, planPriceInCents: null, planBasePriceInCents: null, previousFamilySupplementTotalInCents: null };
-  const data = (currentSubscriptionDoc.data() || {}) as Record<string, any>;
+  const currentSubscriptionRef = db.collection('Clients').doc(uid).collection('subscription').doc('current');
+
+  const subResult = await readSubscription(uid, async () => {
+    const doc = await currentSubscriptionRef.get();
+    return { exists: doc.exists, data: doc.exists ? (doc.data() || {}) as Record<string, any> : null };
+  });
+
+  if (!subResult.exists || !subResult.data) {
+    return { subId: null, subCode: null, planPriceInCents: null, planBasePriceInCents: null, previousFamilySupplementTotalInCents: null };
+  }
+
+  const data = subResult.data;
   const subId = pickString(data?.payme?.subID);
   const subCodeRaw = data?.payme?.subCode ?? data?.payme?.sub_payme_code ?? null;
   const subCode = subCodeRaw != null && (typeof subCodeRaw === 'number' || (typeof subCodeRaw === 'string' && subCodeRaw.trim())) ? subCodeRaw : null;
@@ -232,9 +242,10 @@ export async function recomputeAndApplyFamilyMonthlySupplement(uid: string): Pro
   const monthlySupplementNis = pricing.monthlyNis;
   const monthlySupplementCents = nisToCents(monthlySupplementNis);
 
-  const membersSnap = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).get();
-
-  const members = membersSnap.docs.map((d) => ({ id: d.id, data: (d.data() || {}) as Record<string, any> }));
+  const members = await readFamilyMembers(uid, async () => {
+    const membersSnap = await db.collection('Clients').doc(uid).collection(FAMILY_MEMBERS_COLLECTION).get();
+    return membersSnap.docs.map((d) => ({ id: d.id, data: (d.data() || {}) as Record<string, any> }));
+  });
   const eligibleAdults = members.filter((m) => memberIsEligibleAdultSupplement(m.id, m.data));
   const eligibleAdultsCount = eligibleAdults.length;
   const supplementTotalInCents = eligibleAdultsCount * monthlySupplementCents;

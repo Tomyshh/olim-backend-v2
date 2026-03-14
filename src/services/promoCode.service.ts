@@ -146,36 +146,68 @@ function extractPromoDurationCycles(doc: Record<string, any>): number | null {
 
 export async function loadPromotionByCode(promoCodeNormalized: string): Promise<{ id: string; data: Record<string, any> } | null> {
   const { supabase } = await import('./supabase.service.js');
+  const { supabaseFirstRead } = await import('./supabaseFirstRead.service.js');
 
-  const { data } = await supabase
-    .from('promotions')
-    .select('*')
-    .or(`code.eq.${promoCodeNormalized},code_normalized.eq.${promoCodeNormalized},firestore_id.eq.${promoCodeNormalized}`)
-    .limit(1)
-    .single();
+  return supabaseFirstRead<{ id: string; data: Record<string, any> } | null>(
+    async () => {
+      const { data } = await supabase
+        .from('promotions')
+        .select('*')
+        .or(`code.eq.${promoCodeNormalized},code_normalized.eq.${promoCodeNormalized},firestore_id.eq.${promoCodeNormalized}`)
+        .limit(1)
+        .single();
 
-  if (!data) return null;
+      if (!data) return null as any;
 
-  return {
-    id: data.firestore_id ?? data.id,
-    data: {
-      code: data.code,
-      codeNormalized: data.code_normalized,
-      isValid: data.is_valid,
-      forEveryone: data.for_everyone,
-      membershipType: data.membership_type,
-      applicableMemberships: data.applicable_memberships ?? [],
-      planType: data.plan_type,
-      plans: data.applicable_plans ?? [],
-      percentOff: data.discount_percent,
-      amountOffCents: data.discount_amount_cents,
-      promo_duration: data.duration_cycles,
-      expirationDate: data.expiration_date,
-      source: data.source,
-      usedByUid: data.used_by_uid,
-      usedAt: data.used_at
-    }
-  };
+      return {
+        id: data.firestore_id ?? data.id,
+        data: {
+          code: data.code,
+          codeNormalized: data.code_normalized,
+          isValid: data.is_valid,
+          forEveryone: data.for_everyone,
+          membershipType: data.membership_type,
+          applicableMemberships: data.applicable_memberships ?? [],
+          planType: data.plan_type,
+          plans: data.applicable_plans ?? [],
+          percentOff: data.discount_percent,
+          amountOffCents: data.discount_amount_cents,
+          promo_duration: data.duration_cycles,
+          expirationDate: data.expiration_date,
+          source: data.source,
+          usedByUid: data.used_by_uid,
+          usedAt: data.used_at,
+        },
+      };
+    },
+    async () => {
+      const db = getFirestore();
+      const docSnap = await db.collection('Promotions').doc(promoCodeNormalized).get();
+      if (docSnap.exists) {
+        return { id: docSnap.id, data: (docSnap.data() ?? {}) as Record<string, any> };
+      }
+      const byCode = await db
+        .collection('Promotions')
+        .where('code', '==', promoCodeNormalized)
+        .limit(1)
+        .get();
+      if (!byCode.empty) {
+        const d = byCode.docs[0];
+        return { id: d.id, data: (d.data() ?? {}) as Record<string, any> };
+      }
+      const byNormalized = await db
+        .collection('Promotions')
+        .where('codeNormalized', '==', promoCodeNormalized)
+        .limit(1)
+        .get();
+      if (!byNormalized.empty) {
+        const d = byNormalized.docs[0];
+        return { id: d.id, data: (d.data() ?? {}) as Record<string, any> };
+      }
+      return null;
+    },
+    `loadPromotionByCode(${promoCodeNormalized})`
+  );
 }
 
 export async function validateAndApplyPromo(params: {

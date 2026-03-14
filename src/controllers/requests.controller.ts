@@ -3,6 +3,7 @@ import { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import { getFirestore } from '../config/firebase.js';
 import { supabase } from '../services/supabase.service.js';
 import { dualWriteToSupabase, dualWriteDelete, resolveSupabaseClientId, mapFavoriteRequestToSupabase, dualWriteLegacyRequest } from '../services/dualWrite.service.js';
+import { readClientInfo } from '../services/supabaseFirstRead.service.js';
 
 function mapRequestToLegacy(r: Record<string, any>): Record<string, any> {
   return {
@@ -155,8 +156,10 @@ export async function createRequest(req: AuthenticatedRequest, res: Response): P
     const db = getFirestore();
 
     // Récupérer infos client pour enrichir la demande
-    const clientDoc = await db.collection('Clients').doc(uid).get();
-    const clientData = clientDoc.data()!;
+    const clientData = await readClientInfo(uid, async () => {
+      const doc = await db.collection('Clients').doc(uid).get();
+      return doc.exists ? (doc.data() || {}) as Record<string, any> : {} as Record<string, any>;
+    });
 
     const newRequest = {
       'User ID': uid,
