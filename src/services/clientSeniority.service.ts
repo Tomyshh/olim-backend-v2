@@ -163,7 +163,7 @@ export async function computeAndWriteSeniorityForClient(params: {
     },
     { merge: true }
   );
-  dualWriteClient(clientId, { seniority: { ...seniority, since: createdAt.toISOString() } }).catch(() => {});
+  dualWriteClient(clientId, { seniority: { ...seniority, since: createdAt.toISOString() } }).catch((e: any) => console.error('[seniority-job] dualWriteClient failed:', clientId, e?.message || e));
 
   return { ok: true, clientId, action: 'updated', seniority };
 }
@@ -309,7 +309,7 @@ export async function runDailySeniorityJob(params?: {
                 } as any,
                 { merge: true }
               );
-              dualWriteClient(clientId, { seniority: { ...seniority, since: createdAt.toISOString() } }).catch(() => {});
+              dualWriteClient(clientId, { seniority: { ...seniority, since: createdAt.toISOString() } }).catch((e: any) => console.error('[seniority-job] dualWriteClient failed:', clientId, e?.message || e));
               clientsUpdated += 1;
             } catch (e: any) {
               clientsFailed += 1;

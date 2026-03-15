@@ -8,6 +8,7 @@ import {
   paymeGenerateSale,
   paymeGenerateHostedSale,
   paymeGenerateSubscription,
+  paymeGetSubscriptionDetails,
   paymeGetSubscriptionStatus,
   paymeListSubscriptions,
   paymePauseSubscription,
@@ -1871,4 +1872,180 @@ export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Res
   });
 
   res.status(200).json({ success: true, freeAccess: supabaseFreeAccess });
+}
+
+/**
+ * POST /api/clients/:clientId/subscription/sync-payme
+ * Synchronise l'abonnement du client à partir de PayMe via subCode.
+ * Body: { subCode: string }
+ * - Interroge PayMe pour obtenir le statut, prix, dates, subId
+ * - Met à jour Firestore (subscription/current) et Supabase (subscriptions) en dual-write
+ */
+export async function syncPaymeSubscription(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientId = await pickClientId(req);
+  const rawClientId = pickString((req.params as any)?.clientId);
+  const callerUid = req.uid || null;
+  const body = (req.body || {}) as Record<string, any>;
+  const subCode = pickString(body.subCode);
+  if (!subCode) throw new HttpError(400, 'subCode est requis.');
+
+  const details = await paymeGetSubscriptionDetails({ subCode });
+  if (!details) throw new HttpError(404, 'Aucun abonnement trouvé sur PayMe avec ce subCode.');
+
+  const rawData = details.raw;
+  const items = Array.isArray(rawData?.items) ? rawData.items : [];
+  const item = items.find((it: any) => {
+    const code = it?.sub_payme_code ?? it?.subCode ?? it?.sub_code;
+    return code != null && String(code).trim() === String(subCode).trim();
+  }) || items[0] || {};
+
+  const subStatus = details.subStatus;
+  const isActive = subStatus === 2;
+  const isPaused = subStatus === 3;
+  const isCancelled = subStatus === 5;
+
+  const subIdRaw = item?.sub_payme_id ?? item?.subscription_id ?? item?.subID ?? item?.subId ?? null;
+  const subId = typeof subIdRaw === 'string' && subIdRaw.trim() ? subIdRaw.trim() : null;
+
+  const priceRaw = item?.sub_price ?? item?.subPrice ?? item?.transaction_periodical_payment ?? item?.sale_price ?? item?.price ?? null;
+  let priceCents: number | null = null;
+  if (priceRaw != null) {
+    const s = String(priceRaw).trim().replace(',', '.');
+    if (s.includes('.')) {
+      priceCents = Math.round(Number(s) * 100);
+    } else {
+      priceCents = Math.round(Number(s));
+    }
+    if (!Number.isFinite(priceCents) || priceCents <= 0) priceCents = null;
+  }
+
+  const nextPaymentDate = details.nextPaymentDate || null;
+
+  const startDateRaw = item?.sub_created ?? item?.created_at ?? item?.sale_created ?? null;
+  let startDate: Date | null = null;
+  if (startDateRaw) {
+    const d = new Date(startDateRaw);
+    if (Number.isFinite(d.getTime())) startDate = d;
+  }
+
+  const descriptionRaw = item?.sale_name ?? item?.product_name ?? item?.description ?? null;
+  const description = typeof descriptionRaw === 'string' ? descriptionRaw.trim() : null;
+
+  const membershipFromDesc = description ? guessMembershipFromDescription(description) : null;
+  let membershipFromPrice: string | null = null;
+  if (priceCents) {
+    const shekel = Math.round(priceCents / 100);
+    if (shekel >= 95 && shekel <= 149) membershipFromPrice = 'Pack Start';
+    else if (shekel >= 150 && shekel <= 249) membershipFromPrice = 'Pack Essential';
+    else if (shekel >= 250 && shekel < 600) membershipFromPrice = 'Pack VIP';
+    else if (shekel >= 600) membershipFromPrice = 'Pack Elite';
+  }
+  const membership = membershipFromDesc || membershipFromPrice || 'Pack Essential';
+
+  const now = new Date();
+
+  const firestorePatch: Record<string, any> = {
+    payme: {
+      subCode: subCode,
+      sub_payme_code: subCode,
+      status: subStatus,
+      ...(subId ? { subID: subId, sub_payme_id: subId } : {}),
+      ...(nextPaymentDate ? { nextPaymentDate: admin.firestore.Timestamp.fromDate(nextPaymentDate) } : {}),
+    },
+    plan: {
+      type: 'monthly',
+      membership,
+      ...(priceCents ? { price: priceCents } : {}),
+      ...(nextPaymentDate ? { nextPaymentDate: admin.firestore.Timestamp.fromDate(nextPaymentDate) } : {}),
+    },
+    payment: {
+      method: 'credit-card',
+      ...(nextPaymentDate ? { nextPaymentDate: admin.firestore.Timestamp.fromDate(nextPaymentDate) } : {}),
+    },
+    states: {
+      isActive,
+      isPaused,
+      isCancelled,
+    },
+    dates: {
+      ...(startDate ? { startDate: admin.firestore.Timestamp.fromDate(startDate) } : {}),
+      ...(nextPaymentDate ? { endDate: admin.firestore.Timestamp.fromDate(nextPaymentDate) } : {}),
+    },
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  const db = getFirestore();
+  const subRef = db.collection('Clients').doc(clientId).collection('subscription').doc('current');
+  await subRef.set(firestorePatch, { merge: true });
+
+  const supabaseClientId = await resolveSupabaseClientId(clientId);
+
+  const supabasePatch: Record<string, any> = {
+    client_id: supabaseClientId || rawClientId,
+    membership_type: membership,
+    plan_type: 'monthly',
+    payme_sub_code: subCode,
+    payme_sub_id: subId,
+    payme_status: String(subStatus ?? ''),
+    is_active: isActive,
+    is_paused: isPaused,
+    payment_method: 'credit-card',
+    ...(priceCents ? { price_cents: priceCents } : {}),
+    ...(startDate ? { start_at: startDate.toISOString() } : {}),
+    ...(nextPaymentDate ? { next_payment_at: nextPaymentDate.toISOString() } : {}),
+    updated_at: now.toISOString(),
+  };
+
+  const { data: existingSub } = await supabase
+    .from('subscriptions')
+    .select('id')
+    .eq('client_id', supabaseClientId || rawClientId)
+    .limit(1)
+    .maybeSingle();
+
+  if (existingSub) {
+    await supabase.from('subscriptions').update(supabasePatch).eq('id', existingSub.id);
+  } else {
+    await supabase.from('subscriptions').insert(supabasePatch);
+  }
+
+  await dualWriteClient(clientId, {
+    Membership: membership,
+    membershipStatus: isActive ? 'active' : isCancelled ? 'cancelled' : 'inactive',
+    isUnpaid: false,
+  }).catch((e: any) => console.error('[sync-payme] dualWriteClient failed:', e?.message || e));
+
+  await writeAdminAuditLog({
+    action: 'SYNC_PAYME_SUBSCRIPTION',
+    callerUid,
+    clientId,
+    payload: { subCode, subId, subStatus, membership, priceCents, isActive },
+    req,
+  });
+
+  res.status(200).json({
+    success: true,
+    synced: {
+      subCode,
+      subId,
+      subStatus,
+      isActive,
+      isPaused,
+      isCancelled,
+      membership,
+      priceCents,
+      priceNis: priceCents ? priceCents / 100 : null,
+      startDate: startDate?.toISOString() || null,
+      nextPaymentDate: nextPaymentDate?.toISOString() || null,
+    },
+  });
+}
+
+function guessMembershipFromDescription(desc: string): string | null {
+  const lower = desc.toLowerCase();
+  if (lower.includes('elite')) return 'Pack Elite';
+  if (lower.includes('vip')) return 'Pack VIP';
+  if (lower.includes('essential')) return 'Pack Essential';
+  if (lower.includes('start')) return 'Pack Start';
+  return null;
 }

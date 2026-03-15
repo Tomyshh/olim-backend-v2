@@ -203,7 +203,7 @@ export async function writeClientActivityForClient(params: {
     } as any,
     { merge: true }
   );
-  dualWriteClient(clientId, { activity: params.activity }).catch(() => {});
+  dualWriteClient(clientId, { activity: params.activity }).catch((e: any) => console.error('[activity-job] dualWriteClient failed:', clientId, e?.message || e));
 }
 
 async function tryAcquireJobLease(params: {
@@ -316,7 +316,7 @@ export async function runDailyClientActivityJob(params?: {
               const patch = { activity: { ...computed, computedAt: admin.firestore.FieldValue.serverTimestamp() } satisfies ClientActivitySnapshot };
 
               writer.set(clientRef, patch as any, { merge: true });
-              dualWriteClient(clientId, { activity: computed }).catch(() => {});
+              dualWriteClient(clientId, { activity: computed }).catch((e: any) => console.error('[activity-job] dualWriteClient failed:', clientId, e?.message || e));
               clientsUpdated += 1;
             } catch (e: any) {
               clientsFailed += 1;

@@ -193,7 +193,7 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
       if (!subSnap.exists) {
         console.warn(`[promo-revert] Subscription doc absent pour uid=${uid}, skip`);
         await promoRevertRef.set({ status: 'skipped', completedAt: admin.firestore.FieldValue.serverTimestamp(), skipReason: 'no_subscription_doc' }, { merge: true });
-        dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'no_subscription_doc', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
+        dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'no_subscription_doc', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch((e: any) => console.error('[promo-revert] dualWrite failed:', e?.message || e));
         return 'skipped';
       }
 
@@ -204,7 +204,7 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
       if (alreadyReverted) {
         console.log(`[promo-revert] Déjà revert pour uid=${uid}, skip`);
         await promoRevertRef.set({ status: 'skipped', completedAt: admin.firestore.FieldValue.serverTimestamp(), skipReason: 'already_reverted' }, { merge: true });
-        dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'already_reverted', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
+        dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'already_reverted', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch((e: any) => console.error('[promo-revert] dualWrite failed:', e?.message || e));
         return 'skipped';
       }
 
@@ -233,8 +233,8 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
         { status: 'completed', completedAt: admin.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       );
-      dualWriteSubscription(uid, { plan: { price: Math.floor(basePriceInCents) }, promoCode: null }).catch(() => {});
-      dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'completed', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
+      dualWriteSubscription(uid, { plan: { price: Math.floor(basePriceInCents) }, promoCode: null }).catch((e: any) => console.error('[promo-revert] dualWriteSubscription failed:', uid, e?.message || e));
+      dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'completed', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch((e: any) => console.error('[promo-revert] dualWriteToSupabase failed:', docId, e?.message || e));
 
       console.log(`[promo-revert] Revert OK: uid=${uid}, subId=${data.paymeSubId}, prix ${data.discountedPriceInCents} -> ${basePriceInCents}`);
       return 'completed';
@@ -264,8 +264,8 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
         { status: 'completed', completedAt: admin.firestore.FieldValue.serverTimestamp() },
         { merge: true }
       );
-      dualWriteSubscription(uid, { promoCode: null }).catch(() => {});
-      dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'completed', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
+      dualWriteSubscription(uid, { promoCode: null }).catch((e: any) => console.error('[promo-revert] dualWriteSubscription failed:', uid, e?.message || e));
+      dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'completed', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch((e: any) => console.error('[promo-revert] dualWriteToSupabase failed:', docId, e?.message || e));
 
       console.log(`[promo-revert] Revert annuel marqué: uid=${uid}`);
       return 'completed';
@@ -274,7 +274,7 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
     // Fallback: pas de subId pour un mensuel, on ne peut pas modifier le prix
     console.warn(`[promo-revert] Pas de paymeSubId pour uid=${uid} (monthly), skip`);
     await promoRevertRef.set({ status: 'skipped', completedAt: admin.firestore.FieldValue.serverTimestamp(), skipReason: 'no_payme_sub_id' }, { merge: true });
-    dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'no_payme_sub_id', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
+    dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'no_payme_sub_id', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch((e: any) => console.error('[promo-revert] dualWrite failed:', e?.message || e));
     return 'skipped';
   } catch (e: any) {
     const errorMsg = String(e?.message || e);
@@ -283,7 +283,7 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
       { status: 'failed', lastError: errorMsg, lastErrorAt: admin.firestore.FieldValue.serverTimestamp() },
       { merge: true }
     ).catch(() => {});
-    dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'failed', last_error: errorMsg, last_error_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
+    dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'failed', last_error: errorMsg, last_error_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch((e: any) => console.error('[promo-revert] dualWrite failed:', e?.message || e));
     return 'failed';
   }
 }
@@ -356,7 +356,7 @@ async function runPromoRevertJob(): Promise<Record<string, any> | null> {
           { status: 'skipped', skipReason: 'invalid_data', completedAt: admin.firestore.FieldValue.serverTimestamp() },
           { merge: true }
         ).catch(() => {});
-        dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'invalid_data', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch(() => {});
+        dualWriteToSupabase('promo_reverts', { firestore_id: docId, status: 'skipped', skip_reason: 'invalid_data', completed_at: new Date().toISOString() }, { onConflict: 'firestore_id' }).catch((e: any) => console.error('[promo-revert] dualWrite failed:', e?.message || e));
         continue;
       }
 

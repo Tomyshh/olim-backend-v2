@@ -255,6 +255,14 @@ router.post(
   asyncHandler(clientSubscriptionController.createCustomSaleHosted as any)
 );
 
+// POST /api/clients/:clientId/subscription/sync-payme
+router.post(
+  '/:clientId/subscription/sync-payme',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(clientSubscriptionController.syncPaymeSubscription as any)
+);
+
 // PATCH /api/clients/:clientId/free-access (toggle free access)
 router.patch(
   '/:clientId/free-access',

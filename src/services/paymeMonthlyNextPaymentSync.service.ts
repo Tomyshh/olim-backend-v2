@@ -380,7 +380,7 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
           batch.set(subRef, patch, { merge: true });
           writes++;
           await commitBatchIfNeeded(false);
-          dualWriteSubscription(clientId, patch).catch(() => {});
+          dualWriteSubscription(clientId, patch).catch((e: any) => console.error('[payme-monthly-sync] dualWriteSubscription failed:', clientId, e?.message || e));
         } else {
           console.log('[payme-monthly-sync][DRY-RUN] would cleanup legacy status fields', {
             clientId,
@@ -554,7 +554,7 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
         batch.set(subRef, patch, { merge: true });
         writes++;
         await commitBatchIfNeeded(false);
-        dualWriteSubscription(clientId, patch).catch(() => {});
+        dualWriteSubscription(clientId, patch).catch((e: any) => console.error('[payme-monthly-sync] dualWriteSubscription failed:', clientId, e?.message || e));
       } else {
         console.log('[payme-monthly-sync][DRY-RUN] would update', {
           clientId,
