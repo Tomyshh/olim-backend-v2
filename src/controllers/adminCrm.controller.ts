@@ -2,6 +2,14 @@ import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../middleware/auth.middleware.js';
 import * as adminCrmService from '../services/adminCrm.service.js';
 import { HttpError } from '../utils/errors.js';
+import { supabase } from '../services/supabase.service.js';
+import { getAuth } from '../config/firebase.js';
+import {
+  uploadDual,
+  sanitizeFilename,
+  inferContentType,
+  deleteFromBoth,
+} from '../services/storage.service.js';
 
 function pickOptional(val: unknown): string | undefined {
   return typeof val === 'string' && val.trim() ? val.trim() : undefined;
@@ -267,4 +275,176 @@ export async function updateTip(req: AuthenticatedRequest, res: Response) {
 export async function deleteTip(req: AuthenticatedRequest, res: Response) {
   await adminCrmService.deleteTip(req.params.tipId);
   res.json({ message: 'Tip deleted' });
+}
+
+// ─── Client Documents (admin) ─────────────────────────────────────────
+
+export async function uploadClientDocument(req: AuthenticatedRequest, res: Response) {
+  const { clientId } = req.params;
+  const documentType = String(req.body?.document_type || req.body?.type || '').trim();
+  const forWho = String(req.body?.for_who || req.body?.forWho || '').trim();
+
+  if (!documentType) throw new HttpError(400, 'document_type requis');
+
+  const files = (req as any).files as Express.Multer.File[] | undefined;
+  const file = files?.[0] || (req as any).file as Express.Multer.File | undefined;
+  if (!file) throw new HttpError(400, 'Aucun fichier reçu');
+
+  const { data: client } = await supabase
+    .from('clients')
+    .select('id, firebase_uid')
+    .eq('id', clientId)
+    .maybeSingle();
+  if (!client) throw new HttpError(404, 'Client introuvable');
+
+  const originalName = String(file.originalname || 'file');
+  const clean = sanitizeFilename(originalName);
+  const ts = Date.now();
+  const contentType = inferContentType(originalName, file.mimetype);
+  const typeSlug = documentType.toLowerCase().replace(/\s+/g, '_');
+  const uidPath = client.firebase_uid || clientId;
+
+  const result = await uploadDual({
+    bucket: 'client-documents',
+    firebasePath: `${uidPath}/documents/${typeSlug}/${ts}_${clean}`,
+    supabasePath: `${uidPath}/${typeSlug}/${ts}_${clean}`,
+    buffer: file.buffer,
+    contentType,
+    originalName,
+    size: file.size || 0,
+    uploaderId: req.uid || 'admin',
+  });
+
+  const now = new Date().toISOString();
+  let docTypeId: string | null = null;
+  try {
+    const { data: dt } = await supabase
+      .from('document_types')
+      .select('id')
+      .ilike('label', documentType.trim())
+      .maybeSingle();
+    docTypeId = dt?.id ?? null;
+  } catch {}
+
+  const row: Record<string, any> = {
+    client_id: clientId,
+    document_type: documentType,
+    document_type_id: docTypeId,
+    for_who: forWho || null,
+    file_url: result.firebaseUrl,
+    file_path: result.firebasePath,
+    file_name: originalName,
+    content_type: contentType,
+    file_size: result.size,
+    uploaded_at: now,
+    supabase_storage_path: result.supabasePath,
+    supabase_storage_bucket: result.supabaseBucket,
+    metadata: {},
+    created_at: now,
+  };
+
+  const { error: insertErr } = await supabase.from('client_documents').insert(row);
+  if (insertErr) throw new HttpError(500, insertErr.message);
+
+  res.status(201).json({
+    message: 'Document ajouté',
+    url: result.firebaseUrl,
+    fileName: originalName,
+  });
+}
+
+export async function deleteClientDocument(req: AuthenticatedRequest, res: Response) {
+  const { clientId, documentId } = req.params;
+
+  const { data: doc, error } = await supabase
+    .from('client_documents')
+    .select('*')
+    .eq('client_id', clientId)
+    .or(`id.eq.${documentId},firestore_id.eq.${documentId}`)
+    .maybeSingle();
+
+  if (error) throw new HttpError(500, error.message);
+  if (!doc) throw new HttpError(404, 'Document introuvable');
+
+  await deleteFromBoth(
+    doc.supabase_storage_bucket || 'client-documents',
+    doc.supabase_storage_path,
+    doc.file_path,
+  );
+
+  const { error: delErr } = await supabase
+    .from('client_documents')
+    .delete()
+    .eq('id', doc.id);
+  if (delErr) throw new HttpError(500, delErr.message);
+
+  res.json({ message: 'Document supprimé', documentId: doc.id });
+}
+
+// ─── Client Access (password / magic link) ────────────────────────────
+
+export async function adminResetClientPassword(req: AuthenticatedRequest, res: Response) {
+  const { clientId } = req.params;
+  const newPassword = String(req.body?.newPassword || '');
+
+  if (!newPassword || newPassword.length < 6) {
+    throw new HttpError(400, 'Le mot de passe doit contenir au moins 6 caractères');
+  }
+
+  const { data: client } = await supabase
+    .from('clients')
+    .select('id, email, firebase_uid')
+    .eq('id', clientId)
+    .maybeSingle();
+  if (!client) throw new HttpError(404, 'Client introuvable');
+
+  const email = (client.email || '').toLowerCase().trim();
+
+  // 1) Update Supabase Auth password
+  try {
+    const { data: listData } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    const supabaseUser = listData?.users?.find(
+      (u) => u.email?.toLowerCase() === email
+    );
+    if (supabaseUser) {
+      const { error: updateError } = await supabase.auth.admin.updateUserById(
+        supabaseUser.id,
+        { password: newPassword }
+      );
+      if (updateError) console.error('[adminResetPassword] Supabase update error:', updateError.message);
+    }
+  } catch (err: any) {
+    console.warn('[adminResetPassword] Supabase update skipped:', err.message);
+  }
+
+  // 2) Update Firebase Auth password
+  try {
+    const firebaseUser = client.firebase_uid
+      ? await getAuth().getUser(client.firebase_uid)
+      : await getAuth().getUserByEmail(email);
+    await getAuth().updateUser(firebaseUser.uid, { password: newPassword });
+  } catch (fbErr: any) {
+    console.warn('[adminResetPassword] Firebase update skipped:', fbErr.message);
+  }
+
+  res.json({ ok: true, message: 'Mot de passe modifié avec succès' });
+}
+
+export async function adminSendMagicLink(req: AuthenticatedRequest, res: Response) {
+  const { clientId } = req.params;
+
+  const { data: client } = await supabase
+    .from('clients')
+    .select('id, email')
+    .eq('id', clientId)
+    .maybeSingle();
+  if (!client) throw new HttpError(404, 'Client introuvable');
+
+  const email = (client.email || '').toLowerCase().trim();
+  if (!email) throw new HttpError(400, 'Le client n\'a pas d\'adresse email');
+
+  const { error } = await supabase.auth.resetPasswordForEmail(email);
+  if (error) throw new HttpError(400, error.message);
+
+  res.json({ ok: true, message: `Email de réinitialisation envoyé à ${email}` });
 }

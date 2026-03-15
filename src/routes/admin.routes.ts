@@ -1,9 +1,15 @@
 import { Router } from 'express';
+import multer from 'multer';
 import * as adminController from '../controllers/admin.controller.js';
 import * as adminCrmController from '../controllers/adminCrm.controller.js';
 import { authenticateToken } from '../middleware/auth.middleware.js';
 import { requireAdmin, requireConseiller } from '../middleware/conseiller.middleware.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
 
 const router = Router();
 
@@ -58,6 +64,14 @@ router.patch('/conseillers/:conseillerId', requireAdmin, asyncHandler(adminCrmCo
 
 router.get('/clients/:clientId/requests', requireConseiller, asyncHandler(adminCrmController.getClientRequests as any));
 router.get('/clients/:clientId/subscription-events', requireConseiller, asyncHandler(adminCrmController.getClientSubscriptionEvents as any));
+
+// ─── CRM: Client Documents ─────────────────────────────────────────
+router.post('/clients/:clientId/documents', requireConseiller, upload.array('file'), asyncHandler(adminCrmController.uploadClientDocument as any));
+router.delete('/clients/:clientId/documents/:documentId', requireConseiller, asyncHandler(adminCrmController.deleteClientDocument as any));
+
+// ─── CRM: Client Access (password / magic link) ────────────────────
+router.post('/clients/:clientId/reset-password', requireConseiller, asyncHandler(adminCrmController.adminResetClientPassword as any));
+router.post('/clients/:clientId/send-magic-link', requireConseiller, asyncHandler(adminCrmController.adminSendMagicLink as any));
 
 // ─── CRM: Dashboard Stats ───────────────────────────────────────────
 
