@@ -1743,7 +1743,22 @@ export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Res
   const now = new Date();
   const callerEmail = pickString((req as any).email) || callerUid || 'admin';
 
-  // Ecriture Supabase uniquement (Firestore est en lecture seule depuis le CRM).
+  // Dual-write: Firestore (mobile app source of truth) + Supabase (CRM source of truth)
+  const firestoreFreeAccess: Record<string, any> = {
+    isEnabled,
+    membership,
+    reason,
+    notes,
+    isFirstVisit: false,
+  };
+  if (isEnabled) {
+    firestoreFreeAccess.grantedAt = admin.firestore.Timestamp.fromDate(now);
+    firestoreFreeAccess.grantedBy = callerEmail;
+    if (expiresAtDate) {
+      firestoreFreeAccess.expiresAt = admin.firestore.Timestamp.fromDate(expiresAtDate);
+    }
+  }
+
   const supabaseFreeAccess: Record<string, any> = {
     isEnabled,
     membership,
@@ -1757,12 +1772,18 @@ export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Res
     if (expiresAtDate) supabaseFreeAccess.expiresAt = expiresAtDate.toISOString();
   }
 
-  const { error } = await supabase
-    .from('clients')
-    .update({ free_access: supabaseFreeAccess, updated_at: now.toISOString() })
-    .eq('firebase_uid', clientId);
+  const db = getFirestore();
+  const clientRef = db.collection('Clients').doc(clientId);
 
-  if (error) throw new HttpError(500, `Erreur Supabase: ${error.message}`);
+  const [, supabaseResult] = await Promise.all([
+    clientRef.set({ freeAccess: firestoreFreeAccess }, { merge: true }),
+    supabase
+      .from('clients')
+      .update({ free_access: supabaseFreeAccess, updated_at: now.toISOString() })
+      .eq('firebase_uid', clientId),
+  ]);
+
+  if (supabaseResult.error) throw new HttpError(500, `Erreur Supabase: ${supabaseResult.error.message}`);
 
   await writeAdminAuditLog({
     action: isEnabled ? 'FREE_ACCESS_GRANTED' : 'FREE_ACCESS_REVOKED',
