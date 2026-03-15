@@ -434,22 +434,89 @@ function buildSubscriptionCurrentDoc(params: {
  */
 export async function getClientSubscriptionState(req: AuthenticatedRequest, res: Response): Promise<void> {
   const clientId = await pickClientId(req);
+  const rawClientId = pickString((req.params as any)?.clientId);
 
-  const { client, subscription } = await loadClientAndSubscription({ clientId });
+  let membership: string | null = null;
+  let paymeStatus: number | null = null;
+  let sessionStatus: string | null = null;
+  let isActive = false;
 
-  // Règle: on "vérifie" d'abord le membership du doc subscription/current (source of truth).
-  const membership = extractMembershipFromSubscriptionCurrent(subscription);
+  // 1. Check Supabase subscriptions table directly (source of truth for CRM)
+  const { data: subRow } = await supabase
+    .from('subscriptions')
+    .select('membership_type, payme_status, payme_sub_code, is_active')
+    .or(`client_id.eq.${rawClientId}`)
+    .limit(1)
+    .maybeSingle();
 
-  // Si pas de doc subscription/current ou pas de membership, on considère qu'il n'y a pas d'abonnement PayMe à checker.
-  const { subCode } = extractPaymeIdentifiers({ client, subscription });
-  const paymeStatus = membership && subCode != null ? await paymeGetSubscriptionStatus(subCode) : null;
+  if (!subRow) {
+    const resolvedId = await resolveSupabaseClientId(clientId);
+    if (resolvedId) {
+      const { data: subRow2 } = await supabase
+        .from('subscriptions')
+        .select('membership_type, payme_status, payme_sub_code, is_active')
+        .eq('client_id', resolvedId)
+        .maybeSingle();
+      if (subRow2) {
+        Object.assign(subRow ?? {}, subRow2);
+      }
+    }
+  }
+
+  const effectiveSub = subRow as any;
+  if (effectiveSub?.membership_type) {
+    membership = effectiveSub.membership_type;
+    isActive = effectiveSub.is_active === true;
+    const rawStatus = effectiveSub.payme_status;
+    if (rawStatus != null) {
+      paymeStatus = typeof rawStatus === 'number' ? rawStatus : parseInt(rawStatus, 10) || null;
+    }
+    if (effectiveSub.payme_sub_code && !paymeStatus) {
+      try {
+        paymeStatus = await paymeGetSubscriptionStatus(effectiveSub.payme_sub_code);
+      } catch { /* ignore */ }
+    }
+  }
+
+  // 2. Fallback: check Firestore subscription/current
+  if (!membership) {
+    try {
+      const { subscription } = await loadClientAndSubscription({ clientId });
+      membership = extractMembershipFromSubscriptionCurrent(subscription);
+      if (subscription?.payme?.status != null) {
+        paymeStatus = typeof subscription.payme.status === 'number' ? subscription.payme.status : parseInt(subscription.payme.status, 10) || null;
+      }
+      isActive = subscription?.states?.isActive === true;
+    } catch { /* client not found is ok */ }
+  }
+
+  // 3. Check pending_payment_sessions for recent completed session
+  const { data: recentSession } = await supabase
+    .from('pending_payment_sessions')
+    .select('status, membership, plan_type')
+    .eq('client_firebase_uid', clientId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (recentSession) {
+    sessionStatus = recentSession.status;
+    if (recentSession.status === 'completed' && !membership) {
+      membership = recentSession.membership;
+      isActive = true;
+    }
+  }
+
+  const confirmed = (paymeStatus === 1) || isActive || (sessionStatus === 'completed');
 
   res.status(200).json({
     success: true,
     membership: membership || null,
-    paymeStatus,
-    payme_status: paymeStatus,
-    status: paymeStatus
+    paymeStatus: confirmed ? 1 : paymeStatus,
+    payme_status: confirmed ? 1 : paymeStatus,
+    status: confirmed ? 1 : paymeStatus,
+    sessionStatus,
+    isActive,
   });
 }
 

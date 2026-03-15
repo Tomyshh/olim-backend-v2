@@ -224,12 +224,20 @@ export async function handleSubscriptionWebhook(req: Request, res: Response): Pr
     );
     await batch.commit();
 
-    dualWriteSubscription(clientId, subscriptionDoc).catch(() => {});
-    dualWriteClient(clientId, {
-      membership_type: membership,
-      subscription_status: 'active',
-      is_unpaid: false,
-    }).catch(() => {});
+    try {
+      await dualWriteSubscription(clientId, subscriptionDoc);
+    } catch (dwErr: any) {
+      console.error('[paymeWebhook] dualWriteSubscription failed:', dwErr?.message || dwErr);
+    }
+    try {
+      await dualWriteClient(clientId, {
+        Membership: membership,
+        membershipStatus: 'active',
+        isUnpaid: false,
+      });
+    } catch (dwErr: any) {
+      console.error('[paymeWebhook] dualWriteClient failed:', dwErr?.message || dwErr);
+    }
 
     await supabase
       .from('pending_payment_sessions')
