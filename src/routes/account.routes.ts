@@ -8,5 +8,8 @@ router.use(authenticateToken);
 
 router.get('/export', accountController.exportUserData);
 router.delete('/', accountController.deleteAccount);
+router.post('/device', accountController.registerDevice);
+router.delete('/device', accountController.removeDevice);
+router.delete('/notification-token', accountController.removeNotificationToken);
 
 export default router;

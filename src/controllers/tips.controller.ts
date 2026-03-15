@@ -18,12 +18,15 @@ export async function getTips(req: AuthenticatedRequest, res: Response): Promise
     }
 
     const { data, error } = await query;
-    if (error) throw error;
+    if (error) {
+      console.error('[tips] Supabase error:', error.message);
+      res.json({ tips: [] });
+      return;
+    }
 
     let tips = (data || []).map((t: any) => ({
       tipId: t.id,
       ...t,
-      // Legacy aliases
       title: t.title ?? '',
       content: t.content ?? t.body ?? '',
       category: t.category ?? '',
@@ -46,7 +49,8 @@ export async function getTips(req: AuthenticatedRequest, res: Response): Promise
 
     res.json({ tips });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('[tips] getTips unexpected error:', error.message);
+    res.json({ tips: [] });
   }
 }
 

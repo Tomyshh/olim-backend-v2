@@ -281,3 +281,61 @@ export async function deleteAccount(req: AuthenticatedRequest, res: Response): P
     res.status(500).json({ error: error.message });
   }
 }
+
+export async function registerDevice(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const uid = req.uid!;
+    const clientId = await resolveSupabaseClientId(uid);
+    if (!clientId) {
+      res.json({ ok: true, message: 'Client not found in Supabase, skipped.' });
+      return;
+    }
+
+    const deviceInfo = req.body || {};
+    const now = new Date().toISOString();
+
+    await supabase.from('client_devices').upsert(
+      {
+        client_id: clientId,
+        firebase_uid: uid,
+        platform: deviceInfo.platform ?? null,
+        device_model: deviceInfo.deviceModel ?? null,
+        os_version: deviceInfo.osVersion ?? null,
+        app_version: deviceInfo.appVersion ?? null,
+        last_login_at: now,
+        updated_at: now,
+      },
+      { onConflict: 'client_id' }
+    );
+
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+export async function removeDevice(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const uid = req.uid!;
+    const clientId = await resolveSupabaseClientId(uid);
+    if (clientId) {
+      await supabase.from('client_devices').delete().eq('client_id', clientId);
+    }
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}
+
+export async function removeNotificationToken(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const uid = req.uid!;
+    const clientId = await resolveSupabaseClientId(uid);
+    if (clientId) {
+      await supabase.from('client_fcm_tokens').delete().eq('client_id', clientId);
+    }
+    res.json({ ok: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+}

@@ -14,32 +14,36 @@ export async function getFavorites(req: AuthenticatedRequest, res: Response): Pr
     const uid = req.uid!;
     const clientId = await resolveSupabaseClientId(uid);
     if (!clientId) {
-      res.json({ favorites: [] });
+      // Fallback Firestore
+      try {
+        const db = getFirestore();
+        const snap = await db.collection('Clients').doc(uid).collection('favoriteRequests').get();
+        const favorites = snap.docs
+          .filter(d => !d.data().type || d.data().type === 'favorite')
+          .map(d => ({ id: d.id, ...d.data() }));
+        res.json({ favorites });
+      } catch (_) {
+        res.json({ favorites: [] });
+      }
       return;
     }
 
-    let data: any[] | null = null;
-
-    // Try with type filter first, fall back without if column doesn't exist
     const result = await supabase
       .from('favorite_requests')
       .select('*')
       .eq('client_id', clientId);
 
     if (result.error) {
-      // Table might not exist at all – return empty
       res.json({ favorites: [] });
       return;
     }
-    data = result.data;
 
-    // Client-side filter if `type` column exists on some rows
-    const favorites = (data || [])
+    const favorites = (result.data || [])
       .filter((f: any) => !f.type || f.type === 'favorite')
       .map((f: any) => ({ id: f.id, ...f }));
     res.json({ favorites });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.json({ favorites: [] });
   }
 }
 
@@ -118,19 +122,18 @@ export async function getRecent(req: AuthenticatedRequest, res: Response): Promi
       return;
     }
 
-    // Client-side filter for recent items, sort by last_used
     const recent = (result.data || [])
       .filter((r: any) => r.type === 'recent')
       .sort((a: any, b: any) => {
         const da = a.last_used ? new Date(a.last_used).getTime() : 0;
-        const db = b.last_used ? new Date(b.last_used).getTime() : 0;
-        return db - da;
+        const dateB = b.last_used ? new Date(b.last_used).getTime() : 0;
+        return dateB - da;
       })
       .slice(0, 10)
       .map((r: any) => ({ id: r.id, ...r }));
     res.json({ recent });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.json({ recent: [] });
   }
 }
 

@@ -19,39 +19,73 @@ export async function getConversations(req: AuthenticatedRequest, res: Response)
       .eq('client_id', clientId)
       .order('updated_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      console.error('[chat] getConversations Supabase error:', error.message);
+      // Fallback Firestore
+      try {
+        const db = getFirestore();
+        const snap = await db
+          .collection('Clients').doc(uid)
+          .collection('Conversations')
+          .orderBy('updatedAt', 'desc')
+          .get();
+        const fallback = snap.docs.map(d => {
+          const data = d.data();
+          return {
+            conversationId: d.id,
+            title: data.title ?? '',
+            requestId: data.requestId ?? null,
+            createdAt: data.createdAt ?? '',
+            updatedAt: data.updatedAt ?? '',
+            lastMessage: null,
+            unreadCount: 0,
+          };
+        });
+        res.json({ conversations: fallback });
+        return;
+      } catch (fbErr: any) {
+        console.error('[chat] Firestore fallback also failed:', fbErr.message);
+        res.json({ conversations: [] });
+        return;
+      }
+    }
 
     const enrichedConversations = await Promise.all(
       (conversations || []).map(async (conv) => {
-        const { data: lastMessages } = await supabase
-          .from('chat_messages')
-          .select('*')
-          .eq('conversation_id', conv.id)
-          .order('created_at', { ascending: false })
-          .limit(1);
+        let lastMsg: any = null;
+        let unreadCount = 0;
+        try {
+          const { data: lastMessages } = await supabase
+            .from('chat_messages')
+            .select('*')
+            .eq('conversation_id', conv.id)
+            .order('created_at', { ascending: false })
+            .limit(1);
+          lastMsg = lastMessages?.[0] || null;
 
-        const { count: unreadCount } = await supabase
-          .from('chat_messages')
-          .select('*', { count: 'exact', head: true })
-          .eq('conversation_id', conv.id)
-          .eq('is_read', false)
-          .neq('sender_id', uid);
+          const { count } = await supabase
+            .from('chat_messages')
+            .select('*', { count: 'exact', head: true })
+            .eq('conversation_id', conv.id)
+            .eq('is_read', false)
+            .neq('sender_id', uid);
+          unreadCount = count || 0;
+        } catch (_) {
+          // Non-blocking: return conversation without message details
+        }
 
-        const lastMsg = lastMessages?.[0] || null;
         return {
           conversationId: conv.firestore_id || conv.id,
           ...conv,
           lastMessage: lastMsg ? {
             ...lastMsg,
-            // Legacy aliases for messages
             senderName: lastMsg.sender_name ?? '',
             senderId: lastMsg.sender_id ?? '',
             isRead: lastMsg.is_read ?? false,
             readAt: lastMsg.read_at ?? null,
             createdAt: lastMsg.created_at ?? '',
           } : null,
-          unreadCount: unreadCount || 0,
-          // Legacy aliases
+          unreadCount,
           title: conv.title ?? '',
           requestId: conv.request_id ?? null,
           createdAt: conv.created_at ?? '',
@@ -62,7 +96,8 @@ export async function getConversations(req: AuthenticatedRequest, res: Response)
 
     res.json({ conversations: enrichedConversations });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    console.error('[chat] getConversations unexpected error:', error.message);
+    res.json({ conversations: [] });
   }
 }
 

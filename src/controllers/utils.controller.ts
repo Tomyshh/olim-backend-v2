@@ -36,11 +36,15 @@ export async function getServiceAvailability(
       .eq('key', 'urgency')
       .maybeSingle();
 
-    if (error) throw error;
+    if (error) {
+      console.error('[utils] getServiceAvailability Supabase error:', error.message);
+      res.json({ availability: {} });
+      return;
+    }
 
     res.json({ availability: data?.value ?? {} });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.json({ availability: {} });
   }
 }
 

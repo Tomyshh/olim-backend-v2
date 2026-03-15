@@ -25,7 +25,14 @@ export async function getPreferences(req: AuthenticatedRequest, res: Response): 
     const uid = req.uid!;
     const clientId = await resolveSupabaseClientId(uid);
     if (!clientId) {
-      res.json({ preferences: {} });
+      // Fallback Firestore
+      try {
+        const db = getFirestore();
+        const doc = await db.collection('Clients').doc(uid).collection('settings').doc('preferences').get();
+        res.json({ preferences: doc.exists ? (doc.data() ?? {}) : {} });
+      } catch (_) {
+        res.json({ preferences: {} });
+      }
       return;
     }
 
@@ -35,11 +42,21 @@ export async function getPreferences(req: AuthenticatedRequest, res: Response): 
       .eq('client_id', clientId)
       .maybeSingle();
 
-    if (error) throw error;
+    if (error) {
+      // Fallback Firestore if table doesn't exist
+      try {
+        const db = getFirestore();
+        const doc = await db.collection('Clients').doc(uid).collection('settings').doc('preferences').get();
+        res.json({ preferences: doc.exists ? (doc.data() ?? {}) : {} });
+      } catch (_) {
+        res.json({ preferences: {} });
+      }
+      return;
+    }
 
     res.json({ preferences: data?.preferences ?? data ?? {} });
   } catch (error: any) {
-    res.status(500).json({ error: error.message });
+    res.json({ preferences: {} });
   }
 }
 
