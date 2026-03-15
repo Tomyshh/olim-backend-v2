@@ -1900,9 +1900,9 @@ export async function syncPaymeSubscription(req: AuthenticatedRequest, res: Resp
   }) || items[0] || {};
 
   const subStatus = details.subStatus;
-  const isActive = subStatus === 2;
   const isPaused = subStatus === 3;
   const isCancelled = subStatus === 5;
+  const isPaymeActive = subStatus === 2;
 
   const subIdRaw = item?.sub_payme_id ?? item?.subscription_id ?? item?.subID ?? item?.subId ?? null;
   const subId = typeof subIdRaw === 'string' && subIdRaw.trim() ? subIdRaw.trim() : null;
@@ -1944,6 +1944,14 @@ export async function syncPaymeSubscription(req: AuthenticatedRequest, res: Resp
 
   const now = new Date();
 
+  let endDate: Date | null = null;
+  if (isCancelled) {
+    endDate = nextPaymentDate || (startDate ? addMonths(startDate, 1) : null);
+  }
+
+  const stillHasAccess = isCancelled && endDate && endDate.getTime() > now.getTime();
+  const isActive = isPaymeActive || !!stillHasAccess;
+
   const firestorePatch: Record<string, any> = {
     payme: {
       subCode: subCode,
@@ -1966,10 +1974,11 @@ export async function syncPaymeSubscription(req: AuthenticatedRequest, res: Resp
       isActive,
       isPaused,
       isCancelled,
+      willExpire: !!stillHasAccess,
     },
     dates: {
       ...(startDate ? { startDate: admin.firestore.Timestamp.fromDate(startDate) } : {}),
-      ...(nextPaymentDate ? { endDate: admin.firestore.Timestamp.fromDate(nextPaymentDate) } : {}),
+      ...(endDate ? { endDate: admin.firestore.Timestamp.fromDate(endDate) } : {}),
     },
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
@@ -1993,6 +2002,7 @@ export async function syncPaymeSubscription(req: AuthenticatedRequest, res: Resp
     ...(priceCents ? { price_cents: priceCents } : {}),
     ...(startDate ? { start_at: startDate.toISOString() } : {}),
     ...(nextPaymentDate ? { next_payment_at: nextPaymentDate.toISOString() } : {}),
+    ...(endDate ? { end_at: endDate.toISOString() } : {}),
     updated_at: now.toISOString(),
   };
 
@@ -2011,7 +2021,7 @@ export async function syncPaymeSubscription(req: AuthenticatedRequest, res: Resp
 
   await dualWriteClient(clientId, {
     Membership: membership,
-    membershipStatus: isActive ? 'active' : isCancelled ? 'cancelled' : 'inactive',
+    membershipStatus: isActive ? 'active' : 'cancelled',
     isUnpaid: false,
   }).catch((e: any) => console.error('[sync-payme] dualWriteClient failed:', e?.message || e));
 
@@ -2032,11 +2042,13 @@ export async function syncPaymeSubscription(req: AuthenticatedRequest, res: Resp
       isActive,
       isPaused,
       isCancelled,
+      stillHasAccess: !!stillHasAccess,
       membership,
       priceCents,
       priceNis: priceCents ? priceCents / 100 : null,
       startDate: startDate?.toISOString() || null,
       nextPaymentDate: nextPaymentDate?.toISOString() || null,
+      endDate: endDate?.toISOString() || null,
     },
   });
 }
