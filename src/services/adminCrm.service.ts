@@ -144,7 +144,7 @@ export async function getClientById(clientId: string) {
       subscriptions(*),
       family_members(*),
       client_addresses(*),
-      payment_credentials(id, card_name, card_masked, card_type, is_subscription_card, is_default, created_at),
+      payment_credentials(id, firestore_id, card_name, card_masked, card_type, is_subscription_card, is_default, created_at),
       client_documents(id, document_type, for_who, is_valid, created_at)
     `)
     .eq('id', clientId)
@@ -162,7 +162,7 @@ export async function getClientByFirebaseUid(firebaseUid: string) {
       subscriptions(*),
       family_members(*),
       client_addresses(*),
-      payment_credentials(id, card_name, card_masked, card_type, is_subscription_card, is_default, created_at),
+      payment_credentials(id, firestore_id, card_name, card_masked, card_type, is_subscription_card, is_default, created_at),
       client_documents(id, document_type, for_who, is_valid, created_at)
     `)
     .eq('firebase_uid', firebaseUid)
