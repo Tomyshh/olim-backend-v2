@@ -113,6 +113,32 @@ export async function resolveSupabaseClientId(firebaseUid: string): Promise<stri
 
 export function clearClientIdCache(): void {
   clientIdCache = new Map();
+  firebaseUidCache = new Map();
+}
+
+let firebaseUidCache = new Map<string, string>();
+
+/**
+ * Given either a Supabase UUID or a Firebase UID, resolves to the Firebase UID.
+ * CRM routes receive Supabase UUIDs from the frontend, but subscription
+ * controllers need Firebase UIDs for Firestore lookups.
+ */
+export async function resolveClientFirebaseUid(clientIdOrUid: string): Promise<string | null> {
+  const cached = firebaseUidCache.get(clientIdOrUid);
+  if (cached) return cached;
+
+  const { data } = await supabase
+    .from('clients')
+    .select('firebase_uid')
+    .or(`id.eq.${clientIdOrUid},firebase_uid.eq.${clientIdOrUid}`)
+    .limit(1)
+    .maybeSingle();
+
+  const uid = data?.firebase_uid ?? null;
+  if (uid) {
+    firebaseUidCache.set(clientIdOrUid, uid);
+  }
+  return uid;
 }
 
 // ---------------------------------------------------------------------------

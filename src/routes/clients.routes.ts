@@ -237,6 +237,24 @@ router.post(
   asyncHandler(clientSubscriptionController.createClientCustomSale as any)
 );
 
+// POST /api/clients/:clientId/sales/hosted (PayMe hosted page for one-time custom sale)
+router.post(
+  '/:clientId/sales/hosted',
+  authenticateToken,
+  requireConseiller,
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:clients:sales:hosted',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  asyncHandler(clientSubscriptionController.createCustomSaleHosted as any)
+);
+
 export default router;
 
 

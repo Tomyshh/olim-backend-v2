@@ -16,13 +16,23 @@ import {
   paymeSetSubscriptionPrice
 } from '../services/payme.service.js';
 import { validateAndApplyPromo, type PromoValidationOk } from '../services/promoCode.service.js';
-import { computeMembershipPricing } from '../services/membershipPricing.service.js';
-import { dualWriteSubscription, dualWriteClient, dualWritePaymentCredential, dualWriteToSupabase, dualWritePromoRevert, dualWritePromotion, resolveSupabaseClientId } from '../services/dualWrite.service.js';
-import { readClientInfo, readSubscription, readAllPaymentCredentials, readPaymentCredential } from '../services/supabaseFirstRead.service.js';
+import { computeMembershipPricing, normalizePlan } from '../services/membershipPricing.service.js';
+import { memberIsEligibleAdultSupplement } from '../services/familyBilling.service.js';
+import { getFamilyMemberPricingNis, nisToCents } from '../services/remoteConfigPricing.service.js';
+import { dualWriteSubscription, dualWriteClient, dualWritePaymentCredential, dualWriteToSupabase, dualWritePromoRevert, dualWritePromotion, resolveSupabaseClientId, resolveClientFirebaseUid } from '../services/dualWrite.service.js';
+import { readClientInfo, readSubscription, readAllPaymentCredentials, readPaymentCredential, readFamilyMembers } from '../services/supabaseFirstRead.service.js';
 import { supabase } from '../services/supabase.service.js';
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+async function pickClientId(req: { params?: any }): Promise<string> {
+  const raw = pickString((req.params as any)?.clientId);
+  if (!raw) throw new HttpError(400, 'clientId manquant.');
+  const uid = await resolveClientFirebaseUid(raw);
+  if (!uid) throw new HttpError(404, 'Client introuvable (ID non résolu).');
+  return uid;
 }
 
 function coercePositiveInt(value: unknown, label: string): number {
@@ -144,17 +154,20 @@ async function loadClientAndSubscription(params: { clientId: string }): Promise<
   client: Record<string, any>;
   subscriptionRef: FirebaseFirestore.DocumentReference;
   subscription: Record<string, any> | null;
+  firebaseUid: string;
 }> {
+  const firebaseUid = await resolveClientFirebaseUid(params.clientId) ?? params.clientId;
+
   const db = getFirestore();
-  const clientRef = db.collection('Clients').doc(params.clientId);
+  const clientRef = db.collection('Clients').doc(firebaseUid);
 
   const [clientData, subResult] = await Promise.all([
-    readClientInfo(params.clientId, async () => {
+    readClientInfo(firebaseUid, async () => {
       const snap = await clientRef.get();
       if (!snap.exists) return null as any;
       return (snap.data() || {}) as any;
     }),
-    readSubscription(params.clientId, async () => {
+    readSubscription(firebaseUid, async () => {
       const snap = await clientRef.collection('subscription').doc('current').get();
       return { exists: snap.exists, data: snap.exists ? ((snap.data() || {}) as any) : null };
     })
@@ -166,7 +179,8 @@ async function loadClientAndSubscription(params: { clientId: string }): Promise<
     clientRef,
     client: clientData,
     subscriptionRef: clientRef.collection('subscription').doc('current'),
-    subscription: subResult.exists ? subResult.data : null
+    subscription: subResult.exists ? subResult.data : null,
+    firebaseUid,
   };
 }
 
@@ -419,8 +433,7 @@ function buildSubscriptionCurrentDoc(params: {
  * Retour: { success: true, paymeStatus: number|null }
  */
 export async function getClientSubscriptionState(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
 
   const { client, subscription } = await loadClientAndSubscription({ clientId });
 
@@ -456,8 +469,7 @@ type CreateOrReplaceBody = {
  * Crée ou remplace l'abonnement PayMe (sale + subscription) pour un client existant.
  */
 export async function createOrReplaceClientSubscription(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
 
   const callerUid = req.uid || null;
   const body = (req.body || {}) as CreateOrReplaceBody;
@@ -805,8 +817,7 @@ type AdminSetPriceBody = {
  * Le backend décide: set-price si possible, sinon replace.
  */
 export async function modifyClientSubscription(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
 
   const callerUid = req.uid || null;
   const body = (req.body || {}) as ModifyBody;
@@ -1072,8 +1083,7 @@ export async function modifyClientSubscription(req: AuthenticatedRequest, res: R
  * - ne (re)crée JAMAIS de sale/subscription
  */
 export async function adminPatchSubscriptionMembershipFirestoreOnly(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
 
   const callerUid = req.uid || null;
   const body = (req.body || {}) as AdminPatchMembershipBody;
@@ -1120,8 +1130,7 @@ export async function adminPatchSubscriptionMembershipFirestoreOnly(req: Authent
  * - ne (re)crée JAMAIS de sale/subscription
  */
 export async function adminSetPaymeSubscriptionPriceOnly(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
 
   const callerUid = req.uid || null;
   const body = (req.body || {}) as AdminSetPriceBody;
@@ -1175,18 +1184,38 @@ export async function adminSetPaymeSubscriptionPriceOnly(req: AuthenticatedReque
  * - ne (re)crée JAMAIS de sale/subscription
  */
 export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
 
   const callerUid = req.uid || null;
   const body = (req.body || {}) as (AdminPatchMembershipBody & AdminSetPriceBody);
 
   const membership = pickString((body as any).membership);
   if (!membership) throw new HttpError(400, 'membership requis.');
-  const newPriceInCents = coercePositiveInt((body as any).newPriceInCents, 'newPriceInCents');
 
-  const { client, subscriptionRef, subscription } = await loadClientAndSubscription({ clientId });
+  const { client, subscriptionRef, subscription, firebaseUid } = await loadClientAndSubscription({ clientId });
   if (!subscription) throw new HttpError(409, "Aucun doc subscription/current: impossible de modifier le membership.");
+
+  let newPriceInCents: number;
+  if ((body as any).newPriceInCents != null) {
+    newPriceInCents = coercePositiveInt((body as any).newPriceInCents, 'newPriceInCents');
+  } else {
+    const currentPlan = pickString(subscription?.plan?.type) || (Number(client.subPlan) === 4 ? 'annual' : 'monthly');
+    const pricing = await computeMembershipPricing({ membershipType: membership, plan: currentPlan });
+    if (!pricing.ok) throw new HttpError(400, `Impossible de calculer le prix pour ${membership} / ${currentPlan}`);
+    let baseCents = pricing.serverPriceInCents;
+
+    const db = getFirestore();
+    const familyMembers = await readFamilyMembers(firebaseUid, async () => {
+      const snap = await db.collection('Clients').doc(firebaseUid).collection('Family Members').get();
+      return snap.docs.map((d) => ({ id: d.id, data: (d.data() || {}) as Record<string, any> }));
+    });
+    const eligibleAdults = familyMembers.filter((m) => memberIsEligibleAdultSupplement(m.id, m.data));
+    if (eligibleAdults.length > 0) {
+      const familyPricing = await getFamilyMemberPricingNis();
+      baseCents += eligibleAdults.length * nisToCents(familyPricing.monthlyNis);
+    }
+    newPriceInCents = baseCents;
+  }
 
   const override = pickPaymeOverrideIdentifiers(body);
   let target = await resolvePaymeTarget({ client, subscription, override });
@@ -1269,8 +1298,7 @@ export async function adminPatchMembershipAndSetPaymePrice(req: AuthenticatedReq
  * - ne (re)crée JAMAIS de sale/subscription
  */
 export async function adminPatchMembershipAndSetPaymeDescription(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
 
   const callerUid = req.uid || null;
   const body = (req.body || {}) as AdminPatchMembershipBody;
@@ -1351,8 +1379,7 @@ async function updateSubscriptionStateDoc(params: {
 }
 
 export async function pauseClientSubscription(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
   const callerUid = req.uid || null;
 
   const { client, subscription } = await loadClientAndSubscription({ clientId });
@@ -1375,8 +1402,7 @@ export async function pauseClientSubscription(req: AuthenticatedRequest, res: Re
 }
 
 export async function resumeClientSubscription(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
   const callerUid = req.uid || null;
 
   const { client, subscription } = await loadClientAndSubscription({ clientId });
@@ -1399,8 +1425,7 @@ export async function resumeClientSubscription(req: AuthenticatedRequest, res: R
 }
 
 export async function cancelClientSubscription(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
   const callerUid = req.uid || null;
 
   const { client, subscription } = await loadClientAndSubscription({ clientId });
@@ -1438,8 +1463,7 @@ type SetSubscriptionCardBody = { paymentCredentialId?: unknown };
  * Body: { paymentCredentialId }
  */
 export async function setClientSubscriptionCard(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
   const callerUid = req.uid || null;
 
   const body = (req.body || {}) as SetSubscriptionCardBody;
@@ -1491,8 +1515,7 @@ type CustomSaleBody = {
  * Body: { paymentCredentialId, amountInCents, description, installments? }
  */
 export async function createClientCustomSale(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
   const callerUid = req.uid || null;
 
   const body = (req.body || {}) as CustomSaleBody;
@@ -1531,13 +1554,60 @@ export async function createClientCustomSale(req: AuthenticatedRequest, res: Res
 }
 
 /**
+ * POST /api/clients/:clientId/sales/hosted
+ * Generates a PayMe hosted sale URL for a one-time custom payment (no subscription).
+ * Body: { amountInCents, description }
+ */
+export async function createCustomSaleHosted(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientId = await pickClientId(req);
+  const callerUid = req.uid || null;
+
+  const body = (req.body || {}) as Record<string, any>;
+  const amountInCents = coercePositiveInt(body.amountInCents, 'amountInCents');
+  const description = pickString(body.description);
+  if (!description) throw new HttpError(400, 'description requise.');
+
+  const clientData = await readClientInfo(clientId, async () => {
+    const snap = await getFirestore().collection('Clients').doc(clientId).get();
+    if (!snap.exists) return null as any;
+    return (snap.data() || {}) as any;
+  });
+  if (!clientData) throw new HttpError(404, 'Client introuvable.');
+
+  const email = pickString(clientData.Email);
+  const buyerName = [pickString(clientData['First Name']), pickString(clientData['Last Name'])].filter(Boolean).join(' ');
+
+  const returnUrl = process.env.CRM_PAYMENT_RETURN_URL || `${process.env.FRONTEND_URL || ''}/payment-return`;
+  const webhookUrl = process.env.PAYME_WEBHOOK_URL || `${process.env.BACKEND_URL || ''}/api/payme/subscription-webhook`;
+
+  const hostedSale = await paymeGenerateHostedSale({
+    priceInCents: amountInCents,
+    description,
+    buyerEmail: email || undefined,
+    buyerName: buyerName || undefined,
+    callbackUrl: webhookUrl,
+    returnUrl: `${returnUrl}?type=custom_sale`,
+  });
+
+  await writeAdminAuditLog({
+    action: 'CLIENT_CUSTOM_SALE_HOSTED',
+    callerUid,
+    clientId,
+    payload: { amountInCents, description },
+    req,
+    extra: { payme_sale_id: hostedSale.payme_sale_id },
+  });
+
+  res.status(200).json({ success: true, sale_url: hostedSale.sale_url });
+}
+
+/**
  * POST /api/clients/:clientId/subscription/create-payment-session
  * Generates a PayMe hosted sale URL for subscription creation.
  * The conseiller is redirected to PayMe to enter card details.
  */
 export async function createPaymentSession(req: AuthenticatedRequest, res: Response): Promise<void> {
-  const clientId = pickString((req.params as any)?.clientId);
-  if (!clientId) throw new HttpError(400, 'clientId manquant.');
+  const clientId = await pickClientId(req);
 
   const callerUid = req.uid || null;
   const body = (req.body || {}) as Record<string, any>;
