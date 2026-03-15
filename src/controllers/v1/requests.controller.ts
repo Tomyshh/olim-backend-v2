@@ -198,6 +198,17 @@ async function getClientContext(uid: string): Promise<{ language: string | null;
   return { language, membership: legacy, profile };
 }
 
+async function resolveConseillerId(name: string): Promise<string | null> {
+  if (!name) return null;
+  const { data } = await supabase
+    .from('conseillers')
+    .select('id')
+    .ilike('name', name.trim())
+    .limit(1)
+    .maybeSingle();
+  return data?.id ?? null;
+}
+
 async function upsertSupabaseRequest(params: {
   uid: string;
   requestId: string;
@@ -205,8 +216,9 @@ async function upsertSupabaseRequest(params: {
   idempotencyKey: string;
   request: Record<string, unknown>;
   computed: { assignedTo: string; priority: number; waitingTime: string | null; membership: MembershipType | null };
+  clientProfile: Record<string, unknown>;
 }): Promise<{ inserted: boolean; id: string | null }> {
-  const { uid, requestId, source, idempotencyKey, request } = params;
+  const { uid, requestId, source, idempotencyKey, request, clientProfile } = params;
 
   const requestType = String(pickLegacyField(request, ['Request Type', 'request_type', 'requestType']) ?? '').trim();
   const requestCategory = String(pickLegacyField(request, ['Request Category', 'request_category', 'category']) ?? '').trim();
@@ -220,14 +232,23 @@ async function upsertSupabaseRequest(params: {
 
   const priority = params.computed.priority;
 
-  const firstName = String(pickLegacyField(request, ['First Name', 'first_name']) ?? '').trim() || null;
-  const lastName = String(pickLegacyField(request, ['Last Name', 'last_name']) ?? '').trim() || null;
-  const email = String(pickLegacyField(request, ['Email', 'email']) ?? '').trim() || null;
-  const phone = String(pickLegacyField(request, ['Phone', 'phone', 'Phone Number']) ?? '').trim() || null;
+  // Client info: prefer request payload, fallback to client profile from Supabase/Firestore
+  const profileFirstName = String(clientProfile['First Name'] ?? clientProfile['firstName'] ?? '').trim();
+  const profileLastName = String(clientProfile['Last Name'] ?? clientProfile['lastName'] ?? '').trim();
+  const profileEmail = String(clientProfile['Email'] ?? clientProfile['email'] ?? '').trim();
+  const profilePhone = String(clientProfile['Phone Number'] ?? clientProfile['phone'] ?? '').trim();
+
+  const firstName = String(pickLegacyField(request, ['First Name', 'first_name']) ?? '').trim() || profileFirstName || null;
+  const lastName = String(pickLegacyField(request, ['Last Name', 'last_name']) ?? '').trim() || profileLastName || null;
+  const email = String(pickLegacyField(request, ['Email', 'email']) ?? '').trim() || profileEmail || null;
+  const phone = String(pickLegacyField(request, ['Phone', 'phone', 'Phone Number']) ?? '').trim() || profilePhone || null;
   const membershipType =
     String(pickLegacyField(request, ['membership_type', 'Membership Type', 'Membership']) ?? '').trim() ||
     (params.computed.membership ? String(params.computed.membership).trim() : '') ||
     null;
+
+  const clientId = String(clientProfile['_supabaseId'] ?? '').trim() || null;
+  const assignedToConseillerId = await resolveConseillerId(assignedTo);
 
   const uniqueId = `${source}-${requestId}-${uid.slice(0, 8)}`;
 
@@ -256,6 +277,7 @@ async function upsertSupabaseRequest(params: {
     firebase_request_id: requestId,
     unique_id: uniqueId,
     user_id: uid,
+    client_id: clientId,
     request_type: requestType || 'unknown',
     request_category: requestCategory || 'unknown',
     request_sub_category: requestSubCategory || null,
@@ -269,6 +291,7 @@ async function upsertSupabaseRequest(params: {
     priority,
     difficulty,
     assigned_to: assignedTo,
+    assigned_to_conseiller_id: assignedToConseillerId,
     waiting_time: params.computed.waitingTime,
     category_id: categoryId,
     sub_category_id: subCategoryId,
@@ -431,7 +454,8 @@ export async function v1CreateRequest(req: AuthenticatedRequest, res: Response):
       source,
       idempotencyKey,
       request: requestRaw,
-      computed: { assignedTo, priority, waitingTime, membership }
+      computed: { assignedTo, priority, waitingTime, membership },
+      clientProfile: clientCtx.profile,
     });
   }
 

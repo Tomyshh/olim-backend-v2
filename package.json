@@ -22,6 +22,7 @@
     "script:list-paid-family-members": "tsx scripts/list-clients-with-paid-family-members.ts",
     "script:backfill-subscription-current": "tsx scripts/backfill-subscription-current.ts",
     "script:backfill-requests": "tsx scripts/backfill-requests-supabase.ts",
+    "script:backfill-requests-from-clients": "tsx scripts/backfill-requests-from-clients.ts",
     "script:backfill-conseillers-auth": "tsx scripts/backfill-conseillers-supabase-auth.ts",
     "script:enrich-partners-table": "tsx scripts/enrich-partners-table.ts",
     "script:migrate-client-to-supabase": "tsx scripts/migrate-client-to-supabase.ts",
