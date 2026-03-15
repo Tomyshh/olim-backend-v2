@@ -346,10 +346,15 @@ export async function v1PatchRequestDraft(req: AuthenticatedRequest, res: Respon
 
   await ref.set(update, { merge: true });
 
-  dualWriteToSupabase('request_drafts', {
+  const supabaseUpdate: Record<string, any> = {
     ...update,
     updated_at: new Date().toISOString()
-  }, { mode: 'update', matchColumn: 'firestore_id', matchValue: draftId }).catch(() => {});
+  };
+  if ('type' in supabaseUpdate) {
+    supabaseUpdate.draft_type = supabaseUpdate.type;
+    delete supabaseUpdate.type;
+  }
+  dualWriteToSupabase('request_drafts', supabaseUpdate, { mode: 'update', matchColumn: 'firestore_id', matchValue: draftId }).catch(() => {});
 
   res.status(200).json({ success: true });
 }

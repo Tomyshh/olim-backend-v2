@@ -65,6 +65,24 @@ router.get(
   asyncHandler(clientSubscriptionController.getClientSubscriptionState as any)
 );
 
+// POST /api/clients/:clientId/subscription/create-payment-session (hosted PayMe flow)
+router.post(
+  '/:clientId/subscription/create-payment-session',
+  authenticateToken,
+  requireConseiller,
+  ...(process.env.IDEMPOTENCY_ENABLED === 'true'
+    ? [
+        idempotencyMiddleware({
+          prefix: 'idem:api:clients:subscription:createPaymentSession',
+          ttlSeconds: Number(process.env.IDEMPOTENCY_TTL_SECONDS || 24 * 3600),
+          inFlightTtlSeconds: Number(process.env.IDEMPOTENCY_INFLIGHT_TTL_SECONDS || 30),
+          preferUid: true
+        })
+      ]
+    : []),
+  asyncHandler(clientSubscriptionController.createPaymentSession as any)
+);
+
 // POST /api/clients/:clientId/subscription (create/replace)
 router.post(
   '/:clientId/subscription',

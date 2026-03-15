@@ -4,6 +4,7 @@ import { admin, getAuth, getFirestore } from '../config/firebase.js';
 import { supabase } from '../services/supabase.service.js';
 import { dualWriteToSupabase } from '../services/dualWrite.service.js';
 import { spawn } from 'child_process';
+import { computeMembershipPricing, type MembershipTypeNormalized, type PlanNormalized } from '../services/membershipPricing.service.js';
 
 // ⚠️ Toutes les routes admin sont stubées pour sécurité
 // TODO: Ajouter middleware vérification rôle admin
@@ -403,5 +404,39 @@ export async function generateFCMAccessToken(req: AuthenticatedRequest, res: Res
     message: 'Not implemented - generateFCMAccessToken',
     note: 'Fonction désactivée pour sécurité. À implémenter avec OAuth2 pour FCM.'
   });
+}
+
+/**
+ * GET /api/admin/subscription-pricing
+ * Returns pricing for all membership types from Firebase Remote Config.
+ */
+export async function getSubscriptionPricing(_req: AuthenticatedRequest, res: Response): Promise<void> {
+  const memberships: MembershipTypeNormalized[] = ['Pack Start', 'Pack Essential', 'Pack VIP', 'Pack Elite'];
+  const plans: PlanNormalized[] = ['monthly', 'annual'];
+
+  const results: Array<{
+    membership: string;
+    plan: string;
+    priceNis: number;
+    priceCents: number;
+    source: string;
+  }> = [];
+
+  for (const membership of memberships) {
+    for (const plan of plans) {
+      const result = await computeMembershipPricing({ membershipType: membership, plan });
+      if (result.ok) {
+        results.push({
+          membership,
+          plan,
+          priceNis: result.serverPriceInCents / 100,
+          priceCents: result.serverPriceInCents,
+          source: result.pricingSource,
+        });
+      }
+    }
+  }
+
+  res.status(200).json({ success: true, pricing: results });
 }
 

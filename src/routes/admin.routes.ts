@@ -25,6 +25,8 @@ router.post('/fcm/generate-token', requireAdmin, adminController.generateFCMAcce
 router.get('/remote-config', requireAdmin, adminController.getRemoteConfig);
 router.put('/remote-config', requireAdmin, adminController.publishRemoteConfig);
 
+router.get('/subscription-pricing', requireConseiller, asyncHandler(adminController.getSubscriptionPricing as any));
+
 router.post('/firebase-auth/users', requireAdmin, adminController.createFirebaseAuthUser);
 
 // ══════════════════════════════════════════════════════════════════════

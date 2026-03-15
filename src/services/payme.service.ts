@@ -1090,4 +1090,72 @@ export function calculateSubscriptionStartDate(plan: number, now: Date = new Dat
   throw new Error(`Plan invalide: ${plan}`);
 }
 
+export type PaymeHostedSaleResult = {
+  sale_url: string;
+  payme_sale_id: string;
+};
 
+/**
+ * Generate a hosted sale URL on PayMe. The buyer is redirected to this page
+ * to enter card details. PayMe calls `callbackUrl` (webhook) after payment
+ * and redirects the buyer to `returnUrl`.
+ */
+export async function paymeGenerateHostedSale(params: {
+  priceInCents: number;
+  description: string;
+  buyerEmail?: string;
+  buyerName?: string;
+  callbackUrl: string;
+  returnUrl: string;
+}): Promise<PaymeHostedSaleResult> {
+  const seller_payme_id = requirePaymeSellerKey();
+  assertHttps(params.callbackUrl, 'sale_callback_url');
+
+  const body: Record<string, any> = {
+    seller_payme_id,
+    sale_price: String(params.priceInCents),
+    currency: 'ILS',
+    product_name: params.description,
+    sale_type: 'sale',
+    sale_payment_method: 'credit-card',
+    capture_buyer: true,
+    sale_send_notification: true,
+    sale_callback_url: params.callbackUrl,
+    sale_return_url: params.returnUrl,
+  };
+  if (params.buyerEmail) body.sale_email = params.buyerEmail;
+  if (params.buyerName) body.sale_name = params.buyerName;
+
+  const { ok, status, json } = await paymePostJson('generate-sale', body, 20000);
+
+  if (!ok || json?.status_error_code) {
+    const err = new HttpError(
+      400,
+      `Impossible de créer la session de paiement: ${safePaymeErrorMessage(json)}`,
+      'PAYME_HOSTED_SALE_FAILED'
+    );
+    (err as any).statusCode = status;
+    (err as any).errorCode = json?.status_error_code;
+    throw err;
+  }
+
+  try {
+    assertPaymeStatusCodeOk(json, 'Session de paiement échouée');
+  } catch (e: any) {
+    (e as any).statusCode = status;
+    throw e;
+  }
+
+  const sale_url = pickFirstString(json, ['sale_url', 'saleUrl']);
+  const payme_sale_id = pickFirstString(json, [
+    'payme_sale_id', 'paymeSaleId', 'sale_payme_id', 'salePaymeId', 'sale_id', 'saleId'
+  ]) || pickFirstString(json?.data, [
+    'payme_sale_id', 'paymeSaleId', 'sale_payme_id', 'salePaymeId', 'sale_id', 'saleId'
+  ]);
+
+  if (!sale_url) {
+    throw new HttpError(400, 'PayMe n\'a pas retourné de sale_url.', 'PAYME_NO_SALE_URL');
+  }
+
+  return { sale_url, payme_sale_id };
+}

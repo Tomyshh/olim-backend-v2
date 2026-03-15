@@ -39,6 +39,7 @@ import usersRoutes from './routes/users.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import promoRoutes from './routes/promo.routes.js';
 import leadsRoutes from './routes/leads.routes.js';
+import paymeRoutes from './routes/payme.routes.js';
 
 // v1 routes (frontend)
 import v1AuthPhoneOtpRoutes from './routes/v1/auth.phoneOtp.routes.js';
@@ -221,6 +222,7 @@ app.use('/api/qa', qaRoutes);
 app.use('/api/clients', clientsRoutes);
 app.use('/api/leads', leadsRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/payme', paymeRoutes);
 
 // Signup/init (frontend web)
 // - Endpoint attendu : POST /users/init

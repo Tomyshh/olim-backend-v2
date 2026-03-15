@@ -6,6 +6,7 @@ import {
   calculateSubscriptionStartDate,
   paymeCancelSubscription,
   paymeGenerateSale,
+  paymeGenerateHostedSale,
   paymeGenerateSubscription,
   paymeGetSubscriptionStatus,
   paymeListSubscriptions,
@@ -18,6 +19,7 @@ import { validateAndApplyPromo, type PromoValidationOk } from '../services/promo
 import { computeMembershipPricing } from '../services/membershipPricing.service.js';
 import { dualWriteSubscription, dualWriteClient, dualWritePaymentCredential, dualWriteToSupabase, dualWritePromoRevert, dualWritePromotion, resolveSupabaseClientId } from '../services/dualWrite.service.js';
 import { readClientInfo, readSubscription, readAllPaymentCredentials, readPaymentCredential } from '../services/supabaseFirstRead.service.js';
+import { supabase } from '../services/supabase.service.js';
 
 function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -1528,4 +1530,115 @@ export async function createClientCustomSale(req: AuthenticatedRequest, res: Res
   res.status(200).json({ success: true, salePaymeId: sale.salePaymeId });
 }
 
+/**
+ * POST /api/clients/:clientId/subscription/create-payment-session
+ * Generates a PayMe hosted sale URL for subscription creation.
+ * The conseiller is redirected to PayMe to enter card details.
+ */
+export async function createPaymentSession(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientId = pickString((req.params as any)?.clientId);
+  if (!clientId) throw new HttpError(400, 'clientId manquant.');
 
+  const callerUid = req.uid || null;
+  const body = (req.body || {}) as Record<string, any>;
+
+  const membership = pickString(body.membership);
+  if (!membership) throw new HttpError(400, 'membership requis.');
+
+  const plan = pickString(body.plan);
+  if (plan !== 'monthly' && plan !== 'annual') throw new HttpError(400, 'plan invalide (monthly|annual).');
+
+  let priceInCents = coercePositiveInt(body.priceInCents, 'priceInCents');
+  const installments = coerceOptionalPositiveInt(body.installments);
+  const promoCode = pickString(body.promoCode) || null;
+
+  let promoResult: PromoValidationOk | null = null;
+  if (promoCode) {
+    const basePricing = await computeMembershipPricing({ membershipType: membership, plan });
+    const basePriceBeforePromo = basePricing.ok ? basePricing.serverPriceInCents : priceInCents;
+
+    const promoValidation = await validateAndApplyPromo({
+      promoCode,
+      membershipTypeNormalized: membership,
+      planNormalized: plan as 'monthly' | 'annual',
+      basePriceInCents: basePriceBeforePromo
+    });
+
+    if (!promoValidation.ok) {
+      throw new HttpError(400, `Code promo invalide: ${promoValidation.code}`, promoValidation.code);
+    }
+    promoResult = promoValidation;
+    priceInCents = promoValidation.finalPriceInCents;
+  }
+
+  const clientData = await readClientInfo(clientId, async () => {
+    const snap = await getFirestore().collection('Clients').doc(clientId).get();
+    if (!snap.exists) return null as any;
+    return (snap.data() || {}) as any;
+  });
+  if (!clientData) throw new HttpError(404, 'Client introuvable.');
+
+  const email = pickString(clientData.Email);
+  const buyerName = [pickString(clientData['First Name']), pickString(clientData['Last Name'])].filter(Boolean).join(' ') || undefined;
+
+  const webhookUrl = (process.env.PAYME_WEBHOOK_URL || '').trim();
+  if (!webhookUrl) throw new HttpError(500, 'Configuration manquante: PAYME_WEBHOOK_URL.');
+
+  const crmReturnBase = (process.env.CRM_PAYMENT_RETURN_URL || '').trim();
+  if (!crmReturnBase) throw new HttpError(500, 'Configuration manquante: CRM_PAYMENT_RETURN_URL.');
+
+  const returnUrl = `${crmReturnBase}?clientId=${encodeURIComponent(clientId)}`;
+
+  const description = `${membership} - ${plan === 'annual' ? 'Annuel' : 'Mensuel'}`;
+
+  const hostedSale = await paymeGenerateHostedSale({
+    priceInCents,
+    description,
+    buyerEmail: email || undefined,
+    buyerName,
+    callbackUrl: webhookUrl,
+    returnUrl,
+  });
+
+  const { error: insertError } = await supabase.from('pending_payment_sessions').insert({
+    client_firebase_uid: clientId,
+    payme_sale_id: hostedSale.payme_sale_id,
+    status: 'pending',
+    membership,
+    plan_type: plan,
+    price_cents: priceInCents,
+    installments: installments ?? 1,
+    promo_code: promoCode,
+    created_by_uid: callerUid,
+    metadata: {
+      buyer_email: email || null,
+      buyer_name: buyerName || null,
+      promo_result: promoResult ? {
+        promoCodeNormalized: promoResult.promoCodeNormalized,
+        discountType: promoResult.discountType,
+        discountValue: promoResult.discountValue,
+        finalPriceInCents: promoResult.finalPriceInCents,
+        discountInCents: promoResult.discountInCents,
+        durationCycles: promoResult.durationCycles ?? null,
+      } : null,
+    },
+  });
+
+  if (insertError) {
+    console.error('[createPaymentSession] Failed to insert pending session', insertError);
+  }
+
+  await writeAdminAuditLog({
+    action: 'CREATE_PAYMENT_SESSION',
+    callerUid,
+    clientId,
+    payload: { membership, plan, priceInCents, promoCode, payme_sale_id: hostedSale.payme_sale_id },
+    req,
+  });
+
+  res.status(200).json({
+    success: true,
+    sale_url: hostedSale.sale_url,
+    payme_sale_id: hostedSale.payme_sale_id,
+  });
+}

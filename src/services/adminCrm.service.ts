@@ -620,7 +620,8 @@ export async function getRequestStats(filters: RequestStatsFilters) {
 
   const PAGE = 1000;
 
-  // Paginate all requests in period
+  // Query 1: requests created in period (by request_date)
+  // → Assigned, Pending, Unsatisfied, Canceled counts + created timeline + byCategory + bySource
   let rows: any[] = [];
   for (let from = 0; ; from += PAGE) {
     let q = supabase
@@ -637,12 +638,12 @@ export async function getRequestStats(filters: RequestStatsFilters) {
     if (data.length < PAGE) break;
   }
 
-  // Paginate closed requests in period
+  // Query 2: closed requests in period (by closing_date)
   let closedRowsAll: any[] = [];
   for (let from = 0; ; from += PAGE) {
     let q = supabase
       .from('requests')
-      .select('closing_date')
+      .select('closing_date, assigned_to')
       .eq('status', 'Closed')
       .gte('closing_date', fromIso)
       .lte('closing_date', toIso)
@@ -655,6 +656,24 @@ export async function getRequestStats(filters: RequestStatsFilters) {
     if (data.length < PAGE) break;
   }
 
+  // Query 3: in-progress requests in period (by in_progress_date)
+  let inProgressRows: any[] = [];
+  for (let from = 0; ; from += PAGE) {
+    let q = supabase
+      .from('requests')
+      .select('in_progress_date, assigned_to')
+      .eq('status', 'In progress')
+      .gte('in_progress_date', fromIso)
+      .lte('in_progress_date', toIso)
+      .order('in_progress_date', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (filters.conseiller_name) q = q.eq('assigned_to', filters.conseiller_name);
+    const { data, error } = await q;
+    if (error || !data || data.length === 0) break;
+    inProgressRows = inProgressRows.concat(data);
+    if (data.length < PAGE) break;
+  }
+
   const byStatus: Record<string, number> = {};
   const byCategory: Record<string, number> = {};
   const bySource: Record<string, number> = {};
@@ -662,7 +681,6 @@ export async function getRequestStats(filters: RequestStatsFilters) {
 
   for (const r of rows) {
     const st = r.status ?? 'Unknown';
-    byStatus[st] = (byStatus[st] || 0) + 1;
 
     const cat = r.request_category ?? 'Unknown';
     byCategory[cat] = (byCategory[cat] || 0) + 1;
@@ -670,9 +688,26 @@ export async function getRequestStats(filters: RequestStatsFilters) {
     const src = r.source ?? 'Unknown';
     bySource[src] = (bySource[src] || 0) + 1;
 
+    if (st !== 'Closed' && st !== 'In progress') {
+      byStatus[st] = (byStatus[st] || 0) + 1;
+      const adv = r.assigned_to ?? 'Non assigné';
+      if (!adviserMap[adv]) adviserMap[adv] = {};
+      adviserMap[adv][st] = (adviserMap[adv][st] || 0) + 1;
+    }
+  }
+
+  byStatus['Closed'] = closedRowsAll.length;
+  for (const r of closedRowsAll) {
     const adv = r.assigned_to ?? 'Non assigné';
     if (!adviserMap[adv]) adviserMap[adv] = {};
-    adviserMap[adv][st] = (adviserMap[adv][st] || 0) + 1;
+    adviserMap[adv]['Closed'] = (adviserMap[adv]['Closed'] || 0) + 1;
+  }
+
+  byStatus['In progress'] = inProgressRows.length;
+  for (const r of inProgressRows) {
+    const adv = r.assigned_to ?? 'Non assigné';
+    if (!adviserMap[adv]) adviserMap[adv] = {};
+    adviserMap[adv]['In progress'] = (adviserMap[adv]['In progress'] || 0) + 1;
   }
 
   const byAdviser = Object.entries(adviserMap).map(([name, statuses]) => ({
@@ -694,17 +729,28 @@ export async function getRequestStats(filters: RequestStatsFilters) {
   }
 
   const dailyCreated: Record<string, number> = {};
+  const dailyActive: Record<string, number> = {};
   for (const r of rows) {
     if (r.request_date) {
       const day = typeof r.request_date === 'string' ? r.request_date.slice(0, 10) : '';
-      if (day) dailyCreated[day] = (dailyCreated[day] || 0) + 1;
+      if (day) {
+        dailyCreated[day] = (dailyCreated[day] || 0) + 1;
+        if (['Assigned', 'In progress', 'Pending', 'Unsatisfied'].includes(r.status)) {
+          dailyActive[day] = (dailyActive[day] || 0) + 1;
+        }
+      }
     }
   }
 
   const allDays = new Set([...Object.keys(dailyClosed), ...Object.keys(dailyCreated)]);
   const timeline = Array.from(allDays)
     .sort()
-    .map(day => ({ date: day, created: dailyCreated[day] ?? 0, closed: dailyClosed[day] ?? 0 }));
+    .map(day => ({
+      date: day,
+      created: dailyCreated[day] ?? 0,
+      closed: dailyClosed[day] ?? 0,
+      active: dailyActive[day] ?? 0,
+    }));
 
   return {
     total: rows.length,

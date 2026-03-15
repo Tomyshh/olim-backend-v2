@@ -172,7 +172,7 @@ export async function readPaymentCredential(
         .eq('firestore_id', credentialId)
         .maybeSingle();
       if (error) throw error;
-      if (!data) return { exists: false, data: null };
+      if (!data) return null as any;
       return {
         exists: true,
         data: {
