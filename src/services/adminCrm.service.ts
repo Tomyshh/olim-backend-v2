@@ -115,11 +115,14 @@ export async function listClients(filters: ClientFilters) {
 }
 
 export async function searchClientsLight(q: string, limit = 10) {
+  // Tested against Supabase REST API:
+  // - email::text cast is invalid PostgREST syntax → use email.ilike directly (citext supports ilike)
+  // - is_active does not exist in clients table
+  // - tz does not exist → teoudat_zeout
   const safe = q.replace(/[%_]/g, '');
-  const orFilter = `first_name.ilike.%${safe}%,last_name.ilike.%${safe}%,email::text.ilike.%${safe}%,teoudat_zeout.ilike.%${safe}%`;
-  const selectFields = 'id, firebase_uid, first_name, last_name, email, phone, membership_type, language, teoudat_zeout, is_active';
+  const orFilter = `first_name.ilike.%${safe}%,last_name.ilike.%${safe}%,email.ilike.%${safe}%,teoudat_zeout.ilike.%${safe}%`;
+  const selectFields = 'id, firebase_uid, first_name, last_name, email, phone, membership_type, language, teoudat_zeout';
 
-  // Try with family_members join first
   const { data, error } = await supabase
     .from('clients')
     .select(`${selectFields}, family_members(id, first_name, last_name, status)`)
@@ -129,31 +132,8 @@ export async function searchClientsLight(q: string, limit = 10) {
 
   if (!error) return data ?? [];
 
-  console.error('[searchClientsLight] primary query failed:', error.message);
-
-  // Fallback: simpler filter without email cast
-  const simpleFilter = `first_name.ilike.%${safe}%,last_name.ilike.%${safe}%,teoudat_zeout.ilike.%${safe}%`;
-  const { data: fb2, error: fb2Err } = await supabase
-    .from('clients')
-    .select(`${selectFields}, family_members(id, first_name, last_name, status)`)
-    .or(simpleFilter)
-    .order('first_name', { ascending: true })
-    .limit(limit);
-
-  if (!fb2Err) return fb2 ?? [];
-
-  console.error('[searchClientsLight] fallback with join failed:', fb2Err.message);
-
-  // Last fallback: no join, no email
-  const { data: fb3, error: fb3Err } = await supabase
-    .from('clients')
-    .select(selectFields)
-    .or(simpleFilter)
-    .order('first_name', { ascending: true })
-    .limit(limit);
-
-  if (fb3Err) throw new Error(`searchClientsLight error: ${fb3Err.message}`);
-  return (fb3 ?? []).map((c: any) => ({ ...c, family_members: [] }));
+  console.error('[searchClientsLight] query failed:', error.message);
+  throw new Error(`searchClientsLight error: ${error.message}`);
 }
 
 export async function getClientById(clientId: string) {
