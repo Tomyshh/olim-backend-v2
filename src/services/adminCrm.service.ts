@@ -532,6 +532,7 @@ export interface RequestStatsFilters {
   period?: 'today' | 'week' | 'month' | 'year' | 'custom';
   date_from?: string;
   date_to?: string;
+  conseiller_name?: string;
 }
 
 export async function getRequestStats(filters: RequestStatsFilters) {
@@ -566,24 +567,30 @@ export async function getRequestStats(filters: RequestStatsFilters) {
   const fromIso = dateFrom.toISOString();
   const toIso = dateTo.toISOString();
 
-  const [allInPeriod, byAdviserResult, closedInPeriod] = await Promise.all([
-    supabase
-      .from('requests')
-      .select('status, request_category, source, assigned_to, request_date, is_rdv')
-      .gte('request_date', fromIso)
-      .lte('request_date', toIso),
-    supabase
-      .from('requests')
-      .select('assigned_to, status')
-      .gte('request_date', fromIso)
-      .lte('request_date', toIso),
-    supabase
-      .from('requests')
-      .select('closing_date')
-      .eq('status', 'Closed')
-      .gte('closing_date', fromIso)
-      .lte('closing_date', toIso),
-  ]);
+  let allQuery = supabase
+    .from('requests')
+    .select('status, request_category, source, assigned_to, request_date, is_rdv, created_by')
+    .gte('request_date', fromIso)
+    .lte('request_date', toIso)
+    .limit(10000);
+
+  if (filters.conseiller_name) {
+    allQuery = allQuery.eq('assigned_to', filters.conseiller_name);
+  }
+
+  let closedQuery = supabase
+    .from('requests')
+    .select('closing_date')
+    .eq('status', 'Closed')
+    .gte('closing_date', fromIso)
+    .lte('closing_date', toIso)
+    .limit(10000);
+
+  if (filters.conseiller_name) {
+    closedQuery = closedQuery.eq('assigned_to', filters.conseiller_name);
+  }
+
+  const [allInPeriod, closedInPeriod] = await Promise.all([allQuery, closedQuery]);
 
   const rows = allInPeriod.data ?? [];
 
@@ -906,4 +913,162 @@ export async function getSubscriptionStats() {
     events: events ?? [],
     activeSubs: activeSubs ?? [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Source Analysis
+// ---------------------------------------------------------------------------
+
+export async function getSourceAnalysis(dateFrom: string, dateTo: string) {
+  const { data: rows } = await supabase
+    .from('requests')
+    .select('request_date, created_by')
+    .gte('request_date', dateFrom)
+    .lte('request_date', dateTo)
+    .limit(10000);
+
+  const dailyMap: Record<string, { crm: number; app: number }> = {};
+  let totalCRM = 0;
+  let totalAPP = 0;
+
+  for (const r of (rows ?? [])) {
+    const day = typeof r.request_date === 'string' ? r.request_date.slice(0, 10) : '';
+    if (!day) continue;
+    if (!dailyMap[day]) dailyMap[day] = { crm: 0, app: 0 };
+    const src = (r.created_by ?? '').toUpperCase();
+    if (src === 'CRM') {
+      dailyMap[day].crm++;
+      totalCRM++;
+    } else {
+      dailyMap[day].app++;
+      totalAPP++;
+    }
+  }
+
+  const data = Object.entries(dailyMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, counts]) => ({ date, ...counts }));
+
+  return { data, totalCRM, totalAPP };
+}
+
+// ---------------------------------------------------------------------------
+// Adviser Analysis
+// ---------------------------------------------------------------------------
+
+export async function getAdviserAnalysis(conseillerName: string | null, dateFrom: string, dateTo: string) {
+  const { data: conseillers } = await supabase
+    .from('conseillers')
+    .select('id, firestore_id, name');
+
+  let query = supabase
+    .from('requests')
+    .select('assigned_to, closing_date, difficulty, status')
+    .eq('status', 'Closed')
+    .gte('closing_date', dateFrom)
+    .lte('closing_date', dateTo)
+    .limit(10000);
+
+  const { data: closedRows } = await query;
+
+  const { data: allRows } = await supabase
+    .from('requests')
+    .select('assigned_to, status')
+    .gte('request_date', dateFrom)
+    .lte('request_date', dateTo)
+    .limit(10000);
+
+  const adviserSummary: Record<string, { assigned: number; inProgress: number; closed: number; total: number }> = {};
+  for (const r of (allRows ?? [])) {
+    const name = r.assigned_to ?? 'Non assigné';
+    if (!adviserSummary[name]) adviserSummary[name] = { assigned: 0, inProgress: 0, closed: 0, total: 0 };
+    adviserSummary[name].total++;
+    if (r.status === 'Assigned') adviserSummary[name].assigned++;
+    else if (r.status === 'In progress') adviserSummary[name].inProgress++;
+    else if (r.status === 'Closed') adviserSummary[name].closed++;
+  }
+
+  const adviserStats = Object.entries(adviserSummary).map(([name, s]) => ({ name, ...s }));
+
+  const dailyMap: Record<string, { closed: number; soug: number; soug_count: number }> = {};
+  for (const r of (closedRows ?? [])) {
+    if (conseillerName && r.assigned_to !== conseillerName) continue;
+    const day = r.closing_date ? r.closing_date.slice(0, 10) : '';
+    if (!day) continue;
+    if (!dailyMap[day]) dailyMap[day] = { closed: 0, soug: 0, soug_count: 0 };
+    dailyMap[day].closed++;
+    const diff = Number(r.difficulty) || 0;
+    if (diff > 0) {
+      dailyMap[day].soug += diff;
+      dailyMap[day].soug_count++;
+    }
+  }
+
+  const dailyData = Object.entries(dailyMap)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, d]) => ({
+      date,
+      closed: d.closed,
+      soug: d.soug_count > 0 ? Math.round((d.soug / d.soug_count) * 10) / 10 : 0,
+    }));
+
+  const totalClosed = dailyData.reduce((a, b) => a + b.closed, 0);
+  const totalSoug = Object.values(dailyMap).reduce((a, b) => a + b.soug, 0);
+  const totalSougCount = Object.values(dailyMap).reduce((a, b) => a + b.soug_count, 0);
+  const avgSoug = totalSougCount > 0 ? Math.round((totalSoug / totalSougCount) * 10) / 10 : 0;
+  const daysWorked = dailyData.filter(d => d.closed >= 5).length;
+
+  return {
+    dailyData,
+    adviserStats,
+    conseillers: (conseillers ?? []).map((c: any) => ({ id: c.firestore_id ?? c.id, name: c.name ?? '' })),
+    summary: { totalClosed, avgSoug, daysWorked },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Membership Analysis
+// ---------------------------------------------------------------------------
+
+export async function getMembershipAnalysis(dateFrom: string, dateTo: string) {
+  const { data: platformStats, error: psError } = await supabase
+    .from('daily_platform_stats')
+    .select('date, membership_distribution')
+    .gte('date', dateFrom)
+    .lte('date', dateTo)
+    .order('date', { ascending: true })
+    .limit(1000);
+
+  if (!psError && platformStats && platformStats.length > 0) {
+    const data = platformStats.map((row: any) => {
+      const dist = row.membership_distribution ?? {};
+      return {
+        date: row.date,
+        start: dist['Pack Start'] ?? dist['start'] ?? 0,
+        essential: dist['Pack Essential'] ?? dist['essential'] ?? 0,
+        vip: dist['Pack VIP'] ?? dist['vip'] ?? 0,
+        elite: dist['Pack Elite'] ?? dist['elite'] ?? 0,
+      };
+    });
+    return data;
+  }
+
+  const { data: subs } = await supabase
+    .from('subscriptions')
+    .select('membership_type')
+    .eq('status', 'active');
+
+  const counts: Record<string, number> = {};
+  for (const s of (subs ?? [])) {
+    const mt = (s.membership_type ?? 'unknown').toLowerCase();
+    counts[mt] = (counts[mt] || 0) + 1;
+  }
+
+  return [{
+    date: new Date().toISOString().slice(0, 10),
+    start: counts['pack start'] ?? counts['start'] ?? 0,
+    essential: counts['pack essential'] ?? counts['essential'] ?? 0,
+    vip: counts['pack vip'] ?? counts['vip'] ?? 0,
+    elite: counts['pack elite'] ?? counts['elite'] ?? 0,
+  }];
 }

@@ -61,6 +61,9 @@ router.get('/clients/:clientId/subscription-events', requireConseiller, asyncHan
 router.get('/stats/overview', requireConseiller, asyncHandler(adminCrmController.getOverviewStats as any));
 router.get('/stats/subscriptions', requireConseiller, asyncHandler(adminCrmController.getSubscriptionStats as any));
 router.get('/stats/requests', requireConseiller, asyncHandler(adminCrmController.getRequestStats as any));
+router.get('/stats/source-analysis', requireConseiller, asyncHandler(adminCrmController.getSourceAnalysis as any));
+router.get('/stats/adviser-analysis', requireConseiller, asyncHandler(adminCrmController.getAdviserAnalysis as any));
+router.get('/stats/membership-analysis', requireConseiller, asyncHandler(adminCrmController.getMembershipAnalysis as any));
 
 // ─── CRM: Promotions ────────────────────────────────────────────────
 

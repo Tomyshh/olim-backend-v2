@@ -125,7 +125,36 @@ export async function getRequestStats(req: AuthenticatedRequest, res: Response) 
     period: (q.period as any) ?? 'month',
     date_from: pickOptional(q.date_from),
     date_to: pickOptional(q.date_to),
+    conseiller_name: pickOptional(q.conseiller_name),
   });
+  res.json(stats);
+}
+
+export async function getSourceAnalysis(req: AuthenticatedRequest, res: Response) {
+  const q = req.query as Record<string, string>;
+  const now = new Date();
+  const dateFrom = q.date_from || new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const dateTo = q.date_to || now.toISOString();
+  const stats = await adminCrmService.getSourceAnalysis(dateFrom, dateTo);
+  res.json(stats);
+}
+
+export async function getAdviserAnalysis(req: AuthenticatedRequest, res: Response) {
+  const q = req.query as Record<string, string>;
+  const now = new Date();
+  const dateFrom = q.date_from || new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const dateTo = q.date_to || now.toISOString();
+  const conseillerName = q.conseiller_name || null;
+  const stats = await adminCrmService.getAdviserAnalysis(conseillerName, dateFrom, dateTo);
+  res.json(stats);
+}
+
+export async function getMembershipAnalysis(req: AuthenticatedRequest, res: Response) {
+  const q = req.query as Record<string, string>;
+  const now = new Date();
+  const dateFrom = q.date_from || new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const dateTo = q.date_to || now.toISOString();
+  const stats = await adminCrmService.getMembershipAnalysis(dateFrom, dateTo);
   res.json(stats);
 }
 
