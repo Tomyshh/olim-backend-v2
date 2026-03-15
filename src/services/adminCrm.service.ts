@@ -113,37 +113,29 @@ export async function listClients(filters: ClientFilters) {
 }
 
 export async function searchClientsLight(q: string, limit = 10) {
-  const selectLight = `
-    id, firebase_uid, first_name, last_name, email, phone,
-    membership_type, language, tz, is_active,
-    family_members(id, first_name, last_name, status)
-  `;
+  const safe = q.replace(/[%_]/g, '');
+  const orFilter = `first_name.ilike.%${safe}%,last_name.ilike.%${safe}%,email.ilike.%${safe}%,tz.ilike.%${safe}%`;
 
+  // Try with family_members join first
   const { data, error } = await supabase
     .from('clients')
-    .select(selectLight)
-    .or(
-      `first_name.ilike.%${q}%,last_name.ilike.%${q}%,email.ilike.%${q}%,tz.ilike.%${q}%,firebase_uid.ilike.%${q}%`
-    )
+    .select('id, firebase_uid, first_name, last_name, email, phone, membership_type, language, tz, is_active, family_members(id, first_name, last_name, status)')
+    .or(orFilter)
     .order('first_name', { ascending: true })
     .limit(limit);
 
-  if (error) {
-    // Fallback without family_members join if table doesn't exist
-    const { data: fallback, error: fbErr } = await supabase
-      .from('clients')
-      .select('id, firebase_uid, first_name, last_name, email, phone, membership_type, language, tz, is_active')
-      .or(
-        `first_name.ilike.%${q}%,last_name.ilike.%${q}%,email.ilike.%${q}%,tz.ilike.%${q}%,firebase_uid.ilike.%${q}%`
-      )
-      .order('first_name', { ascending: true })
-      .limit(limit);
+  if (!error) return data ?? [];
 
-    if (fbErr) throw new Error(`Supabase searchClientsLight error: ${fbErr.message}`);
-    return (fallback ?? []).map((c: any) => ({ ...c, family_members: [] }));
-  }
+  // Fallback without family_members join
+  const { data: fallback, error: fbErr } = await supabase
+    .from('clients')
+    .select('id, firebase_uid, first_name, last_name, email, phone, membership_type, language, tz, is_active')
+    .or(orFilter)
+    .order('first_name', { ascending: true })
+    .limit(limit);
 
-  return data ?? [];
+  if (fbErr) throw new Error(`searchClientsLight error: ${fbErr.message}`);
+  return (fallback ?? []).map((c: any) => ({ ...c, family_members: [] }));
 }
 
 export async function getClientById(clientId: string) {

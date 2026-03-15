@@ -35,8 +35,13 @@ export async function searchClientsLight(req: AuthenticatedRequest, res: Respons
   const q = (req.query.q as string || '').trim();
   if (q.length < 2) { res.json([]); return; }
   const limit = Math.min(Number(req.query.limit) || 10, 30);
-  const results = await adminCrmService.searchClientsLight(q, limit);
-  res.json(results);
+  try {
+    const results = await adminCrmService.searchClientsLight(q, limit);
+    res.json(results);
+  } catch (err: any) {
+    console.error('[searchClientsLight] error:', err.message);
+    res.status(500).json({ message: err.message || 'Erreur recherche clients' });
+  }
 }
 
 export async function getClient(req: AuthenticatedRequest, res: Response) {
