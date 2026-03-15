@@ -1743,26 +1743,7 @@ export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Res
   const now = new Date();
   const callerEmail = pickString((req as any).email) || callerUid || 'admin';
 
-  const freeAccessDoc: Record<string, any> = {
-    isEnabled,
-    membership,
-    reason,
-    notes,
-    isFirstVisit: false,
-  };
-
-  if (isEnabled) {
-    freeAccessDoc.grantedAt = admin.firestore.Timestamp.fromDate(now);
-    freeAccessDoc.grantedBy = callerEmail;
-    if (expiresAtDate) {
-      freeAccessDoc.expiresAt = admin.firestore.Timestamp.fromDate(expiresAtDate);
-    }
-  }
-
-  const db = getFirestore();
-  const clientRef = db.collection('Clients').doc(clientId);
-  await clientRef.set({ freeAccess: freeAccessDoc }, { merge: true });
-
+  // Ecriture Supabase uniquement (Firestore est en lecture seule depuis le CRM).
   const supabaseFreeAccess: Record<string, any> = {
     isEnabled,
     membership,
@@ -1776,10 +1757,12 @@ export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Res
     if (expiresAtDate) supabaseFreeAccess.expiresAt = expiresAtDate.toISOString();
   }
 
-  await supabase
+  const { error } = await supabase
     .from('clients')
     .update({ free_access: supabaseFreeAccess, updated_at: now.toISOString() })
     .eq('firebase_uid', clientId);
+
+  if (error) throw new HttpError(500, `Erreur Supabase: ${error.message}`);
 
   await writeAdminAuditLog({
     action: isEnabled ? 'FREE_ACCESS_GRANTED' : 'FREE_ACCESS_REVOKED',
