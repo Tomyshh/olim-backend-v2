@@ -1741,7 +1741,17 @@ export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Res
   }
 
   const now = new Date();
-  const callerEmail = pickString((req as any).email) || callerUid || 'admin';
+
+  // Resolver le nom affichable du conseiller
+  let callerDisplayName = 'admin';
+  if (callerUid) {
+    const { data: conseillerData } = await supabase
+      .from('conseillers')
+      .select('name')
+      .or(`id.eq.${callerUid},firestore_id.eq.${callerUid},firebase_uid.eq.${callerUid}`)
+      .maybeSingle();
+    callerDisplayName = conseillerData?.name || pickString((req.user as any)?.email) || pickString((req.user as any)?.name) || callerUid;
+  }
 
   // Dual-write: Firestore (mobile app source of truth) + Supabase (CRM source of truth)
   const firestoreFreeAccess: Record<string, any> = {
@@ -1753,7 +1763,7 @@ export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Res
   };
   if (isEnabled) {
     firestoreFreeAccess.grantedAt = admin.firestore.Timestamp.fromDate(now);
-    firestoreFreeAccess.grantedBy = callerEmail;
+    firestoreFreeAccess.grantedBy = callerDisplayName;
     if (expiresAtDate) {
       firestoreFreeAccess.expiresAt = admin.firestore.Timestamp.fromDate(expiresAtDate);
     }
@@ -1768,7 +1778,7 @@ export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Res
   };
   if (isEnabled) {
     supabaseFreeAccess.grantedAt = now.toISOString();
-    supabaseFreeAccess.grantedBy = callerEmail;
+    supabaseFreeAccess.grantedBy = callerDisplayName;
     if (expiresAtDate) supabaseFreeAccess.expiresAt = expiresAtDate.toISOString();
   }
 
