@@ -24,7 +24,6 @@ import {
   mapSupportTicketToSupabase,
   mapHealthRequestToSupabase,
   mapRefundRequestToSupabase,
-  mapPaymentCredentialToSupabase as mapPayCredToSupabase,
   mapSettingsToSupabase,
   mapUserSavedTipToSupabase,
   resolveDocumentTypeId,
@@ -68,7 +67,7 @@ interface SyncReport {
   totalClients: number;
   synced: number;
   errors: number;
-  addressDupsRemoved: number;
+  duplicatesRemoved: number;
   startedAt: string;
   completedAt?: string;
   errorDetails: string[];
@@ -113,12 +112,59 @@ async function insertIgnoreDup(table: string, data: Record<string, any>): Promis
   return result?.id ?? null;
 }
 
-// ─── Address dedup ────────────────────────────────────────────────────────
+// ─── Generic dedup: remove rows with same (client_id, firestore_id) ──────
 
-async function deduplicateAddresses(clientId: string): Promise<number> {
+const TABLES_WITH_FIRESTORE_ID = [
+  'client_addresses',
+  'family_members',
+  'payment_credentials',
+  'client_documents',
+  'favorite_requests',
+  'chat_conversations',
+  'appointments',
+  'request_drafts',
+  'support_tickets',
+  'health_requests',
+  'refund_requests',
+  'client_access_credentials',
+  'client_logs',
+  'invoices',
+  'notifications',
+  'subscription_change_quotes',
+] as const;
+
+async function deduplicateByFirestoreId(table: string, clientId: string): Promise<number> {
+  const { data: rows } = await supabase
+    .from(table)
+    .select('id, firestore_id, created_at')
+    .eq('client_id', clientId)
+    .order('created_at', { ascending: true });
+
+  if (!rows || rows.length < 2) return 0;
+
+  const seen = new Map<string, string>();
+  const toDelete: string[] = [];
+
+  for (const row of rows) {
+    const fid = row.firestore_id;
+    if (!fid) continue;
+    if (seen.has(fid)) {
+      toDelete.push(row.id);
+    } else {
+      seen.set(fid, row.id);
+    }
+  }
+
+  if (toDelete.length > 0) {
+    await supabase.from(table).delete().in('id', toDelete);
+  }
+  return toDelete.length;
+}
+
+async function deduplicateAddressesByContent(clientId: string): Promise<number> {
   const { data: addresses } = await supabase
     .from('client_addresses')
-    .select('id, address1, apartment, floor, is_primary, created_at, firestore_id')
+    .select('id, address1, apartment, floor, is_primary, created_at')
     .eq('client_id', clientId)
     .order('created_at', { ascending: true });
 
@@ -140,7 +186,6 @@ async function deduplicateAddresses(clientId: string): Promise<number> {
     if (!existing) {
       seen.set(key, addr);
     } else {
-      // Keep the primary one, or the first one created
       if (addr.is_primary && !existing.is_primary) {
         toDelete.push(existing.id);
         seen.set(key, addr);
@@ -154,6 +199,17 @@ async function deduplicateAddresses(clientId: string): Promise<number> {
     await supabase.from('client_addresses').delete().in('id', toDelete);
   }
   return toDelete.length;
+}
+
+async function deduplicateAllTablesForClient(clientId: string): Promise<number> {
+  let total = 0;
+  for (const table of TABLES_WITH_FIRESTORE_ID) {
+    try {
+      total += await deduplicateByFirestoreId(table, clientId);
+    } catch { /* table may not have client_id column — skip */ }
+  }
+  total += await deduplicateAddressesByContent(clientId);
+  return total;
 }
 
 // ─── Build conseiller name→id map ─────────────────────────────────────────
@@ -199,8 +255,7 @@ async function syncClient(
   clientRef: FirebaseFirestore.DocumentReference,
   fsData: Record<string, any>,
   conseillerMap: { byName: Map<string, string>; byFirstName: Map<string, string> },
-): Promise<{ addressDupsRemoved: number }> {
-  let addressDupsRemoved = 0;
+): Promise<{ duplicatesRemoved: number }> {
 
   // 1. Client personal info
   const clientRow = mapClientToSupabase(uid, fsData);
@@ -253,8 +308,6 @@ async function syncClient(
         await supabase.from('client_addresses').insert(row);
       }
     }
-
-    addressDupsRemoved = await deduplicateAddresses(clientId);
   } catch (e: any) { console.warn(`${LOG}   addresses:`, e.message); }
 
   // 4. Family Members
@@ -560,7 +613,9 @@ async function syncClient(
     }
   } catch (e: any) { console.warn(`${LOG}   devices/fcm:`, e.message); }
 
-  return { addressDupsRemoved };
+  // Dedup all tables for this client
+  const duplicatesRemoved = await deduplicateAllTablesForClient(clientId);
+  return { duplicatesRemoved };
 }
 
 // ─── Main sync entry point ────────────────────────────────────────────────
@@ -570,7 +625,7 @@ export async function runFullFirestoreSync(): Promise<SyncReport> {
     totalClients: 0,
     synced: 0,
     errors: 0,
-    addressDupsRemoved: 0,
+    duplicatesRemoved: 0,
     startedAt: new Date().toISOString(),
     errorDetails: [],
   };
@@ -601,7 +656,7 @@ export async function runFullFirestoreSync(): Promise<SyncReport> {
       try {
         const result = await syncClient(uid, doc.ref, doc.data(), conseillerMap);
         report.synced++;
-        report.addressDupsRemoved += result.addressDupsRemoved;
+        report.duplicatesRemoved += result.duplicatesRemoved;
         if (report.synced % 50 === 0) {
           console.log(`${LOG} Progress: ${report.synced}/${report.totalClients} synced`);
         }
@@ -621,14 +676,14 @@ export async function runFullFirestoreSync(): Promise<SyncReport> {
 
   console.log(`${LOG} === Sync Complete ===`);
   console.log(`${LOG} Total: ${report.totalClients} | Synced: ${report.synced} | Errors: ${report.errors}`);
-  console.log(`${LOG} Address duplicates removed: ${report.addressDupsRemoved}`);
+  console.log(`${LOG} Duplicates removed: ${report.duplicatesRemoved}`);
   console.log(`${LOG} Duration: ${((new Date(report.completedAt).getTime() - new Date(report.startedAt).getTime()) / 1000).toFixed(0)}s`);
 
   // Log to Firestore Jobs for catch-up awareness
   try {
     await db.collection('Jobs').doc('dailyFirestoreSync').set({
       lastSuccessAt: new Date(),
-      report: { synced: report.synced, errors: report.errors, addressDupsRemoved: report.addressDupsRemoved },
+      report: { synced: report.synced, errors: report.errors, duplicatesRemoved: report.duplicatesRemoved },
     }, { merge: true });
   } catch { /* best-effort */ }
 
