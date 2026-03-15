@@ -3,10 +3,21 @@ import { getRedisClientOptional } from '../config/redis.js';
 type MemoryEntry = { count: number; resetAtMs: number };
 const mem = new Map<string, MemoryEntry>();
 
+// Lua script: atomic INCR + EXPIRE guarantee.
+// Returns [count, ttl] — TTL is always ≥ 1 after execution.
+const INCR_WITH_TTL_LUA = `
+local count = redis.call('INCR', KEYS[1])
+local ttl = redis.call('TTL', KEYS[1])
+if ttl < 0 then
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[1]))
+  ttl = tonumber(ARGV[1])
+end
+return {count, ttl}
+`;
+
 function getRedisOpTimeoutMs(): number {
   const raw = process.env.RATE_LIMIT_REDIS_TIMEOUT_MS;
   const n = raw ? Number(raw) : NaN;
-  // Valeur conservatrice: on préfère fallback mémoire plutôt que bloquer le handler.
   return Number.isFinite(n) && n > 0 ? n : 250;
 }
 
@@ -45,16 +56,15 @@ export async function consumeRateLimit(params: {
   }
   if (redis) {
     try {
-      const count = await withTimeout(redis.incr(key), timeoutMs, 'rateLimit.redis.incr');
-      // Always ensure a TTL is set to prevent keys from living forever
-      // if the initial expire() call failed or timed out.
-      const currentTtl = await withTimeout(redis.ttl(key), timeoutMs, 'rateLimit.redis.ttl');
-      if (currentTtl < 0) {
-        await withTimeout(redis.expire(key, windowSeconds), timeoutMs, 'rateLimit.redis.expire');
-      }
+      const result = await withTimeout(
+        redis.eval(INCR_WITH_TTL_LUA, { keys: [key], arguments: [String(windowSeconds)] }) as Promise<number[]>,
+        timeoutMs,
+        'rateLimit.redis.eval'
+      );
+      const [count, ttl] = result;
       const remaining = Math.max(0, limit - count);
       if (count > limit) {
-        return { allowed: false, retryAfterSeconds: Math.max(1, currentTtl > 0 ? currentTtl : windowSeconds) };
+        return { allowed: false, retryAfterSeconds: Math.max(1, ttl) };
       }
       return { allowed: true, remaining };
     } catch {

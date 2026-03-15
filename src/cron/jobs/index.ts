@@ -4,16 +4,18 @@ import { registerPaymeMonthlySyncJob } from './paymeMonthlySync.job.js';
 import { registerSeniorityJob } from './seniority.job.js';
 import { registerPromoRevertJob } from './promoRevert.job.js';
 import { registerQueueWorker } from './queueWorker.job.js';
+import { registerRateLimitCleanupJob } from './rateLimitCleanup.job.js';
 
 type JobEntry = { name: string; register: () => boolean };
 
 const ALL_JOBS: JobEntry[] = [
-  { name: 'seniority',         register: registerSeniorityJob },
-  { name: 'payme-monthly-sync', register: registerPaymeMonthlySyncJob },
-  { name: 'activity',          register: registerClientActivityJob },
-  { name: 'analytics-sync',    register: registerAnalyticsSyncJob },
-  { name: 'promo-revert',      register: registerPromoRevertJob },
-  { name: 'queue-worker',      register: registerQueueWorker },
+  { name: 'seniority',           register: registerSeniorityJob },
+  { name: 'payme-monthly-sync',  register: registerPaymeMonthlySyncJob },
+  { name: 'activity',            register: registerClientActivityJob },
+  { name: 'analytics-sync',      register: registerAnalyticsSyncJob },
+  { name: 'promo-revert',        register: registerPromoRevertJob },
+  { name: 'queue-worker',        register: registerQueueWorker },
+  { name: 'rate-limit-cleanup',  register: registerRateLimitCleanupJob },
 ];
 
 /**
