@@ -31,6 +31,14 @@ export async function listClients(req: AuthenticatedRequest, res: Response) {
   res.json(result);
 }
 
+export async function searchClientsLight(req: AuthenticatedRequest, res: Response) {
+  const q = (req.query.q as string || '').trim();
+  if (q.length < 2) { res.json([]); return; }
+  const limit = Math.min(Number(req.query.limit) || 10, 30);
+  const results = await adminCrmService.searchClientsLight(q, limit);
+  res.json(results);
+}
+
 export async function getClient(req: AuthenticatedRequest, res: Response) {
   const { clientId } = req.params;
   const client = await adminCrmService.getClientById(clientId);

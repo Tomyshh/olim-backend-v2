@@ -34,6 +34,7 @@ router.post('/firebase-auth/users', requireAdmin, adminController.createFirebase
 // ─── CRM: Clients ────────────────────────────────────────────────────
 
 router.get('/clients', requireConseiller, asyncHandler(adminCrmController.listClients as any));
+router.get('/clients/search-light', requireConseiller, asyncHandler(adminCrmController.searchClientsLight as any));
 router.get('/clients/:clientId', requireConseiller, asyncHandler(adminCrmController.getClient as any));
 router.patch('/clients/:clientId', requireConseiller, asyncHandler(adminCrmController.updateClient as any));
 router.delete('/clients/:clientId', requireAdmin, asyncHandler(adminCrmController.deleteClient as any));
