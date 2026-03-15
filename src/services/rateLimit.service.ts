@@ -46,17 +46,18 @@ export async function consumeRateLimit(params: {
   if (redis) {
     try {
       const count = await withTimeout(redis.incr(key), timeoutMs, 'rateLimit.redis.incr');
-      if (count === 1) {
+      // Always ensure a TTL is set to prevent keys from living forever
+      // if the initial expire() call failed or timed out.
+      const currentTtl = await withTimeout(redis.ttl(key), timeoutMs, 'rateLimit.redis.ttl');
+      if (currentTtl < 0) {
         await withTimeout(redis.expire(key, windowSeconds), timeoutMs, 'rateLimit.redis.expire');
       }
       const remaining = Math.max(0, limit - count);
       if (count > limit) {
-        const ttl = await withTimeout(redis.ttl(key), timeoutMs, 'rateLimit.redis.ttl');
-        return { allowed: false, retryAfterSeconds: Math.max(1, ttl > 0 ? ttl : windowSeconds) };
+        return { allowed: false, retryAfterSeconds: Math.max(1, currentTtl > 0 ? currentTtl : windowSeconds) };
       }
       return { allowed: true, remaining };
     } catch {
-      // Redis lent/instable => fallback mémoire (évite de bloquer les requêtes).
       redis = null;
     }
   }

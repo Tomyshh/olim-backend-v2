@@ -122,18 +122,20 @@ app.use(loadSheddingMiddleware);
 
 // Rate-limit global (feature-flag)
 if (process.env.GLOBAL_RATE_LIMIT_ENABLED === 'true') {
-  const limit = Number(process.env.GLOBAL_RATE_LIMIT_LIMIT || 300);
+  const limit = Number(process.env.GLOBAL_RATE_LIMIT_LIMIT || 1000);
   const windowSeconds = Number(process.env.GLOBAL_RATE_LIMIT_WINDOW_SECONDS || 5 * 60);
-  app.use(
-    rateLimitMiddleware({
+  const RATE_LIMIT_EXEMPT = new Set(['/health', '/api/auth/crm-users', '/openapi.yaml']);
+  app.use((req, res, next) => {
+    if (RATE_LIMIT_EXEMPT.has(req.path)) return next();
+    return rateLimitMiddleware({
       prefix: 'rl:global:ip',
-      limit: Number.isFinite(limit) && limit > 0 ? limit : 300,
+      limit: Number.isFinite(limit) && limit > 0 ? limit : 1000,
       windowSeconds: Number.isFinite(windowSeconds) && windowSeconds > 0 ? windowSeconds : 5 * 60,
       preferUid: false,
       bypassOnError: true,
       message: 'Trop de requ\u00eates.'
-    })
-  );
+    })(req, res, next);
+  });
 }
 
 app.use(express.json({ limit: '10mb' }));
