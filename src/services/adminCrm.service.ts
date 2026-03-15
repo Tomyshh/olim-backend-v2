@@ -392,11 +392,22 @@ export async function updateRequestAdmin(requestId: string, updates: Record<stri
 
 export async function createRequestAdmin(payload: Record<string, unknown>, createdBy: string) {
   const now = new Date().toISOString();
-  const userId = payload.user_id as string;
-
+  let userId = payload.user_id as string | undefined;
   let clientId: string | null = null;
   let clientInfo: Record<string, any> | null = null;
-  if (userId) {
+
+  if (payload.client_id) {
+    const { data: c } = await supabase
+      .from('clients')
+      .select('id, firebase_uid, first_name, last_name, email, phone, membership_type')
+      .eq('id', payload.client_id)
+      .maybeSingle();
+    if (c) {
+      clientId = c.id;
+      userId = c.firebase_uid ?? c.id;
+      clientInfo = c;
+    }
+  } else if (userId) {
     clientId = await resolveSupabaseClientId(userId);
     const { data } = await supabase
       .from('clients')
