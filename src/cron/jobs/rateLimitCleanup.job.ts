@@ -32,6 +32,7 @@ export function registerRateLimitCleanupJob(): boolean {
     enabledEnv: 'GLOBAL_RATE_LIMIT_ENABLED',
     defaultHour: 0,
     defaultMinute: 0,
+    intervalHoursEnv: 'RATE_LIMIT_CLEANUP_INTERVAL_HOURS',
     intervalHours: 1,
     run: () => cleanupOrphanedRateLimitKeys(),
   });

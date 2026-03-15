@@ -65,14 +65,17 @@ function parseIntEnv(
 export type DailyJobConfig = {
   name: string;
   enabledEnv: string;
-  hourEnv: string;
-  minuteEnv: string;
+  /** Heure (0-23). Utilisé uniquement si intervalHours === 0. Optionnel : si hourEnv fourni, la valeur peut être surchargée par l'env. */
   defaultHour: number;
   defaultMinute: number;
-  /** Si défini et > 0, le job tourne toutes les N heures (au lieu d'une fois par jour à H:M). */
+  /** Noms des variables d'env pour surcharger heure/minute (optionnel). Si omis, seuls defaultHour/defaultMinute sont utilisés. */
+  hourEnv?: string;
+  minuteEnv?: string;
+  /** Intervalle en heures (ex: 4 = toutes les 4 h). 0 = une fois par jour à defaultHour:defaultMinute. Ignoré si intervalHoursEnv est fourni. */
+  intervalHours?: number;
+  /** Variable d'env pour surcharger l'intervalle en heures (optionnel). Ex: 'RATE_LIMIT_CLEANUP_INTERVAL_HOURS'. Valeur par défaut = intervalHours. */
   intervalHoursEnv?: string;
-  defaultIntervalHours?: number;
-  /** Firestore Jobs/<id> — si fourni, active le rattrapage (catch-up) au démarrage */
+  /** Firestore Jobs/<id> — si fourni, active le rattrapage (catch-up) au démarrage (mode quotidien uniquement) */
   firestoreJobId?: string;
   catchUpDelayMs?: number;
   run: () => Promise<unknown>;
@@ -91,29 +94,18 @@ export function registerDailyJob(config: DailyJobConfig): boolean {
     return false;
   }
 
-  const hour = parseIntEnv(
-    process.env[config.hourEnv],
-    config.defaultHour,
-    0,
-    23
-  );
-  const minute = parseIntEnv(
-    process.env[config.minuteEnv],
-    config.defaultMinute,
-    0,
-    59
-  );
+  const hour = config.hourEnv
+    ? parseIntEnv(process.env[config.hourEnv], config.defaultHour, 0, 23)
+    : config.defaultHour;
+  const minute = config.minuteEnv
+    ? parseIntEnv(process.env[config.minuteEnv], config.defaultMinute, 0, 59)
+    : config.defaultMinute;
 
-  const intervalHoursEnv = config.intervalHoursEnv ?? '';
-  const intervalHoursRaw = intervalHoursEnv
-    ? process.env[intervalHoursEnv]
-    : undefined;
-  const intervalHours = parseIntEnv(
-    intervalHoursRaw,
-    config.defaultIntervalHours ?? 0,
-    0,
-    168
-  );
+  const defaultInterval = config.intervalHours ?? 0;
+  const rawInterval = config.intervalHoursEnv
+    ? parseIntEnv(process.env[config.intervalHoursEnv], defaultInterval, 0, 168)
+    : defaultInterval;
+  const intervalHours = Math.max(0, Math.min(168, Math.trunc(rawInterval)));
   const useInterval = intervalHours > 0;
   const intervalMs = useInterval ? intervalHours * 60 * 60 * 1000 : 0;
 

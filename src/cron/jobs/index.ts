@@ -5,6 +5,7 @@ import { registerSeniorityJob } from './seniority.job.js';
 import { registerPromoRevertJob } from './promoRevert.job.js';
 import { registerQueueWorker } from './queueWorker.job.js';
 import { registerRateLimitCleanupJob } from './rateLimitCleanup.job.js';
+import { registerFirestoreSyncJob } from './firestoreSync.job.js';
 
 type JobEntry = { name: string; register: () => boolean };
 
@@ -16,6 +17,7 @@ const ALL_JOBS: JobEntry[] = [
   { name: 'promo-revert',        register: registerPromoRevertJob },
   { name: 'queue-worker',        register: registerQueueWorker },
   { name: 'rate-limit-cleanup',  register: registerRateLimitCleanupJob },
+  { name: 'firestore-sync',      register: registerFirestoreSyncJob },
 ];
 
 /**
