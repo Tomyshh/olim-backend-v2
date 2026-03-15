@@ -64,21 +64,6 @@ function pickString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function msUntilNextLocalTime(params: { hour: number; minute: number; second?: number }): number {
-  const now = new Date();
-  const second = params.second ?? 0;
-  const next = new Date(now);
-  next.setHours(params.hour, params.minute, second, 0);
-  if (next.getTime() <= now.getTime()) {
-    next.setDate(next.getDate() + 1);
-  }
-  return Math.max(0, next.getTime() - now.getTime());
-}
-
-function startOfTodayAtLocalTime(params: { hour: number; minute: number; second?: number }, now: Date = new Date()): Date {
-  const second = params.second ?? 0;
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), params.hour, params.minute, second, 0);
-}
 
 // ---------------------------------------------------------------------------
 // Job Lease (anti-concurrence multi-instances)
@@ -292,7 +277,7 @@ async function revertSinglePromo(docId: string, data: PromoRevertDoc): Promise<'
 // Job principal
 // ---------------------------------------------------------------------------
 
-async function runPromoRevertJob(): Promise<Record<string, any> | null> {
+export async function runPromoRevertJob(): Promise<Record<string, any> | null> {
   const runId = randomUUID();
   const lease = await tryAcquireJobLease(runId);
   if (!lease.acquired) {
@@ -379,57 +364,3 @@ async function runPromoRevertJob(): Promise<Record<string, any> | null> {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Scheduler
-// ---------------------------------------------------------------------------
-
-export function startPromoRevertScheduler(): void {
-  if (process.env.PROMO_REVERT_JOB_ENABLED !== 'true') return;
-
-  const hourRaw = Number(process.env.PROMO_REVERT_JOB_HOUR || 5);
-  const minuteRaw = Number(process.env.PROMO_REVERT_JOB_MINUTE || 0);
-  const hour = Number.isFinite(hourRaw) ? Math.min(23, Math.max(0, Math.trunc(hourRaw))) : 5;
-  const minute = Number.isFinite(minuteRaw) ? Math.min(59, Math.max(0, Math.trunc(minuteRaw))) : 0;
-
-  async function runAndReschedule(): Promise<void> {
-    try {
-      const res = await runPromoRevertJob();
-      if (!res) {
-        console.log('[promo-revert] skipped (already running / locked)');
-      }
-    } catch (e: any) {
-      console.warn('[promo-revert] job failed', { error: String(e?.message || e) });
-    } finally {
-      const ms = msUntilNextLocalTime({ hour, minute, second: 0 });
-      console.log('[promo-revert] next run scheduled', { inMs: ms });
-      setTimeout(() => void runAndReschedule(), ms).unref();
-    }
-  }
-
-  async function maybeCatchUp(): Promise<void> {
-    const db = getFirestore();
-    const now = new Date();
-    const todayTarget = startOfTodayAtLocalTime({ hour, minute, second: 0 }, now);
-    if (now.getTime() < todayTarget.getTime()) return;
-
-    try {
-      const snap = await db.collection('Jobs').doc(JOB_ID).get();
-      const data = (snap.data() || {}) as any;
-      const lastSuccessAt = toDateOrNull(data?.lastSuccessAt);
-      if (lastSuccessAt && lastSuccessAt.getTime() >= todayTarget.getTime()) return;
-    } catch {
-      return;
-    }
-
-    console.log('[promo-revert] catch-up triggered (missed scheduled time)');
-    setTimeout(
-      () => void runPromoRevertJob().catch((e) => console.warn('[promo-revert] catch-up failed', { error: e?.message })),
-      30_000
-    ).unref();
-  }
-
-  const firstDelay = msUntilNextLocalTime({ hour, minute, second: 0 });
-  console.log('[promo-revert] scheduler enabled', { hour, minute, firstDelayMs: firstDelay });
-  void maybeCatchUp();
-  setTimeout(() => void runAndReschedule(), firstDelay).unref();
-}

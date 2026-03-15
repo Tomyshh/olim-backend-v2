@@ -55,13 +55,6 @@ import v1RequestsRoutes from './routes/v1/requests.routes.js';
 import v1RequestDraftsRoutes from './routes/v1/requestDrafts.routes.js';
 import v1AnalyticsRoutes from './routes/v1/analytics.routes.js';
 import v1UploadsRoutes from './routes/v1/uploads.routes.js';
-import { startQueueWorker } from './services/queue.service.js';
-import { sendTwilioMessage } from './services/twilio.service.js';
-import { startDailyClientActivityScheduler } from './services/clientActivity.service.js';
-import { startAnalyticsSyncScheduler } from './services/analyticsSync.service.js';
-import { startPaymeMonthlyNextPaymentDateSyncScheduler } from './services/paymeMonthlyNextPaymentSync.service.js';
-import { startDailySeniorityScheduler } from './services/clientSeniority.service.js';
-import { startPromoRevertScheduler } from './services/promoRevert.service.js';
 import { closeRedisClient } from './config/redis.js';
 
 const app = express();
@@ -70,23 +63,8 @@ const PORT = process.env.PORT || 3000;
 // Initialize Firebase Admin
 initializeFirebase();
 
-// Job quotidien (optionnel) : calcule l’activité des clients à 03:00
-startDailyClientActivityScheduler();
-
-// Job analytique : synchronise les données vers Supabase à 04:00
-startAnalyticsSyncScheduler();
-
-// Job PayMe (mensuel): synchronise nextPaymentDate/endDate (nuit)
-startPaymeMonthlyNextPaymentDateSyncScheduler();
-
-// Job ancienneté : met à jour le tier de seniority de chaque client à 01:00
-startDailySeniorityScheduler();
-
-// Job promo revert : remet le prix de base quand la durée d'une promo expire (05:00)
-startPromoRevertScheduler();
-
 // Middleware globaux
-// Render (reverse proxy) : nécessaire pour que req.ip soit correct (rate-limit, logs)
+// Render (reverse proxy) : n\u00e9cessaire pour que req.ip soit correct (rate-limit, logs)
 app.set('trust proxy', 1);
 app.use(helmet());
 
@@ -94,14 +72,13 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'https://olimservice-7dbee.web.app',
   'https://olimservice-7dbee.firebaseapp.com',
   'http://localhost:3000',
-  // CRM (prod) – IMPORTANT: permet au navigateur de lire les réponses d'erreur JSON
+  // CRM (prod) \u2013 IMPORTANT: permet au navigateur de lire les r\u00e9ponses d'erreur JSON
   'https://olimcrm.web.app',
   'https://olimcrm.firebaseapp.com',
   'https://olim-frontend-crm.onrender.com'
 ];
 
 function normalizeOrigin(value: string): string {
-  // L'en-tête Origin ne contient jamais de chemin, mais on normalise quand même les "/" finaux
   return value.trim().replace(/\/+$/, '');
 }
 
@@ -123,31 +100,27 @@ const corsOptions: NonNullable<Parameters<typeof cors>[0]> = {
     origin: string | undefined,
     callback: (err: Error | null, allow?: boolean | string | string[]) => void
   ) {
-    // Pas d'Origin => appels server-to-server / curl / health checks => OK
     if (!origin) return callback(null, true);
 
     const normalized = normalizeOrigin(origin);
     if (allowedOrigins.has(normalized)) return callback(null, true);
 
-    return callback(new Error(`CORS: origin non autorisée: ${origin}`));
+    return callback(new Error(`CORS: origin non autoris\u00e9e: ${origin}`));
   },
-  // Important pour Flutter Web (préflight avec Authorization)
   methods: ['GET', 'PUT', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'Idempotency-Key'],
-  // Permet au CRM de lire l'identifiant de requête pour corrélation avec Render
   exposedHeaders: ['X-Request-Id'],
   credentials: true,
   optionsSuccessStatus: 204
 };
 
-// CORS (inclut explicitement les pré-flights OPTIONS)
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 app.use(requestIdMiddleware);
 app.use(responseTimeMiddleware);
 app.use(loadSheddingMiddleware);
 
-// Rate-limit global (feature-flag) — protège la prod lors de bursts
+// Rate-limit global (feature-flag)
 if (process.env.GLOBAL_RATE_LIMIT_ENABLED === 'true') {
   const limit = Number(process.env.GLOBAL_RATE_LIMIT_LIMIT || 300);
   const windowSeconds = Number(process.env.GLOBAL_RATE_LIMIT_WINDOW_SECONDS || 5 * 60);
@@ -158,7 +131,7 @@ if (process.env.GLOBAL_RATE_LIMIT_ENABLED === 'true') {
       windowSeconds: Number.isFinite(windowSeconds) && windowSeconds > 0 ? windowSeconds : 5 * 60,
       preferUid: false,
       bypassOnError: true,
-      message: 'Trop de requêtes.'
+      message: 'Trop de requ\u00eates.'
     })
   );
 }
@@ -208,8 +181,6 @@ app.use('/api', tipsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/preferences', preferencesRoutes);
 app.use('/api/utils', utilsRoutes);
-// Alias v1 de compatibilité (même handlers) pour absorber les clients
-// qui utilisent encore le préfixe /v1.
 app.use('/v1/preferences', preferencesRoutes);
 app.use('/v1/utils', utilsRoutes);
 app.use('/api/account', accountRoutes);
@@ -224,9 +195,6 @@ app.use('/api/leads', leadsRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/payme', paymeRoutes);
 
-// Signup/init (frontend web)
-// - Endpoint attendu : POST /users/init
-// - Alias : POST /api/users/init (pratique selon reverse-proxy)
 app.use('/users', usersRoutes);
 app.use('/api/users', usersRoutes);
 
@@ -236,25 +204,13 @@ app.use(errorHandler);
 
 const server = http.createServer(app);
 
-// Timeouts HTTP (évite connexions pendantes sous surcharge)
-// Valeurs conservatrices, ajustables via env si besoin.
 server.requestTimeout = Number(process.env.HTTP_REQUEST_TIMEOUT_MS || 60_000);
 server.headersTimeout = Number(process.env.HTTP_HEADERS_TIMEOUT_MS || 65_000);
 server.keepAliveTimeout = Number(process.env.HTTP_KEEPALIVE_TIMEOUT_MS || 5_000);
 
 server.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-});
-
-// Worker queue (optionnel, activé via QUEUE_WORKER_ENABLED=true)
-startQueueWorker({
-  queues: ['queue:v1:sms'],
-  handlers: {
-    'twilio:sms': async (job) => {
-      await sendTwilioMessage(job.payload);
-    }
-  }
+  console.log(`\uD83D\uDE80 Server running on port ${PORT}`);
+  console.log(`\uD83D\uDCDD Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 // Event-loop lag (optionnel) => load shedding
@@ -278,9 +234,8 @@ let shuttingDown = false;
 async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`🧹 Shutdown (${signal})...`);
+  console.log(`\uD83E\uDDF9 Shutdown (${signal})...`);
 
-  // Stop d’accepter de nouvelles connexions
   server.close(async () => {
     try {
       await closeRedisClient();
@@ -289,7 +244,6 @@ async function shutdown(signal: string): Promise<void> {
     }
   });
 
-  // Hard timeout
   const hardMs = Number(process.env.SHUTDOWN_HARD_TIMEOUT_MS || 10_000);
   setTimeout(() => process.exit(1), Number.isFinite(hardMs) && hardMs > 0 ? hardMs : 10_000).unref();
 }
@@ -298,4 +252,3 @@ process.on('SIGTERM', () => void shutdown('SIGTERM'));
 process.on('SIGINT', () => void shutdown('SIGINT'));
 
 export default app;
-

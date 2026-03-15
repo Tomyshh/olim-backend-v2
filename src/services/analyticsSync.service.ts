@@ -506,20 +506,6 @@ export async function syncAnalyticsToSupabase(): Promise<void> {
     }
 }
 
-/**
- * Scheduler logic
- */
-function msUntilNextLocalTime(params: { hour: number; minute: number; second?: number }): number {
-    const now = new Date();
-    const second = params.second ?? 0;
-    const next = new Date(now);
-    next.setHours(params.hour, params.minute, second, 0);
-    if (next.getTime() <= now.getTime()) {
-        next.setDate(next.getDate() + 1);
-    }
-    return Math.max(0, next.getTime() - now.getTime());
-}
-
 function toDateOrNull(value: any): Date | null {
     if (!value) return null;
     if (value instanceof Date) return value;
@@ -537,11 +523,6 @@ function toDateOrNull(value: any): Date | null {
         return Number.isFinite(d.getTime()) ? d : null;
     }
     return null;
-}
-
-function startOfTodayAtLocalTime(params: { hour: number; minute: number; second?: number }, now: Date = new Date()): Date {
-    const second = params.second ?? 0;
-    return new Date(now.getFullYear(), now.getMonth(), now.getDate(), params.hour, params.minute, second, 0);
 }
 
 async function tryAcquireJobLease(params: { jobId: string; runId: string; leaseMs: number }): Promise<{ acquired: boolean; reason?: string }> {
@@ -640,54 +621,3 @@ export async function runDailyAnalyticsSyncJob(params?: { leaseMs?: number }): P
     }
 }
 
-export function startAnalyticsSyncScheduler(): void {
-    // Même modèle que dailyClientActivity: activation explicite par env
-    if (process.env.ANALYTICS_SYNC_JOB_ENABLED !== 'true') return;
-
-    const hourRaw = Number(process.env.ANALYTICS_SYNC_JOB_HOUR || 4);
-    const minuteRaw = Number(process.env.ANALYTICS_SYNC_JOB_MINUTE || 0);
-    const hour = Number.isFinite(hourRaw) ? Math.min(23, Math.max(0, Math.trunc(hourRaw))) : 4;
-    const minute = Number.isFinite(minuteRaw) ? Math.min(59, Math.max(0, Math.trunc(minuteRaw))) : 0;
-
-    async function runAndReschedule(): Promise<void> {
-        try {
-            const res = await runDailyAnalyticsSyncJob();
-            if (!res) {
-                console.log('[analytics-sync] skipped (already running / locked)');
-            }
-        } catch (e: any) {
-            console.warn('[analytics-sync] Job failed', { error: e.message });
-        } finally {
-            const ms = msUntilNextLocalTime({ hour, minute, second: 0 });
-            console.log('[analytics-sync] next run scheduled', { inMs: ms });
-            setTimeout(() => void runAndReschedule(), ms).unref();
-        }
-    }
-
-    async function maybeCatchUp(): Promise<void> {
-        // Si le process démarre APRÈS l'heure cible et que le job n'a pas réussi aujourd'hui, on lance un rattrapage.
-        const db = getFirestore();
-        const now = new Date();
-        const todayTarget = startOfTodayAtLocalTime({ hour, minute, second: 0 }, now);
-        if (now.getTime() < todayTarget.getTime()) return;
-
-        try {
-            const snap = await db.collection('Jobs').doc('analyticsSync').get();
-            const data = (snap.data() || {}) as any;
-            const lastSuccessAt = toDateOrNull(data?.lastSuccessAt);
-            if (lastSuccessAt && lastSuccessAt.getTime() >= todayTarget.getTime()) return;
-        } catch {
-            // ignore (en cas d'erreur lecture, on laisse la planification normale gérer)
-            return;
-        }
-
-        // Décaler légèrement pour éviter de saturer le boot / et laisser la machine se stabiliser
-        console.log('[analytics-sync] catch-up triggered (missed scheduled time)');
-        setTimeout(() => void runDailyAnalyticsSyncJob().catch((e) => console.warn('[analytics-sync] catch-up failed', { error: e?.message })), 30_000).unref();
-    }
-
-    const firstDelay = msUntilNextLocalTime({ hour, minute, second: 0 });
-    console.log('[analytics-sync] scheduler enabled', { hour, minute, firstDelayMs: firstDelay });
-    void maybeCatchUp();
-    setTimeout(() => void runAndReschedule(), firstDelay).unref();
-}

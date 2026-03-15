@@ -10,6 +10,7 @@
     "dev": "node --watch --env-file=.env dist/server.js",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
+    "start:cron": "node dist/cron/main.js",
     "lint": "eslint .",
     "script:link-phone-to-email": "tsx scripts/link-phone-to-email.ts",
     "script:list-system-registration": "tsx scripts/list-system-registration-clients.ts",

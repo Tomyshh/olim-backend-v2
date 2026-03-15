@@ -139,22 +139,6 @@ function membershipFromAmountShekel(amountShekel: number): string | null {
   return null;
 }
 
-function msUntilNextLocalTime(params: { hour: number; minute: number; second?: number }): number {
-  const now = new Date();
-  const second = params.second ?? 0;
-  const next = new Date(now);
-  next.setHours(params.hour, params.minute, second, 0);
-  if (next.getTime() <= now.getTime()) {
-    next.setDate(next.getDate() + 1);
-  }
-  return Math.max(0, next.getTime() - now.getTime());
-}
-
-function startOfTodayAtLocalTime(params: { hour: number; minute: number; second?: number }, now: Date = new Date()): Date {
-  const second = params.second ?? 0;
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), params.hour, params.minute, second, 0);
-}
-
 async function tryAcquireJobLease(params: {
   jobId: string;
   runId: string;
@@ -648,55 +632,5 @@ export async function runDailyPaymeMonthlyNextPaymentDateSyncJob(params?: {
   }
 }
 
-export function startPaymeMonthlyNextPaymentDateSyncScheduler(): void {
-  if (process.env.PAYME_MONTHLY_NEXT_PAYMENT_SYNC_ENABLED !== 'true') return;
 
-  const hourRaw = Number(process.env.PAYME_MONTHLY_NEXT_PAYMENT_SYNC_HOUR || 2);
-  const minuteRaw = Number(process.env.PAYME_MONTHLY_NEXT_PAYMENT_SYNC_MINUTE || 0);
-  const hour = Number.isFinite(hourRaw) ? Math.min(23, Math.max(0, Math.trunc(hourRaw))) : 2;
-  const minute = Number.isFinite(minuteRaw) ? Math.min(59, Math.max(0, Math.trunc(minuteRaw))) : 0;
-
-  async function runAndReschedule(): Promise<void> {
-    try {
-      const res = await runDailyPaymeMonthlyNextPaymentDateSyncJob();
-      if (!res) {
-        console.log('[payme-monthly-sync] skipped (already running / locked)');
-      }
-    } catch (e: any) {
-      console.warn('[payme-monthly-sync] job failed', { error: String(e?.message || e) });
-    } finally {
-      const ms = msUntilNextLocalTime({ hour, minute, second: 0 });
-      console.log('[payme-monthly-sync] next run scheduled', { inMs: ms });
-      setTimeout(() => void runAndReschedule(), ms).unref();
-    }
-  }
-
-  async function maybeCatchUp(): Promise<void> {
-    // Si le process démarre APRÈS l'heure cible et que le job n'a pas réussi aujourd'hui, on lance un rattrapage.
-    const db = getFirestore();
-    const now = new Date();
-    const todayTarget = startOfTodayAtLocalTime({ hour, minute, second: 0 }, now);
-    if (now.getTime() < todayTarget.getTime()) return;
-
-    try {
-      const snap = await db.collection('Jobs').doc('paymeMonthlyNextPaymentSync').get();
-      const data = (snap.data() || {}) as any;
-      const lastSuccessAt = toDateOrNull(data?.lastSuccessAt);
-      if (lastSuccessAt && lastSuccessAt.getTime() >= todayTarget.getTime()) return;
-    } catch {
-      return;
-    }
-
-    console.log('[payme-monthly-sync] catch-up triggered (missed scheduled time)');
-    setTimeout(
-      () => void runDailyPaymeMonthlyNextPaymentDateSyncJob().catch((e) => console.warn('[payme-monthly-sync] catch-up failed', { error: e?.message })),
-      30_000
-    ).unref();
-  }
-
-  const firstDelay = msUntilNextLocalTime({ hour, minute, second: 0 });
-  console.log('[payme-monthly-sync] scheduler enabled', { hour, minute, firstDelayMs: firstDelay });
-  void maybeCatchUp();
-  setTimeout(() => void runAndReschedule(), firstDelay).unref();
-}
 
