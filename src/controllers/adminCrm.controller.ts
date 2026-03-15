@@ -277,6 +277,142 @@ export async function deleteTip(req: AuthenticatedRequest, res: Response) {
   res.json({ message: 'Tip deleted' });
 }
 
+// ─── Client Addresses (admin) ─────────────────────────────────────────
+
+export async function getClientAddresses(req: AuthenticatedRequest, res: Response) {
+  const { clientId } = req.params;
+  const { data, error } = await supabase
+    .from('client_addresses')
+    .select('*')
+    .eq('client_id', clientId)
+    .order('is_primary', { ascending: false })
+    .order('order_index');
+  if (error) throw new HttpError(500, error.message);
+  res.json(data ?? []);
+}
+
+export async function addClientAddress(req: AuthenticatedRequest, res: Response) {
+  const { clientId } = req.params;
+  const d = req.body;
+
+  const { data: client } = await supabase.from('clients').select('id, firebase_uid').eq('id', clientId).maybeSingle();
+  if (!client) throw new HttpError(404, 'Client introuvable');
+
+  if (d.is_primary) {
+    await supabase.from('client_addresses').update({ is_primary: false }).eq('client_id', clientId).eq('is_primary', true);
+  }
+
+  const row: Record<string, any> = {
+    client_id: clientId,
+    name: d.name ?? d.label ?? 'Adresse',
+    label: d.name ?? d.label ?? 'Adresse',
+    address1: d.address1 ?? d.address,
+    address2: d.address2 ?? d.additional_info,
+    additional_info: d.additional_info ?? d.address2,
+    apartment: d.apartment,
+    floor: d.floor,
+    city: d.city,
+    postal_code: d.postal_code,
+    country: d.country,
+    details: d.details,
+    is_primary: d.is_primary ?? false,
+    is_active: d.is_active ?? true,
+    is_current_residence: d.is_current_residence ?? d.is_primary ?? false,
+    entry_date: d.entry_date,
+    exit_date: d.exit_date,
+    metadata: {},
+  };
+
+  const { data: inserted, error: insertErr } = await supabase.from('client_addresses').insert(row).select().single();
+  if (insertErr) throw new HttpError(500, insertErr.message);
+
+  // Firestore best-effort
+  try {
+    const { getFirestore } = await import('../config/firebase.js');
+    const db = getFirestore();
+    await db.collection('Clients').doc(client.firebase_uid).collection('Addresses').add({
+      name: row.name, address: row.address1, apartment: row.apartment, floor: row.floor,
+      additionalInfo: row.additional_info, isActive: true, orderIndex: 0, createdAt: new Date(),
+    });
+  } catch (_) { /* best-effort */ }
+
+  res.status(201).json(inserted);
+}
+
+export async function updateClientAddress(req: AuthenticatedRequest, res: Response) {
+  const { clientId, addressId } = req.params;
+  const d = req.body;
+
+  const updates: Record<string, any> = { updated_at: new Date().toISOString() };
+  if (d.name !== undefined) { updates.name = d.name; updates.label = d.name; }
+  if (d.address1 !== undefined) updates.address1 = d.address1;
+  if (d.address2 !== undefined) { updates.address2 = d.address2; updates.additional_info = d.address2; }
+  if (d.additional_info !== undefined) { updates.additional_info = d.additional_info; updates.address2 = d.additional_info; }
+  if (d.apartment !== undefined) updates.apartment = d.apartment;
+  if (d.floor !== undefined) updates.floor = d.floor;
+  if (d.city !== undefined) updates.city = d.city;
+  if (d.postal_code !== undefined) updates.postal_code = d.postal_code;
+  if (d.country !== undefined) updates.country = d.country;
+  if (d.details !== undefined) updates.details = d.details;
+  if (d.is_active !== undefined) updates.is_active = d.is_active;
+  if (d.is_current_residence !== undefined) updates.is_current_residence = d.is_current_residence;
+  if (d.entry_date !== undefined) updates.entry_date = d.entry_date;
+  if (d.exit_date !== undefined) updates.exit_date = d.exit_date;
+
+  if (d.is_primary === true) {
+    await supabase.from('client_addresses').update({ is_primary: false }).eq('client_id', clientId).eq('is_primary', true);
+    updates.is_primary = true;
+  } else if (d.is_primary === false) {
+    updates.is_primary = false;
+  }
+
+  const { data: updated, error } = await supabase.from('client_addresses').update(updates).eq('id', addressId).eq('client_id', clientId).select().single();
+  if (error) throw new HttpError(500, error.message);
+
+  // Firestore best-effort
+  try {
+    const { data: client } = await supabase.from('clients').select('firebase_uid').eq('id', clientId).maybeSingle();
+    if (client?.firebase_uid && updated?.firestore_id) {
+      const { getFirestore } = await import('../config/firebase.js');
+      const db = getFirestore();
+      await db.collection('Clients').doc(client.firebase_uid).collection('Addresses').doc(updated.firestore_id).update({
+        ...(d.name !== undefined && { name: d.name, Name: d.name }),
+        ...(d.address1 !== undefined && { address: d.address1, Address: d.address1 }),
+        ...(d.apartment !== undefined && { apartment: d.apartment, Appartment: d.apartment }),
+        ...(d.floor !== undefined && { floor: d.floor, Etage: d.floor }),
+        ...(d.additional_info !== undefined && { additionalInfo: d.additional_info }),
+        updatedAt: new Date(),
+      });
+    }
+  } catch (_) { /* best-effort */ }
+
+  res.json(updated);
+}
+
+export async function deleteClientAddress(req: AuthenticatedRequest, res: Response) {
+  const { clientId, addressId } = req.params;
+
+  const { data: addr } = await supabase.from('client_addresses').select('id, firestore_id').eq('id', addressId).eq('client_id', clientId).maybeSingle();
+  if (!addr) throw new HttpError(404, 'Adresse introuvable');
+
+  const { error } = await supabase.from('client_addresses').delete().eq('id', addr.id);
+  if (error) throw new HttpError(500, error.message);
+
+  // Firestore best-effort
+  try {
+    if (addr.firestore_id) {
+      const { data: client } = await supabase.from('clients').select('firebase_uid').eq('id', clientId).maybeSingle();
+      if (client?.firebase_uid) {
+        const { getFirestore } = await import('../config/firebase.js');
+        const db = getFirestore();
+        await db.collection('Clients').doc(client.firebase_uid).collection('Addresses').doc(addr.firestore_id).delete();
+      }
+    }
+  } catch (_) { /* best-effort */ }
+
+  res.json({ message: 'Adresse supprimée', addressId: addr.id });
+}
+
 // ─── Client Documents (admin) ─────────────────────────────────────────
 
 export async function uploadClientDocument(req: AuthenticatedRequest, res: Response) {

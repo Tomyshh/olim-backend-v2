@@ -65,6 +65,12 @@ router.patch('/conseillers/:conseillerId', requireAdmin, asyncHandler(adminCrmCo
 router.get('/clients/:clientId/requests', requireConseiller, asyncHandler(adminCrmController.getClientRequests as any));
 router.get('/clients/:clientId/subscription-events', requireConseiller, asyncHandler(adminCrmController.getClientSubscriptionEvents as any));
 
+// ─── CRM: Client Addresses ──────────────────────────────────────────
+router.get('/clients/:clientId/addresses', requireConseiller, asyncHandler(adminCrmController.getClientAddresses as any));
+router.post('/clients/:clientId/addresses', requireConseiller, asyncHandler(adminCrmController.addClientAddress as any));
+router.patch('/clients/:clientId/addresses/:addressId', requireConseiller, asyncHandler(adminCrmController.updateClientAddress as any));
+router.delete('/clients/:clientId/addresses/:addressId', requireConseiller, asyncHandler(adminCrmController.deleteClientAddress as any));
+
 // ─── CRM: Client Documents ─────────────────────────────────────────
 router.post('/clients/:clientId/documents', requireConseiller, upload.array('file'), asyncHandler(adminCrmController.uploadClientDocument as any));
 router.delete('/clients/:clientId/documents/:documentId', requireConseiller, asyncHandler(adminCrmController.deleteClientDocument as any));
