@@ -255,6 +255,14 @@ router.post(
   asyncHandler(clientSubscriptionController.createCustomSaleHosted as any)
 );
 
+// PATCH /api/clients/:clientId/free-access (toggle free access)
+router.patch(
+  '/:clientId/free-access',
+  authenticateToken,
+  requireConseiller,
+  asyncHandler(clientSubscriptionController.toggleClientFreeAccess as any)
+);
+
 export default router;
 
 

@@ -118,25 +118,35 @@ export function clearClientIdCache(): void {
 
 let firebaseUidCache = new Map<string, string>();
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /**
  * Given either a Supabase UUID or a Firebase UID, resolves to the Firebase UID.
  * CRM routes receive Supabase UUIDs from the frontend, but subscription
  * controllers need Firebase UIDs for Firestore lookups.
+ *
+ * IMPORTANT: when the input is NOT a valid UUID we must NOT include it in
+ * `id.eq.xxx` because PostgREST will reject the value (UUID column type).
  */
 export async function resolveClientFirebaseUid(clientIdOrUid: string): Promise<string | null> {
   const cached = firebaseUidCache.get(clientIdOrUid);
   if (cached) return cached;
 
-  const { data } = await supabase
-    .from('clients')
-    .select('firebase_uid')
-    .or(`id.eq.${clientIdOrUid},firebase_uid.eq.${clientIdOrUid}`)
-    .limit(1)
-    .maybeSingle();
+  const isUuid = UUID_RE.test(clientIdOrUid);
+
+  let query = supabase.from('clients').select('firebase_uid');
+  if (isUuid) {
+    query = query.or(`id.eq.${clientIdOrUid},firebase_uid.eq.${clientIdOrUid}`);
+  } else {
+    query = query.eq('firebase_uid', clientIdOrUid);
+  }
+
+  const { data } = await query.limit(1).maybeSingle();
 
   const uid = data?.firebase_uid ?? null;
   if (uid) {
     firebaseUidCache.set(clientIdOrUid, uid);
+    if (isUuid) firebaseUidCache.set(uid, uid);
   }
   return uid;
 }

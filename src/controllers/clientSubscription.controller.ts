@@ -1559,6 +1559,7 @@ export async function createClientCustomSale(req: AuthenticatedRequest, res: Res
  * Body: { amountInCents, description }
  */
 export async function createCustomSaleHosted(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const rawClientId = pickString((req.params as any)?.clientId);
   const clientId = await pickClientId(req);
   const callerUid = req.uid || null;
 
@@ -1577,8 +1578,8 @@ export async function createCustomSaleHosted(req: AuthenticatedRequest, res: Res
   const email = pickString(clientData.Email);
   const buyerName = [pickString(clientData['First Name']), pickString(clientData['Last Name'])].filter(Boolean).join(' ');
 
-  const returnUrl = process.env.CRM_PAYMENT_RETURN_URL || `${process.env.FRONTEND_URL || ''}/payment-return`;
-  const webhookUrl = process.env.PAYME_WEBHOOK_URL || `${process.env.BACKEND_URL || ''}/api/payme/subscription-webhook`;
+  const crmReturnBase = (process.env.CRM_PAYMENT_RETURN_URL || '').trim();
+  const webhookUrl = (process.env.PAYME_WEBHOOK_URL || '').trim();
 
   const hostedSale = await paymeGenerateHostedSale({
     priceInCents: amountInCents,
@@ -1586,7 +1587,7 @@ export async function createCustomSaleHosted(req: AuthenticatedRequest, res: Res
     buyerEmail: email || undefined,
     buyerName: buyerName || undefined,
     callbackUrl: webhookUrl,
-    returnUrl: `${returnUrl}?type=custom_sale`,
+    returnUrl: `${crmReturnBase}?clientId=${encodeURIComponent(rawClientId)}&type=custom_sale`,
   });
 
   await writeAdminAuditLog({
@@ -1607,6 +1608,7 @@ export async function createCustomSaleHosted(req: AuthenticatedRequest, res: Res
  * The conseiller is redirected to PayMe to enter card details.
  */
 export async function createPaymentSession(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const rawClientId = pickString((req.params as any)?.clientId);
   const clientId = await pickClientId(req);
 
   const callerUid = req.uid || null;
@@ -1657,7 +1659,7 @@ export async function createPaymentSession(req: AuthenticatedRequest, res: Respo
   const crmReturnBase = (process.env.CRM_PAYMENT_RETURN_URL || '').trim();
   if (!crmReturnBase) throw new HttpError(500, 'Configuration manquante: CRM_PAYMENT_RETURN_URL.');
 
-  const returnUrl = `${crmReturnBase}?clientId=${encodeURIComponent(clientId)}`;
+  const returnUrl = `${crmReturnBase}?clientId=${encodeURIComponent(rawClientId)}`;
 
   const description = `${membership} - ${plan === 'annual' ? 'Annuel' : 'Mensuel'}`;
 
@@ -1711,4 +1713,81 @@ export async function createPaymentSession(req: AuthenticatedRequest, res: Respo
     sale_url: hostedSale.sale_url,
     payme_sale_id: hostedSale.payme_sale_id,
   });
+}
+
+/**
+ * PATCH /api/clients/:clientId/free-access
+ * Toggle free access for a client.  Dual-writes to Firestore + Supabase.
+ * Body: { isEnabled: boolean, membership?: string, expiresAt?: string (ISO), reason?: string, notes?: string }
+ */
+export async function toggleClientFreeAccess(req: AuthenticatedRequest, res: Response): Promise<void> {
+  const clientId = await pickClientId(req);
+  const callerUid = req.uid || null;
+  const body = (req.body || {}) as Record<string, any>;
+
+  const isEnabled = body.isEnabled === true;
+  const membership = pickString(body.membership) || 'Pack Elite';
+  const reason = pickString(body.reason) || '';
+  const notes = pickString(body.notes) || '';
+
+  const expiresAtRaw = pickString(body.expiresAt);
+  let expiresAtDate: Date | null = null;
+  if (expiresAtRaw) {
+    expiresAtDate = new Date(expiresAtRaw);
+    if (isNaN(expiresAtDate.getTime())) expiresAtDate = null;
+  }
+  if (isEnabled && !expiresAtDate) {
+    expiresAtDate = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  }
+
+  const now = new Date();
+  const callerEmail = pickString((req as any).email) || callerUid || 'admin';
+
+  const freeAccessDoc: Record<string, any> = {
+    isEnabled,
+    membership,
+    reason,
+    notes,
+    isFirstVisit: false,
+  };
+
+  if (isEnabled) {
+    freeAccessDoc.grantedAt = admin.firestore.Timestamp.fromDate(now);
+    freeAccessDoc.grantedBy = callerEmail;
+    if (expiresAtDate) {
+      freeAccessDoc.expiresAt = admin.firestore.Timestamp.fromDate(expiresAtDate);
+    }
+  }
+
+  const db = getFirestore();
+  const clientRef = db.collection('Clients').doc(clientId);
+  await clientRef.set({ freeAccess: freeAccessDoc }, { merge: true });
+
+  const supabaseFreeAccess: Record<string, any> = {
+    isEnabled,
+    membership,
+    reason,
+    notes,
+    isFirstVisit: false,
+  };
+  if (isEnabled) {
+    supabaseFreeAccess.grantedAt = now.toISOString();
+    supabaseFreeAccess.grantedBy = callerEmail;
+    if (expiresAtDate) supabaseFreeAccess.expiresAt = expiresAtDate.toISOString();
+  }
+
+  await supabase
+    .from('clients')
+    .update({ free_access: supabaseFreeAccess, updated_at: now.toISOString() })
+    .eq('firebase_uid', clientId);
+
+  await writeAdminAuditLog({
+    action: isEnabled ? 'FREE_ACCESS_GRANTED' : 'FREE_ACCESS_REVOKED',
+    callerUid,
+    clientId,
+    payload: supabaseFreeAccess,
+    req,
+  });
+
+  res.status(200).json({ success: true, freeAccess: supabaseFreeAccess });
 }
