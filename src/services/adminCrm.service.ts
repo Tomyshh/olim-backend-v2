@@ -371,8 +371,28 @@ export async function createRequestAdmin(payload: Record<string, unknown>, creat
   const userId = payload.user_id as string;
 
   let clientId: string | null = null;
+  let clientInfo: Record<string, any> | null = null;
   if (userId) {
     clientId = await resolveSupabaseClientId(userId);
+    const { data } = await supabase
+      .from('clients')
+      .select('first_name, last_name, email, phone, membership_type')
+      .eq('firebase_uid', userId)
+      .maybeSingle();
+    if (data) clientInfo = data;
+  }
+
+  // Resolve assigned_to_conseiller_id from name
+  let assignedToConseillerId: string | null = null;
+  const assignedTo = (payload.assigned_to as string) ?? null;
+  if (assignedTo) {
+    const { data: conseiller } = await supabase
+      .from('conseillers')
+      .select('id')
+      .ilike('name', assignedTo.trim())
+      .limit(1)
+      .maybeSingle();
+    if (conseiller) assignedToConseillerId = conseiller.id;
   }
 
   const row: Record<string, any> = {
@@ -383,11 +403,13 @@ export async function createRequestAdmin(payload: Record<string, unknown>, creat
     request_sub_category: payload.request_sub_category ?? null,
     request_description: payload.request_description ?? '',
     status: payload.status ?? 'Assigned',
-    assigned_to: payload.assigned_to ?? null,
-    first_name: payload.first_name ?? '',
-    last_name: payload.last_name ?? '',
-    email: payload.email ?? '',
-    membership_type: payload.membership_type ?? '',
+    assigned_to: assignedTo,
+    assigned_to_conseiller_id: assignedToConseillerId,
+    first_name: payload.first_name || clientInfo?.first_name || '',
+    last_name: payload.last_name || clientInfo?.last_name || '',
+    email: payload.email || clientInfo?.email || '',
+    phone: payload.phone || clientInfo?.phone || null,
+    membership_type: payload.membership_type || clientInfo?.membership_type || '',
     priority: payload.priority ?? null,
     difficulty: payload.difficulty ?? null,
     urgence_conseiller: payload.urgence_conseiller ?? '',
@@ -567,32 +589,42 @@ export async function getRequestStats(filters: RequestStatsFilters) {
   const fromIso = dateFrom.toISOString();
   const toIso = dateTo.toISOString();
 
-  let allQuery = supabase
-    .from('requests')
-    .select('status, request_category, source, assigned_to, request_date, is_rdv, created_by')
-    .gte('request_date', fromIso)
-    .lte('request_date', toIso)
-    .limit(10000);
+  const PAGE = 1000;
 
-  if (filters.conseiller_name) {
-    allQuery = allQuery.eq('assigned_to', filters.conseiller_name);
+  // Paginate all requests in period
+  let rows: any[] = [];
+  for (let from = 0; ; from += PAGE) {
+    let q = supabase
+      .from('requests')
+      .select('status, request_category, source, assigned_to, request_date, is_rdv, created_by')
+      .gte('request_date', fromIso)
+      .lte('request_date', toIso)
+      .order('request_date', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (filters.conseiller_name) q = q.eq('assigned_to', filters.conseiller_name);
+    const { data, error } = await q;
+    if (error || !data || data.length === 0) break;
+    rows = rows.concat(data);
+    if (data.length < PAGE) break;
   }
 
-  let closedQuery = supabase
-    .from('requests')
-    .select('closing_date')
-    .eq('status', 'Closed')
-    .gte('closing_date', fromIso)
-    .lte('closing_date', toIso)
-    .limit(10000);
-
-  if (filters.conseiller_name) {
-    closedQuery = closedQuery.eq('assigned_to', filters.conseiller_name);
+  // Paginate closed requests in period
+  let closedRowsAll: any[] = [];
+  for (let from = 0; ; from += PAGE) {
+    let q = supabase
+      .from('requests')
+      .select('closing_date')
+      .eq('status', 'Closed')
+      .gte('closing_date', fromIso)
+      .lte('closing_date', toIso)
+      .order('closing_date', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (filters.conseiller_name) q = q.eq('assigned_to', filters.conseiller_name);
+    const { data, error } = await q;
+    if (error || !data || data.length === 0) break;
+    closedRowsAll = closedRowsAll.concat(data);
+    if (data.length < PAGE) break;
   }
-
-  const [allInPeriod, closedInPeriod] = await Promise.all([allQuery, closedQuery]);
-
-  const rows = allInPeriod.data ?? [];
 
   const byStatus: Record<string, number> = {};
   const byCategory: Record<string, number> = {};
@@ -624,9 +656,8 @@ export async function getRequestStats(filters: RequestStatsFilters) {
     total: Object.values(statuses).reduce((a, b) => a + b, 0),
   }));
 
-  const closedRows = closedInPeriod.data ?? [];
   const dailyClosed: Record<string, number> = {};
-  for (const r of closedRows) {
+  for (const r of closedRowsAll) {
     if (r.closing_date) {
       const day = r.closing_date.slice(0, 10);
       dailyClosed[day] = (dailyClosed[day] || 0) + 1;
@@ -916,33 +947,43 @@ export async function getSubscriptionStats() {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // Source Analysis
 // ---------------------------------------------------------------------------
 
 export async function getSourceAnalysis(dateFrom: string, dateTo: string) {
-  const { data: rows } = await supabase
-    .from('requests')
-    .select('request_date, created_by')
-    .gte('request_date', dateFrom)
-    .lte('request_date', dateTo)
-    .limit(10000);
+  const endDate = dateTo.length === 10 ? `${dateTo}T23:59:59.999Z` : dateTo;
+
+  let all: any[] = [];
+  let from = 0;
+  const PAGE = 1000;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('requests')
+      .select('request_date, created_by')
+      .gte('request_date', dateFrom)
+      .lte('request_date', endDate)
+      .order('request_date', { ascending: true })
+      .range(from, from + PAGE - 1);
+
+    if (error || !data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
 
   const dailyMap: Record<string, { crm: number; app: number }> = {};
   let totalCRM = 0;
   let totalAPP = 0;
 
-  for (const r of (rows ?? [])) {
+  for (const r of all) {
     const day = typeof r.request_date === 'string' ? r.request_date.slice(0, 10) : '';
     if (!day) continue;
     if (!dailyMap[day]) dailyMap[day] = { crm: 0, app: 0 };
     const src = (r.created_by ?? '').toUpperCase();
-    if (src === 'CRM') {
-      dailyMap[day].crm++;
-      totalCRM++;
-    } else {
-      dailyMap[day].app++;
-      totalAPP++;
-    }
+    if (src === 'CRM') { dailyMap[day].crm++; totalCRM++; }
+    else { dailyMap[day].app++; totalAPP++; }
   }
 
   const data = Object.entries(dailyMap)
@@ -957,26 +998,43 @@ export async function getSourceAnalysis(dateFrom: string, dateTo: string) {
 // ---------------------------------------------------------------------------
 
 export async function getAdviserAnalysis(conseillerName: string | null, dateFrom: string, dateTo: string) {
+  const endDate = dateTo.length === 10 ? `${dateTo}T23:59:59.999Z` : dateTo;
+  const PAGE = 1000;
+
   const { data: conseillers } = await supabase
     .from('conseillers')
     .select('id, firestore_id, name');
 
-  let query = supabase
-    .from('requests')
-    .select('assigned_to, closing_date, difficulty, status')
-    .eq('status', 'Closed')
-    .gte('closing_date', dateFrom)
-    .lte('closing_date', dateTo)
-    .limit(10000);
+  // Paginate closed requests
+  let closedRows: any[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('requests')
+      .select('assigned_to, closing_date, difficulty, status')
+      .eq('status', 'Closed')
+      .gte('closing_date', dateFrom)
+      .lte('closing_date', endDate)
+      .order('closing_date', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    closedRows = closedRows.concat(data);
+    if (data.length < PAGE) break;
+  }
 
-  const { data: closedRows } = await query;
-
-  const { data: allRows } = await supabase
-    .from('requests')
-    .select('assigned_to, status')
-    .gte('request_date', dateFrom)
-    .lte('request_date', dateTo)
-    .limit(10000);
+  // Paginate all requests in period
+  let allRows: any[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('requests')
+      .select('assigned_to, status')
+      .gte('request_date', dateFrom)
+      .lte('request_date', endDate)
+      .order('request_date', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error || !data || data.length === 0) break;
+    allRows = allRows.concat(data);
+    if (data.length < PAGE) break;
+  }
 
   const adviserSummary: Record<string, { assigned: number; inProgress: number; closed: number; total: number }> = {};
   for (const r of (allRows ?? [])) {
