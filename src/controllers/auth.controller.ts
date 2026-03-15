@@ -574,3 +574,46 @@ export async function logout(req: AuthenticatedRequest, res: Response): Promise<
   res.json({ ok: true });
 }
 
+/**
+ * GET /api/auth/crm-users
+ * Public endpoint — returns the list of CRM conseillers for the login screen.
+ * Only exposes name, email, and role info (no sensitive data).
+ */
+export async function listCrmUsers(_req: any, res: Response): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from('conseillers')
+      .select(`
+        id,
+        name,
+        email,
+        role_id,
+        is_active,
+        roles (
+          id,
+          slug,
+          label
+        )
+      `)
+      .order('name', { ascending: true });
+
+    if (error) {
+      res.status(500).json({ message: error.message });
+      return;
+    }
+
+    const users = (data ?? [])
+      .filter((c: any) => c.is_active !== false)
+      .map((c: any) => ({
+        name: c.name ?? '',
+        email: c.email ?? '',
+        role_slug: (c.roles as any)?.slug ?? 'advisor',
+        role_label: (c.roles as any)?.label ?? 'Conseiller',
+      }));
+
+    res.json(users);
+  } catch (err: any) {
+    res.status(500).json({ message: err.message });
+  }
+}
+

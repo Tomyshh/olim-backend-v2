@@ -31,6 +31,9 @@ router.post('/login-apple', asyncHandler(authController.loginApple as any));
 // Supabase token refresh
 router.post('/refresh', asyncHandler(authController.refreshToken as any));
 
+// Public: list CRM users for login screen
+router.get('/crm-users', asyncHandler(authController.listCrmUsers as any));
+
 // Password reset flow (Supabase OTP)
 router.post('/forgot-password', asyncHandler(authController.forgotPassword as any));
 router.post('/verify-reset-otp', asyncHandler(authController.verifyResetOtp as any));
