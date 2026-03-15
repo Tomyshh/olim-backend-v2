@@ -55,8 +55,9 @@ export async function listClients(filters: ClientFilters) {
   let query = supabase.from('clients').select(selectWithRelations, { count: 'exact' });
 
   if (filters.search) {
+    const safe = filters.search.replace(/[%_]/g, '');
     query = query.or(
-      `first_name.ilike.%${filters.search}%,last_name.ilike.%${filters.search}%,email.ilike.%${filters.search}%,tz.ilike.%${filters.search}%`
+      `first_name.ilike.%${safe}%,last_name.ilike.%${safe}%,email::text.ilike.%${safe}%,teoudat_zeout.ilike.%${safe}%`
     );
   }
   if (filters.membership) {
@@ -90,8 +91,9 @@ export async function listClients(filters: ClientFilters) {
     ) {
       query = supabase.from('clients').select('*', { count: 'exact' });
       if (filters.search) {
+        const safe2 = filters.search.replace(/[%_]/g, '');
         query = query.or(
-          `first_name.ilike.%${filters.search}%,last_name.ilike.%${filters.search}%,email.ilike.%${filters.search}%,tz.ilike.%${filters.search}%`
+          `first_name.ilike.%${safe2}%,last_name.ilike.%${safe2}%,teoudat_zeout.ilike.%${safe2}%`
         );
       }
       if (filters.membership) query = query.eq('membership_type', filters.membership);
@@ -114,28 +116,44 @@ export async function listClients(filters: ClientFilters) {
 
 export async function searchClientsLight(q: string, limit = 10) {
   const safe = q.replace(/[%_]/g, '');
-  const orFilter = `first_name.ilike.%${safe}%,last_name.ilike.%${safe}%,email.ilike.%${safe}%,tz.ilike.%${safe}%`;
+  const orFilter = `first_name.ilike.%${safe}%,last_name.ilike.%${safe}%,email::text.ilike.%${safe}%,teoudat_zeout.ilike.%${safe}%`;
+  const selectFields = 'id, firebase_uid, first_name, last_name, email, phone, membership_type, language, teoudat_zeout, is_active';
 
   // Try with family_members join first
   const { data, error } = await supabase
     .from('clients')
-    .select('id, firebase_uid, first_name, last_name, email, phone, membership_type, language, tz, is_active, family_members(id, first_name, last_name, status)')
+    .select(`${selectFields}, family_members(id, first_name, last_name, status)`)
     .or(orFilter)
     .order('first_name', { ascending: true })
     .limit(limit);
 
   if (!error) return data ?? [];
 
-  // Fallback without family_members join
-  const { data: fallback, error: fbErr } = await supabase
+  console.error('[searchClientsLight] primary query failed:', error.message);
+
+  // Fallback: simpler filter without email cast
+  const simpleFilter = `first_name.ilike.%${safe}%,last_name.ilike.%${safe}%,teoudat_zeout.ilike.%${safe}%`;
+  const { data: fb2, error: fb2Err } = await supabase
     .from('clients')
-    .select('id, firebase_uid, first_name, last_name, email, phone, membership_type, language, tz, is_active')
-    .or(orFilter)
+    .select(`${selectFields}, family_members(id, first_name, last_name, status)`)
+    .or(simpleFilter)
     .order('first_name', { ascending: true })
     .limit(limit);
 
-  if (fbErr) throw new Error(`searchClientsLight error: ${fbErr.message}`);
-  return (fallback ?? []).map((c: any) => ({ ...c, family_members: [] }));
+  if (!fb2Err) return fb2 ?? [];
+
+  console.error('[searchClientsLight] fallback with join failed:', fb2Err.message);
+
+  // Last fallback: no join, no email
+  const { data: fb3, error: fb3Err } = await supabase
+    .from('clients')
+    .select(selectFields)
+    .or(simpleFilter)
+    .order('first_name', { ascending: true })
+    .limit(limit);
+
+  if (fb3Err) throw new Error(`searchClientsLight error: ${fb3Err.message}`);
+  return (fb3 ?? []).map((c: any) => ({ ...c, family_members: [] }));
 }
 
 export async function getClientById(clientId: string) {
